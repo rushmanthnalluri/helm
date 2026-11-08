@@ -99,6 +99,10 @@ Homie allows you to make live two-way voice telephone calls to your Windows work
 - ☎️ **Twilio PSTN Inbound Calling (`/voice`)**: Dial a real telephone number from any landline or mobile phone. Homie picks up, says *"Homie workstation online, how can I assist you?"*, executes your requested desktop task, and replies over the phone line.
 - 📱 **Wireless Trackpad & Presentation Remote (`/remote`)**: Turns your smartphone into a wireless trackpad, media controller, and presentation clicker (F5 fullscreen, slide advance, blackout screen, remote keyboard typing).
 - 🧠 **Semantic Screen Memory & Recall**: Automatically indexes what you read or saw on your screen so you can ask: *"What was on my screen 15 minutes ago?"* or *"Find on screen invoice"*.
+- 🔌 **Workstation MCP Server (`homie_mcp.py`)**: Exposes Homie as a Model Context Protocol server over JSON-RPC 2.0. Claude Desktop, Cursor, and IDEs can now natively query screen memory, snap windows, check vitals, and control the PC.
+- ⚡ **Pipeline Latency & Observability (`pipeline_telemetry.py`)**: Precision per-stage latency tracking (STT, Router, Win32 Action, TTS) guaranteeing the sub-50ms fast-path commitment.
+- 🎙️ **Voice Barge-in & Interruption**: Instant purge-on-interrupt; speaking or pressing keys immediately halts active speech synthesis.
+- 🛡️ **Cryptographic Agent Audit Ledger (`agent_audit_ledger.py`)**: Immutable SHA-256 hash-chained ledger tracking every agent tool invocation, with dynamic nonce prompt-injection boundaries and elevated terminal execution gates.
 - 🤖 **Chrome Claude AI Bridge**: Bi-directional loop bridge interacting directly with your active Claude AI web tab in Google Chrome for autonomous review and iterative engineering loops.
 
 ---
