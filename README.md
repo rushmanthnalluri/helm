@@ -103,6 +103,9 @@ Homie allows you to make live two-way voice telephone calls to your Windows work
 - ⚡ **Pipeline Latency & Observability (`pipeline_telemetry.py`)**: Precision per-stage latency tracking (STT, Router, Win32 Action, TTS) guaranteeing the sub-50ms fast-path commitment.
 - 🎙️ **Voice Barge-in & Interruption**: Instant purge-on-interrupt; speaking or pressing keys immediately halts active speech synthesis.
 - 🛡️ **Cryptographic Agent Audit Ledger (`agent_audit_ledger.py`)**: Immutable SHA-256 hash-chained ledger tracking every agent tool invocation, with dynamic nonce prompt-injection boundaries and elevated terminal execution gates.
+- ☣️ **Session Taint Tracking & Step-Up Approval (`taint_tracker.py`)**: Taints sessions upon ingesting untrusted or sensitive data; subsequent write actions require out-of-band user approval.
+- 🖥️ **Desktop Grounding Agent (`desktop_agent.py`)**: UIA-first accessibility grounding, password field blocking, emergency abort, step budgets, and dry-run preview.
+- ⚡ **Workflow Compiler (`workflow_compiler.py`)**: Compiles multi-step verified agent actions into deterministic, parameterized macros running at <50ms.
 - 🤖 **Chrome Claude AI Bridge**: Bi-directional loop bridge interacting directly with your active Claude AI web tab in Google Chrome for autonomous review and iterative engineering loops.
 
 ---
