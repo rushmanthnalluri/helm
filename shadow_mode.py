@@ -46,3 +46,14 @@ def check_rate_limit(caller_id, tier="WRITE_EXEC", max_per_minute=30):
 def clear_rate_limits():
     """Resets call histories."""
     _CALL_HISTORY.clear()
+
+def record_simulated_action(caller_id, tool_name, tier, arguments):
+    """Simulates an action and logs to agent_audit_ledger with SHADOW_SIMULATED decision."""
+    import secrets
+    import agent_audit_ledger
+    action_id = f"sim_{secrets.token_hex(4)}"
+    logger.info("Shadow Mode Simulation: [%s] caller=%s tool=%s", action_id, caller_id, tool_name)
+    agent_audit_ledger.record_agent_action(
+        caller_id, tool_name, tier, arguments, decision=f"SHADOW_SIMULATED:{action_id}"
+    )
+    return {"action_id": action_id, "status": "simulated", "tool": tool_name}
