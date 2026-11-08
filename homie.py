@@ -54,16 +54,18 @@ ME_FILE = os.path.join(CONFIG_DIR, 'me.json')
 DEFAULT_PREFS = {
     "hotkey": "ctrl+alt+space",
     "hotkeyMode": "hold",       # "hold" or "toggle"
-    "client": "claude",         # "claude" or "custom"
-    "model": "haiku",           # "haiku", "sonnet", "opus"
+    "provider": "gemini",       # "gemini" (Google AI Studio), "nvidia" (NVIDIA NIM), "groq", "ollama", "claude"
+    "model": "gemini-2.0-flash",# model name (e.g. gemini-2.0-flash or meta/llama-3.3-70b-instruct)
     "safe": True,               # Safe mode prompts before destructive actions
     "whisperModel": "tiny",     # "tiny", "base", "small", "turbo"
     "whisperLanguage": "en",
     "speak": False,
     "instant": True,            # Instant local commands without AI
+    "geminiKey": "",            # Google AI Studio free API key
+    "nvidiaKey": "",            # NVIDIA NIM free API key
+    "groqKey": "",              # Groq free API key
     "apiBase": "",
-    "apiKey": "",
-    "apiModel": ""
+    "apiKey": ""
 }
 
 def get_prefs():
@@ -310,11 +312,25 @@ Guidelines:
 
 # ----------------- Claude Code CLI Execution -----------------
 
-def run_claude(task_text, step_callback=None):
+def run_ai(task_text, step_callback=None):
     """
-    Executes a task through Claude Code CLI (`claude -p`).
-    Streams output steps and returns the final answer.
+    Executes a task through the configured AI provider:
+    - Google AI Studio (Gemini 2.0 / 1.5 Flash - 100% Free Tier)
+    - NVIDIA NIM (Llama 3.3 70B, DeepSeek R1 - Free Developer APIs)
+    - Groq Cloud (Free Tier)
+    - Local Ollama
+    - Claude Code CLI (if configured)
     """
+    prefs = get_prefs()
+    provider = prefs.get('provider', '').lower().strip()
+
+    # If Claude CLI is explicitly requested and installed
+    if provider == 'claude' and shutil.which('claude'):
+        return run_claude(task_text, step_callback=step_callback)
+
+    # Universal engine (Gemini, NVIDIA NIM, Groq, Ollama)
+    import ai_engine
+    return ai_engine.run_query(task_text, prefs, step_callback=step_callback)
     claude = shutil.which('claude')
     if not claude:
         return "Claude CLI is not installed or not in PATH. Please install Claude Code."
@@ -439,8 +455,8 @@ def main():
         print(f"✓ {fast_msg}")
         return
 
-    # Otherwise send to Claude
-    result = run_claude(task, step_callback=lambda s: print(s, flush=True))
+    # Otherwise send to AI (Google AI Studio, NVIDIA NIM, Groq, Ollama, Claude)
+    result = run_ai(task, step_callback=lambda s: print(s, flush=True))
     print(result)
 
 if __name__ == '__main__':

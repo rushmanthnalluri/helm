@@ -30,6 +30,42 @@ Inspired by macOS's [Atticus](https://github.com/SaarthurR/atticus-mac) by Caleb
 
 ---
 
+## 🔑 Free AI Providers (No Claude Plan Required!)
+
+You do **not** need a paid Claude account. Homie natively supports free cloud API keys as well as local offline models:
+
+| Provider | Free Tier Details | Supported Models |
+| :--- | :--- | :--- |
+| **Google AI Studio (Gemini)** | **100% Free** (generous limits, multimodal vision) | `gemini-2.0-flash`, `gemini-1.5-flash` |
+| **NVIDIA NIM** | **Free API credits** on signup | `meta/llama-3.3-70b-instruct`, `deepseek-ai/deepseek-r1` |
+| **Groq Cloud** | **100% Free tier** (blazing fast Llama) | `llama-3.3-70b-versatile` |
+| **Local Ollama** | **100% Free & Offline** | `qwen2.5`, `llama3.2`, `mistral` |
+
+### Setting Your Free API Key
+You can set your API key in **one command** via PowerShell:
+
+```powershell
+# For Google AI Studio (Recommended for screen vision):
+setx GEMINI_API_KEY "AIzaSy..."
+
+# For NVIDIA NIM:
+setx NVIDIA_API_KEY "nvapi-..."
+
+# For Groq:
+setx GROQ_API_KEY "gsk_..."
+```
+
+Or configure it in your `~/.config/homie/settings.json`:
+```json
+{
+  "provider": "gemini",
+  "model": "gemini-2.0-flash",
+  "geminiKey": "AIzaSy..."
+}
+```
+
+---
+
 ## 🚀 Quick Install
 
 ### Prerequisites

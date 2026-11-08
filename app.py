@@ -171,11 +171,11 @@ class HomieApp:
                 self.eval_js(f"window.ui.line({json.dumps('✓ ' + fast_msg)})")
                 return
 
-            # 2. Invoke Claude Code AI brain
+            # 2. Invoke AI brain (Google AI Studio, NVIDIA NIM, Groq, Ollama, Claude)
             def on_step(line):
                 self.eval_js(f"window.ui.line({json.dumps(line)})")
 
-            result = homie.run_claude(text, step_callback=on_step)
+            result = homie.run_ai(text, step_callback=on_step)
             # Ensure final response is displayed
             if result and not result.startswith(('·', '▸', '✓')):
                 self.eval_js(f"window.ui.line({json.dumps('✓ ' + result)})")
