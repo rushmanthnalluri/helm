@@ -245,6 +245,40 @@ def execute_mcp_tool(name, arguments, caller_id="mcp_client", client_token=None)
             pass
         return output
 
+    # Multi-Channel Canary Gate: Scans egress arguments for canary leak attempts
+    import canary_monitor
+    leaked, canary_msg = canary_monitor.inspect_egress_payload(arguments)
+    if leaked:
+        decision = "DENY_CANARY_LEAK_HALTED"
+        output = f"Security Gate: {canary_msg}. Workstation emergency kill switch engaged."
+        try:
+            agent_audit_ledger.record_agent_action(caller_id, name, tier, arguments, decision=decision)
+        except Exception:
+            pass
+        return output
+
+    # Rate Limiter Gate: Prevents runaway loops or prompt fatigue DOS
+    import shadow_mode
+    within_budget, rate_msg = shadow_mode.check_rate_limit(caller_id, tier=tier)
+    if not within_budget:
+        decision = "DENY_RATE_LIMIT_EXCEEDED"
+        output = f"Security Gate: {rate_msg}"
+        try:
+            agent_audit_ledger.record_agent_action(caller_id, name, tier, arguments, decision=decision)
+        except Exception:
+            pass
+        return output
+
+    # Shadow Mode Gate: If shadow mode is active, simulate without touching the OS
+    if shadow_mode.is_shadow_mode_active() and tier in ("WRITE_EXEC", "ELEVATED_CONFIRM"):
+        decision = "SHADOW_SIMULATED"
+        output = f"[SHADOW MODE] Simulated execution of '{name}' (OS state unchanged)"
+        try:
+            agent_audit_ledger.record_agent_action(caller_id, name, tier, arguments, decision=decision)
+        except Exception:
+            pass
+        return output
+
     decision = "ALLOW"
     output = ""
 
@@ -296,7 +330,9 @@ def execute_mcp_tool(name, arguments, caller_id="mcp_client", client_token=None)
             else:
                 lines = []
                 for s in sessions:
-                    lines.append(f"### {s['title']} ({s['date_str']}, {s['duration_formatted']})\n{s['summary']}")
+                    dur = s.get('duration_formatted') or f"{int(s.get('duration_seconds', 0) // 60)}m"
+                    ts = s.get('date_str') or time.strftime("%Y-%m-%d %H:%M", time.localtime(s.get('started_at', time.time())))
+                    lines.append(f"### {s.get('title', 'Meeting')} ({ts}, {dur})\n{s.get('summary', '')}")
                 output = "\n\n".join(lines)
 
         elif name == "homie_list_windows":

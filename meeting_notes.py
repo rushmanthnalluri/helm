@@ -67,6 +67,8 @@ def get_meeting_by_id(meeting_id, db_path=None):
         ).fetchone()
         return dict(row) if row else None
 
+get_recent_meetings = list_recent_meetings
+
 class MeetingSession:
     """Manages active meeting recording, transcription, and summarization."""
     def __init__(self, db_path=None):
