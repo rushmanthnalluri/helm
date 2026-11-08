@@ -72,6 +72,34 @@ class TelegramBridge:
         self._ram_alert_active = False
         self._battery_alert_active = False
 
+        import notification_mirror
+        import presence_monitor
+        self.notification_mirror = notification_mirror.NotificationMirror(
+            on_notification_callback=self._on_windows_notification
+        )
+        self.presence_monitor = presence_monitor.PresenceMonitor(
+            on_user_returned_callback=self._on_user_returned
+        )
+
+    def _on_windows_notification(self, app_name, title, body, item):
+        """Dispatches incoming Windows toast notifications to paired Telegram users."""
+        if not self.prefs.get('notificationMirror', True):
+            return
+        # Whitelist / filter logic: ignore Defender routine scans or empty alerts
+        if app_name.lower() in ('windows security', 'antivirus') and 'no threats' in (body or '').lower():
+            return
+        msg = f"🔔 **[{app_name}]**"
+        if title:
+            msg += f"\n**{title}**"
+        if body:
+            msg += f"\n{body}"
+        for uid in self.allowed_users:
+            self.send_message(uid, msg)
+
+    def _on_user_returned(self, away_dur, missed_events):
+        """Optional hook when user returns after idle absence."""
+        pass
+
     def _api_call(self, method, data=None, files=None, timeout=30):
         if not self.token:
             return None
@@ -156,7 +184,8 @@ class TelegramBridge:
                     {"text": "🔒 Lock PC", "callback_data": "action_lock"}
                 ],
                 [
-                    {"text": "📜 Run Macro...", "callback_data": "action_macro_list"}
+                    {"text": "📜 Run Macro...", "callback_data": "action_macro_list"},
+                    {"text": "📋 Catch-up Brief", "callback_data": "action_catchup"}
                 ]
             ]
         }
@@ -322,6 +351,33 @@ class TelegramBridge:
             keyboard = {"inline_keyboard": buttons}
             self.send_message(chat_id, "📜 **Tap a macro to run on PC**:", reply_markup=keyboard)
 
+        elif data == 'action_catchup':
+            self.handle_command(chat_id, '/catchup')
+
+        elif data.startswith('act_pill_'):
+            action_id = data[9:]
+            import action_pill
+            clip = windows_tools.get_clipboard_text()
+            ok, msg = action_pill.execute_action(action_id, clip)
+            prefix = "✓" if ok else "⚠️"
+            self.send_message(chat_id, f"{prefix} {msg}")
+
+        elif data.startswith('getfile_'):
+            import file_indexer
+            try:
+                fid = int(data[8:])
+                rec = file_indexer.get_file_by_id(fid)
+                if not rec or not os.path.exists(rec['file_path']):
+                    self.send_message(chat_id, "⚠️ File not found on disk.")
+                    return
+                fpath = rec['file_path']
+                fname = rec['file_name']
+                sz = file_indexer.format_file_size(rec['size_bytes'])
+                self.send_message(chat_id, f"📤 Sending `{fname}` ({sz})...")
+                self.send_document(chat_id, fpath, caption=f"📄 {fname}")
+            except Exception as e:
+                self.send_message(chat_id, f"Failed to retrieve file: {e}")
+
         elif data.startswith('run_macro_'):
             macro_name = data[10:]
             ok, msg = homie.execute_macro(macro_name)
@@ -369,6 +425,8 @@ class TelegramBridge:
                     # RAM alert: trigger at >= 92%, clear at < 82%
                     if ram_pct >= 92 and not self._ram_alert_active:
                         self._ram_alert_active = True
+                        import event_log
+                        event_log.log_event("vitals", f"High RAM alert: {ram_pct}% used ({v['ram_total_gb']} GB total)")
                         for uid in self.allowed_users:
                             self.send_message(
                                 uid,
@@ -385,6 +443,8 @@ class TelegramBridge:
                             level = int(m.group(1))
                             if level <= 15 and not self._battery_alert_active:
                                 self._battery_alert_active = True
+                                import event_log
+                                event_log.log_event("vitals", f"Low battery warning: {level}% remaining on battery")
                                 for uid in self.allowed_users:
                                     self.send_message(
                                         uid,
@@ -406,6 +466,8 @@ class TelegramBridge:
                 due = reminder_scheduler.get_due_reminders()
                 for it in due:
                     reminder_scheduler.mark_reminder_fired(it['id'])
+                    import event_log
+                    event_log.log_event("reminder", f"Timer / reminder alert: {it['message']}")
                     cid = it['chat_id']
                     msg = f"⏰ **Timer / Reminder Alert**:\n\n{it['message']}"
                     self.send_message(cid, msg)
@@ -470,12 +532,18 @@ class TelegramBridge:
                 "You can talk to me like a walkie-talkie or send commands from anywhere:\n\n"
                 "🎙️ **Voice Notes**: Hold mic button, speak, and release!\n"
                 "🎛️ `/panel` - Interactive 1-tap control buttons\n"
-                "🧠 `/smartclip` - AI analysis of current clipboard\n"
+                "📋 `/catchup [hours]` - Timeline of what happened while away\n"
+                "🔍 `/find <query>` - Instant file search across Desktop & Downloads\n"
+                "🔔 `/mirror <on|off>` - Mirror Windows toast notifications\n"
+                "🧠 `/smartclip` - AI analysis & action pill for current clipboard\n"
                 "📜 `/macros` / `/macro <name>` - Automated workflows\n"
                 "🖼️ **Photos**: Send photo for instant Vision AI analysis\n"
                 "📸 `/screen` - Take live desktop screenshot\n"
                 "👁️ `/inspect <question>` - Screen capture + Vision answer\n"
                 "💻 `/status` - RAM, Disk, Battery, Uptime, Active Window\n"
+                "📊 `/top` - Top CPU/RAM processes with kill buttons\n"
+                "⏰ `/remind <10m> <msg>` - Persistent timer/reminder\n"
+                "🗣️ `/speak <text>` - Offline Windows SAPI voice synthesis\n"
                 "📋 `/clip [text]` - Read or set PC clipboard\n"
                 "⚡ `/cmd <command>` - Execute safe Windows shell command\n"
                 "📁 `/downloads` - List recent files in Downloads folder\n"
@@ -502,8 +570,100 @@ class TelegramBridge:
             return
 
         if cmd in ('/smartclip', '/copilot'):
-            analysis = homie.analyze_clipboard()
-            self.send_message(chat_id, analysis)
+            clip = windows_tools.get_clipboard_text()
+            if not clip or not clip.strip():
+                self.send_message(chat_id, "📋 Clipboard is currently empty.")
+                return
+            import clipboard_classifier
+            import action_pill
+            cls = clipboard_classifier.classify_clipboard_content(clip)
+            analysis = homie.analyze_clipboard(clip)
+            acts = action_pill.get_actions_for_classification(cls)
+            buttons = []
+            if acts:
+                row = []
+                for a in acts:
+                    row.append({"text": a['label'], "callback_data": f"act_pill_{a['id']}"})
+                buttons.append(row)
+            keyboard = {"inline_keyboard": buttons} if buttons else None
+            self.send_message(chat_id, analysis, reply_markup=keyboard)
+            return
+
+        if cmd in ('/catchup', '/missed', '/brief'):
+            hours = 4
+            if args and args[0].isdigit():
+                hours = max(1, min(72, int(args[0])))
+            import event_log
+            since_ts = time.time() - (hours * 3600)
+            events = event_log.get_events_since(since_ts, limit=25)
+            if not events:
+                self.send_message(chat_id, f"✨ **All Quiet**: No alerts or notable events recorded in the last {hours} hour(s).")
+                return
+
+            type_icons = {
+                'notification': '🔔',
+                'presence': '🚶',
+                'vitals': '⚠️',
+                'reminder': '⏰',
+                'command': '⚡'
+            }
+            lines = [f"📋 **What Did I Miss? (Past {hours} hours)**:\n"]
+            for e in events:
+                t_str = time.strftime("%I:%M %p", time.localtime(e['occurred_at']))
+                icon = type_icons.get(e['event_type'], '•')
+                lines.append(f"{icon} `{t_str}`: {e['event_summary']}")
+
+            self.send_message(chat_id, "\n".join(lines))
+            return
+
+        if cmd in ('/find', '/search'):
+            query = " ".join(args).strip()
+            if not query:
+                self.send_message(chat_id, "Usage: `/find <filename_or_keyword>` (e.g. `/find resume` or `/find report.pdf`)")
+                return
+            import file_indexer
+            matches = file_indexer.search_files(query, limit=8)
+            if not matches:
+                # If index was empty or 0 matches, auto-build index
+                self.send_message(chat_id, f"🔍 Indexing Desktop, Downloads, Documents for '{query}'...")
+                file_indexer.build_file_index()
+                matches = file_indexer.search_files(query, limit=8)
+
+            if not matches:
+                self.send_message(chat_id, f"🔍 No files found matching `{query}`.")
+                return
+
+            lines = [f"🔍 **Found {len(matches)} file(s) matching '{query}'**:\n"]
+            buttons = []
+            for f in matches:
+                sz = file_indexer.format_file_size(f['size_bytes'])
+                lines.append(f"• `{f['file_name']}` ({sz})")
+                buttons.append([{"text": f"📥 Send {f['file_name'][:25]} ({sz})", "callback_data": f"getfile_{f['id']}"}])
+
+            keyboard = {"inline_keyboard": buttons}
+            self.send_message(chat_id, "\n".join(lines), reply_markup=keyboard)
+            return
+
+        if cmd == '/index':
+            self.send_message(chat_id, "🔍 Rebuilding local file search index...")
+            import file_indexer
+            count = file_indexer.build_file_index()
+            self.send_message(chat_id, f"✓ Indexed **{count}** files across Desktop, Downloads, and Documents.")
+            return
+
+        if cmd == '/mirror':
+            sub = args[0].lower() if args else ""
+            if sub in ('on', 'true', 'enable'):
+                self.prefs['notificationMirror'] = True
+                homie.save_pref('notificationMirror', True)
+                self.send_message(chat_id, "🔔 **Windows Notification Mirroring**: ON\nIncoming toast alerts will be forwarded directly to your phone.")
+            elif sub in ('off', 'false', 'disable'):
+                self.prefs['notificationMirror'] = False
+                homie.save_pref('notificationMirror', False)
+                self.send_message(chat_id, "🔕 **Windows Notification Mirroring**: OFF")
+            else:
+                curr = "ON" if self.prefs.get('notificationMirror', True) else "OFF"
+                self.send_message(chat_id, f"🔔 **Windows Notification Mirroring**: {curr}\nUse `/mirror on` or `/mirror off` to toggle.")
             return
 
         if cmd in ('/macros', '/macro'):
@@ -1005,11 +1165,22 @@ class TelegramBridge:
         threading.Thread(target=self._vitals_monitor_worker, daemon=True).start()
         # Start reminders and timers monitor in background
         threading.Thread(target=self._reminder_monitor_worker, daemon=True).start()
+        # Start Windows toast notification mirror and presence monitor
+        try:
+            self.notification_mirror.start()
+            self.presence_monitor.start()
+        except Exception as e:
+            print(f"[Telegram] Warning starting notification/presence monitors: {e}")
         return True
 
     def stop(self):
         """Stops the Telegram bridge polling."""
         self.running = False
+        try:
+            self.notification_mirror.stop()
+            self.presence_monitor.stop()
+        except Exception:
+            pass
 
 def main():
     token = None

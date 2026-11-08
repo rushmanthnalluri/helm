@@ -11,3 +11,7 @@ mss>=9.0.0
 pyperclip>=1.8.2
 psutil>=5.9.0
 numpy>=1.24.0
+winrt-runtime>=4.0.0
+winrt-Windows.UI.Notifications.Management>=4.0.0
+winrt-Windows.UI.Notifications>=4.0.0
+winrt-Windows.ApplicationModel>=4.0.0

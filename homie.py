@@ -469,7 +469,42 @@ def try_fast_command(text):
             return True, f"🖥️ **Screen Analysis**:\n{analysis}"
         return True, "Could not capture display for screen analysis."
 
-    # 12. Quick App / Website Launch (e.g. "open notepad", "launch chrome", "open spotify", "open github")
+    # 13. What Did I Miss / Catch-Up
+    if re.search(r'\b(what\s+did\s+i\s+miss|what\s+happened\s+while\s+i\s+was\s+away|catch\s*up\s*(?:brief)?|recent\s+events)\b', t):
+        import event_log
+        events = event_log.get_events_since(time.time() - (4 * 3600), limit=15)
+        if not events:
+            return True, "✨ All quiet: No alerts or notable events recorded in the last 4 hours."
+        lines = ["📋 **Recent System Timeline (Past 4 Hours)**:"]
+        for e in events:
+            t_str = time.strftime("%I:%M %p", time.localtime(e['occurred_at']))
+            lines.append(f"• `{t_str}`: {e['event_summary']}")
+        return True, "\n".join(lines)
+
+    # 14. Local File Search ("find file <x>", "search file <x>")
+    find_m = re.match(r'^(?:find|search|locate)(?:\s+for)?\s+(?:file|document|pdf)?\s*([a-zA-Z0-9_.-]+)$', t)
+    if find_m and find_m.group(1).strip() not in ('youtube', 'yt', 'web', 'google', 'bing'):
+        target_name = find_m.group(1).strip()
+        import file_indexer
+        matches = file_indexer.search_files(target_name, limit=6)
+        if not matches:
+            file_indexer.build_file_index()
+            matches = file_indexer.search_files(target_name, limit=6)
+        if matches:
+            items = "\n".join(f"• `{m['file_name']}` ({file_indexer.format_file_size(m['size_bytes'])})" for m in matches)
+            return True, f"🔍 **Found {len(matches)} match(es)**:\n{items}"
+        return True, f"🔍 No files found matching '{target_name}' across Desktop, Downloads, and Documents."
+
+    # 15. Top Resource Consumers ("top processes", "resource hogs", "top tasks")
+    if re.search(r'\b(top\s+processes|top\s+tasks|resource\s+hogs|cpu\s+hogs|ram\s+hogs)\b', t):
+        procs = windows_tools.get_top_processes(limit=5)
+        if procs:
+            lines = ["📊 **Top Resource Consumers**:\n"]
+            for p in procs:
+                lines.append(f"• `{p['name']}`: {p['mem_pct']}% RAM ({p['mem_mb']} MB) | {p['cpu_pct']}% CPU")
+            return True, "\n".join(lines)
+
+    # 16. Quick App / Website Launch (e.g. "open notepad", "launch chrome", "open spotify", "open github")
     m = re.match(r'^(?:open|launch|start|run)\s+([a-zA-Z0-9\s._-]+)$', t)
     if m:
         target = m.group(1).strip()
