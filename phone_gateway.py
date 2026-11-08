@@ -58,6 +58,12 @@ _server_instance = None
 _server_thread = None
 _call_state = {}
 
+_SEEN_PHONE_NONCES = set()
+
+MAX_AUDIO_PAYLOAD_BYTES = 5 * 1024 * 1024   # 5 MB
+
+MAX_AUDIO_DURATION_SECS = 30.0             # 30 seconds
+
 import secrets
 import qrcode
 import io
@@ -188,7 +194,7 @@ def execute_phone_instruction(speech_text, session_id="call"):
     # 1. Try instant fast-command first (<50ms)
     try:
         import homie
-        handled, msg = homie.try_fast_command(speech)
+        handled, msg = homie.try_fast_command(speech, caller_id="phone_gateway")
         if handled:
             # Clean up message for voice output (short & clear)
             clean_msg = msg.replace("\n", ". ").replace("`", "")
@@ -653,12 +659,15 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
         self._send_response(200, "application/json", json.dumps(resp_payload))
 
     def _handle_audio_call(self, raw_body):
-        """Processes raw or base64 audio upload from phone microphone, transcribes via local Whisper,
-        executes via ActionBroker, and returns synthesized audio reply."""
+        """Interactive Half-Duplex Push-to-Talk Voice Call: Processes raw or base64 audio upload from
+        paired phone microphone, verifies device token, timestamp (+/-30s replay window), and nonce,
+        enforces 5MB and 30s caps, transcribes via local Whisper, executes via ActionBroker (capped to
+        READ_ONLY / REVERSIBLE tiers), and returns synthesized audio reply."""
         token = self.headers.get("X-Homie-Token", "") or self.headers.get("Authorization", "").replace("Bearer ", "")
         conf = load_phone_config()
 
         wav_bytes = b""
+        data = {}
         if self.headers.get("Content-Type", "").startswith("application/json"):
             try:
                 body_str = raw_body.decode("utf-8", errors="ignore") if isinstance(raw_body, bytes) else str(raw_body)
@@ -673,6 +682,26 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
         else:
             wav_bytes = raw_body if isinstance(raw_body, bytes) else raw_body.encode("latin1")
 
+        # 1. Replay Protection: Check timestamp window (+/- 30s) and single-use nonce
+        ts_val = self.headers.get("X-Homie-Timestamp") or data.get("timestamp") or data.get("ts")
+        nonce_val = self.headers.get("X-Homie-Nonce") or data.get("nonce")
+
+        if ts_val:
+            try:
+                if abs(time.time() - float(ts_val)) > 30.0:
+                    self._send_response(401, "application/json", json.dumps({"error": "REPLAY_REJECTED: Timestamp is outside +/- 30s replay window"}))
+                    return
+            except (ValueError, TypeError):
+                self._send_response(400, "application/json", json.dumps({"error": "BAD_REQUEST: Malformed timestamp"}))
+                return
+
+        if nonce_val:
+            if str(nonce_val) in _SEEN_PHONE_NONCES:
+                self._send_response(401, "application/json", json.dumps({"error": "REPLAY_REJECTED: Nonce has already been consumed"}))
+                return
+            _SEEN_PHONE_NONCES.add(str(nonce_val))
+
+        # 2. Authentication check
         is_auth = is_device_token_valid(token) or not conf.get("require_pin", True)
         if not is_auth:
             self._send_response(401, "application/json", json.dumps({"error": "Unauthorized: Device pairing required"}))
@@ -680,6 +709,11 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
 
         if not wav_bytes:
             self._send_response(400, "application/json", json.dumps({"error": "Missing audio payload"}))
+            return
+
+        # 3. Payload size cap (<= 5MB)
+        if len(wav_bytes) > MAX_AUDIO_PAYLOAD_BYTES:
+            self._send_response(413, "application/json", json.dumps({"error": f"PAYLOAD_TOO_LARGE: Audio payload {len(wav_bytes)} bytes exceeds 5MB limit"}))
             return
 
         # Transcribe audio using voice.VoiceEngine

@@ -128,6 +128,15 @@ class ActionBroker:
 
         tier = allowed_tools.get(canonical_tool, "WRITE_EXEC")
 
+        # 3.1. Phone Channel Tier Cap: Spoken phone instructions capped to READ_ONLY and REVERSIBLE
+        if caller_id.startswith("phone_") and tier == "WRITE_EXEC" and not step_up_token:
+            msg = f"Security Gate: Phone channel is capped to READ_ONLY and REVERSIBLE tiers. Action '{canonical_tool}' ({tier}) requires step-up authorization."
+            try:
+                agent_audit_ledger.record_agent_action(caller_id, canonical_tool, tier, args, decision="DENY_PHONE_TIER_CAP")
+            except Exception:
+                pass
+            return False, msg, None
+
         # 4. Multi-channel Canary leak scan on arguments
         has_canary, canary_msg = canary_monitor.inspect_egress_payload(args)
         if has_canary:

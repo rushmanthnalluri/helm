@@ -29,6 +29,15 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
     def setUp(self):
         self.test_registry_file = os.path.join(BASE_DIR, "test_temp_macros.json")
         self.registry = skill_compiler.MacroRegistry(storage_path=self.test_registry_file)
+        import homie_supervisor, kill_switch, taint_tracker, action_broker
+        for p in [homie_supervisor.DIRTY_FLAG_PATH, homie_supervisor.CRASH_HISTORY_PATH]:
+            if os.path.exists(p):
+                try: os.remove(p)
+                except Exception: pass
+        kill_switch._KILL_SWITCH_ACTIVE = False
+        kill_switch._ENGAGED_REASON = ""
+        taint_tracker.clear_all_taints()
+        action_broker._GLOBAL_BROKER = None
 
     def tearDown(self):
         if os.path.exists(self.test_registry_file):
@@ -36,6 +45,15 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
                 os.remove(self.test_registry_file)
             except Exception:
                 pass
+        import homie_supervisor, kill_switch, taint_tracker, action_broker
+        for p in [homie_supervisor.DIRTY_FLAG_PATH, homie_supervisor.CRASH_HISTORY_PATH]:
+            if os.path.exists(p):
+                try: os.remove(p)
+                except Exception: pass
+        kill_switch._KILL_SWITCH_ACTIVE = False
+        kill_switch._ENGAGED_REASON = ""
+        taint_tracker.clear_all_taints()
+        action_broker._GLOBAL_BROKER = None
 
     def test_macro_compilation_signing_and_execution(self):
         """Verifies macro compilation, cryptographic signing, and multi-step execution."""
@@ -47,7 +65,8 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
         ok, msg, macro = self.registry.register_macro(
             name="dev_morning_setup",
             description="Places notepad on the left and toggles music",
-            steps=steps
+            steps=steps,
+            human_auth=True
         )
         self.assertTrue(ok)
         self.assertEqual(macro["step_budget"], 2)
@@ -66,17 +85,17 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
     def test_tampered_macro_signature_rejected(self):
         """Verifies that tampering with a macro step causes signature validation failure."""
         steps = [{"tool": "homie_control_media", "arguments": {"action": "volup"}}]
-        ok, msg, macro = self.registry.register_macro("vol_up_macro", "Volume up", steps)
+        ok, msg, macro = self.registry.register_macro("custom_volume_step", "Volume step", steps, human_auth=True)
         self.assertTrue(ok)
 
         # Tamper with the macro in registry (insert malicious third-party step)
-        tampered_macro = self.registry.get_macro("vol_up_macro")
+        tampered_macro = self.registry.get_macro("custom_volume_step")
         tampered_macro["steps"].append({"tool": "homie_launch_app", "arguments": {"app_name": "cmd.exe"}})
-        self.registry._macros["vol_up_macro"] = tampered_macro
+        self.registry._macros["custom_volume_step"] = tampered_macro
 
         # Attempt execution of tampered macro
         exec_ok, exec_msg, _ = skill_compiler.execute_compiled_macro(
-            "vol_up_macro", registry=self.registry
+            "custom_volume_step", registry=self.registry
         )
         self.assertFalse(exec_ok)
         self.assertIn("signature is invalid or tampered", exec_msg)
@@ -125,6 +144,43 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
         self.assertIn("***REDACTED_SECRET***", redacted)
         self.assertIn("***REDACTED_INTENT_TOKEN***", redacted)
         self.assertIn("***REDACTED_EMAIL***", redacted)
+
+
+    def test_macro_compilation_denied_without_human_auth(self):
+        """Verifies macro registration is rejected when human authorization is absent."""
+        steps = [{"tool": "homie_control_media", "arguments": {"action": "volup"}}]
+        ok, msg, _ = self.registry.register_macro("safe_macro", "Safe macro", steps, human_auth=False)
+        self.assertFalse(ok)
+        self.assertIn("strictly requires explicit human authorization", msg)
+
+    def test_macro_compilation_denied_when_tainted(self):
+        """Verifies anti-taint laundering: Macros cannot be registered from a tainted session."""
+        import taint_tracker
+        taint_tracker.set_workstation_tainted(True)
+        try:
+            steps = [{"tool": "homie_control_media", "arguments": {"action": "volup"}}]
+            ok, msg, _ = self.registry.register_macro("tainted_macro", "Tainted macro", steps, human_auth=True)
+            self.assertFalse(ok)
+            self.assertIn("Taint Laundering Detected", msg)
+        finally:
+            taint_tracker.clear_all_taints()
+
+    def test_macro_compilation_denied_when_shadowing_fast_command(self):
+        """Verifies macros cannot shadow core deterministic fast commands (mute, pause, pc_status)."""
+        steps = [{"tool": "homie_control_media", "arguments": {"action": "volup"}}]
+        for forbidden in ["mute", "pause", "pc_status", "volume_up", "clipboard"]:
+            ok, msg, _ = self.registry.register_macro(forbidden, "Shadowing macro", steps, human_auth=True)
+            self.assertFalse(ok, f"Expected forbidden name '{forbidden}' to be rejected")
+            self.assertIn("shadows built-in fast command", msg)
+
+    def test_macro_parameter_schema_validation(self):
+        """Verifies deeply nested or untyped parameters are rejected."""
+        # Recursive depth > 3
+        deep_args = {"l1": {"l2": {"l3": {"l4": "too_deep"}}}}
+        steps = [{"tool": "homie_place_window", "arguments": deep_args}]
+        ok, msg, _ = self.registry.register_macro("deep_param_macro", "Deep", steps, human_auth=True)
+        self.assertFalse(ok)
+        self.assertIn("Parameter recursion depth exceeded", msg)
 
 
 if __name__ == "__main__":

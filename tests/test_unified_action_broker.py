@@ -58,12 +58,16 @@ class TestUnifiedActionBroker(unittest.TestCase):
         """Verifies hotkey, voice, telegram, phone, and AI tool calls pass through ActionBroker."""
         broker = action_broker.get_action_broker()
 
-        for caller in ["desktop_user", "desktop_voice", "telegram_remote", "phone_gateway", "ai_engine"]:
+        for caller in ["desktop_user", "desktop_voice", "telegram_remote", "ai_engine"]:
             ok, msg, res = broker.execute_action(
                 "homie_snap_window", {"app_name": "notepad", "position": "left"}, caller_id=caller
             )
             self.assertTrue(ok, f"Caller '{caller}' failed action execution: {msg}")
             self.assertIn("Success:", msg)
+
+        # READ_ONLY action executes directly across all callers including phone_gateway
+        ok_phone, msg_phone, res_phone = broker.execute_action("homie_get_vitals", {}, caller_id="phone_gateway")
+        self.assertTrue(ok_phone, f"phone_gateway read-only execution failed: {msg_phone}")
 
     def test_kill_switch_halts_actions_across_all_callers(self):
         """Verifies emergency kill switch halts WRITE_EXEC actions across all ingress channels."""

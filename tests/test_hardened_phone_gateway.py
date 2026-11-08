@@ -25,6 +25,28 @@ import phone_gateway
 
 class TestHardenedPhoneGateway(unittest.TestCase):
 
+    def setUp(self):
+        import homie_supervisor, kill_switch, taint_tracker, action_broker
+        for p in [homie_supervisor.DIRTY_FLAG_PATH, homie_supervisor.CRASH_HISTORY_PATH]:
+            if os.path.exists(p):
+                try: os.remove(p)
+                except Exception: pass
+        kill_switch._KILL_SWITCH_ACTIVE = False
+        kill_switch._ENGAGED_REASON = ""
+        taint_tracker.clear_all_taints()
+        action_broker._GLOBAL_BROKER = None
+
+    def tearDown(self):
+        import homie_supervisor, kill_switch, taint_tracker, action_broker
+        for p in [homie_supervisor.DIRTY_FLAG_PATH, homie_supervisor.CRASH_HISTORY_PATH]:
+            if os.path.exists(p):
+                try: os.remove(p)
+                except Exception: pass
+        kill_switch._KILL_SWITCH_ACTIVE = False
+        kill_switch._ENGAGED_REASON = ""
+        taint_tracker.clear_all_taints()
+        action_broker._GLOBAL_BROKER = None
+
     def test_default_loopback_binding(self):
         """Verifies phone gateway config binds strictly to 127.0.0.1 by default."""
         conf = phone_gateway.load_phone_config()
@@ -106,6 +128,89 @@ class TestHardenedPhoneGateway(unittest.TestCase):
                     os.remove(tmp_wav)
                 except Exception:
                     pass
+
+    def test_audio_call_replay_protection_timestamp_and_nonce(self):
+        """Verifies replay attack protection via timestamp tolerance and single-use nonce."""
+        import time
+
+        class MockHandler(phone_gateway.PhoneGatewayHandler):
+            def __init__(self, headers=None):
+                self.headers = headers or {"Content-Type": "application/json", "Authorization": "Bearer test"}
+                self.sent_code = None
+                self.sent_body = None
+
+            def _send_response(self, code, content_type, body):
+                self.sent_code = code
+                self.sent_body = body
+
+        import unittest.mock as mock
+        with mock.patch("phone_gateway.is_device_token_valid", return_value=True):
+            # 1. Expired timestamp rejected
+            h_expired = MockHandler({
+                "Content-Type": "application/json",
+                "Authorization": "Bearer test",
+                "X-Homie-Timestamp": str(time.time() - 100)
+            })
+            h_expired._handle_audio_call(json.dumps({"audio_b64": "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA="}))
+            self.assertEqual(h_expired.sent_code, 401)
+            self.assertIn("REPLAY_REJECTED", h_expired.sent_body)
+
+            # 2. First request with valid nonce succeeds
+            test_nonce = f"nonce_{time.time()}_{os.getpid()}"
+            h_valid = MockHandler({
+                "Content-Type": "application/json",
+                "Authorization": "Bearer test",
+                "X-Homie-Timestamp": str(time.time()),
+                "X-Homie-Nonce": test_nonce
+            })
+            h_valid._handle_audio_call(json.dumps({"audio_b64": "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA="}))
+            self.assertEqual(h_valid.sent_code, 200)
+
+            # 3. Replay with same consumed nonce rejected
+            h_replay = MockHandler({
+                "Content-Type": "application/json",
+                "Authorization": "Bearer test",
+                "X-Homie-Timestamp": str(time.time()),
+                "X-Homie-Nonce": test_nonce
+            })
+            h_replay._handle_audio_call(json.dumps({"audio_b64": "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA="}))
+            self.assertEqual(h_replay.sent_code, 401)
+            self.assertIn("already been consumed", h_replay.sent_body)
+
+    def test_audio_call_payload_size_limit(self):
+        """Verifies oversized audio payloads (>5MB) are rejected with HTTP 413."""
+        class MockHandler(phone_gateway.PhoneGatewayHandler):
+            def __init__(self):
+                self.headers = {"Content-Type": "application/octet-stream", "Authorization": "Bearer test"}
+                self.sent_code = None
+                self.sent_body = None
+
+            def _send_response(self, code, content_type, body):
+                self.sent_code = code
+                self.sent_body = body
+
+        oversized_bytes = b"0" * (phone_gateway.MAX_AUDIO_PAYLOAD_BYTES + 1024)
+        handler = MockHandler()
+        import unittest.mock as mock
+        with mock.patch("phone_gateway.is_device_token_valid", return_value=True):
+            handler._handle_audio_call(oversized_bytes)
+
+        self.assertEqual(handler.sent_code, 413)
+        self.assertIn("PAYLOAD_TOO_LARGE", handler.sent_body)
+
+    def test_phone_channel_tier_cap_enforcement(self):
+        """Verifies ActionBroker enforces tier cap: Phone cannot invoke WRITE_EXEC without step-up."""
+        import action_broker
+        broker = action_broker.get_action_broker()
+
+        # WRITE_EXEC tool (launch app) from phone caller_id without step-up token
+        ok, msg, res = broker.execute_action(
+            "homie_launch_app",
+            {"app_name": "notepad"},
+            caller_id="phone_gateway"
+        )
+        self.assertFalse(ok)
+        self.assertIn("Phone channel is capped to READ_ONLY and REVERSIBLE tiers", msg)
 
 
 

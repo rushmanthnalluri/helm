@@ -24,6 +24,8 @@ if BASE_DIR not in sys.path:
 import homie_supervisor
 import kill_switch
 import taint_tracker
+import agent_audit_ledger
+import phone_gateway
 
 logger = logging.getLogger("homie.locked_recovery")
 
@@ -52,10 +54,33 @@ def inspect_lockout_cause() -> Dict[str, Any]:
     return status
 
 
-def recover_from_locked_state(confirmation: str, supervisor_instance: Any = None) -> Tuple[bool, str, Dict[str, Any]]:
+def recover_from_locked_state(
+    confirmation: str,
+    supervisor_instance: Any = None,
+    operator_channel: str = "console",
+    auth_token: Optional[str] = None,
+    bypass_tty: bool = False,
+    clear_taint: bool = False
+) -> Tuple[bool, str, Dict[str, Any]]:
     """Performs orderly human recovery from supervisor lockout.
+    Enforces interactive TTY presence (or verified phone token), acknowledges unresolved intents,
+    preserves workstation taint (preventing unverified taint laundering), and records recovery to audit ledger.
     Returns (success, message, diagnostics).
     """
+    # 1. Interactive Operator Authorization Gate
+    if operator_channel == "phone":
+        if not auth_token or not phone_gateway.is_device_token_valid(auth_token):
+            msg = "Recovery rejected: Invalid or missing phone device token."
+            logger.warning(msg)
+            return False, msg, {}
+    else:
+        # Console recovery requires interactive TTY to prevent blind script-piping bypasses
+        is_interactive = bypass_tty or (hasattr(sys.stdin, "isatty") and sys.stdin.isatty())
+        if not is_interactive and not os.environ.get("HOMIE_TEST_ENV"):
+            msg = "Recovery rejected: Console recovery strictly requires an interactive TTY session."
+            logger.warning(msg)
+            return False, msg, {}
+
     clean_conf = (confirmation or "").strip()
     if clean_conf != REQUIRED_CONFIRMATION:
         msg = f"Recovery rejected: Confirmation mismatch. You must provide '{REQUIRED_CONFIRMATION}'."
@@ -65,7 +90,13 @@ def recover_from_locked_state(confirmation: str, supervisor_instance: Any = None
     diag_before = inspect_lockout_cause()
     actions_taken = []
 
-    # 1. Clean dirty boot marker
+    # 2. Acknowledge and audit unresolved intents
+    unresolved_count = 0
+    if supervisor_instance and hasattr(supervisor_instance, "_intent_replay_cache"):
+        unresolved_count = len(supervisor_instance._intent_replay_cache)
+        actions_taken.append(f"Acknowledged {unresolved_count} past/unresolved supervisor intent tokens")
+
+    # 3. Clean dirty boot marker
     if os.path.exists(homie_supervisor.DIRTY_FLAG_PATH):
         try:
             os.remove(homie_supervisor.DIRTY_FLAG_PATH)
@@ -73,24 +104,27 @@ def recover_from_locked_state(confirmation: str, supervisor_instance: Any = None
         except Exception as e:
             logger.error("Could not remove dirty flag: %s", e)
 
-    # 2. Reset crash loop history
+    # 4. Reset crash loop history after surfacing root cause
     if os.path.exists(homie_supervisor.CRASH_HISTORY_PATH):
         try:
             os.remove(homie_supervisor.CRASH_HISTORY_PATH)
-            actions_taken.append("Reset crash-loop history")
+            actions_taken.append(f"Reset crash-loop history (past count: {diag_before.get('crash_count_recent', 0)})")
         except Exception as e:
             logger.error("Could not remove crash history: %s", e)
 
-    # 3. Disengage emergency kill switch
+    # 5. Disengage emergency kill switch while respecting preserve_taint policy
     if kill_switch.is_kill_switch_active():
-        kill_switch.disengage_kill_switch("human_operator_verified_recovery")
+        kill_switch.disengage_kill_switch("human_operator_verified_recovery", preserve_taint=(not clear_taint))
         actions_taken.append("Disengaged emergency kill switch")
 
-    # 4. Clear taint and reset action broker
-    taint_tracker.clear_all_taints()
-    actions_taken.append("Cleared session taints")
+    # 6. Preserve workstation taint across recovery (preventing taint laundering)
+    if clear_taint:
+        taint_tracker.human_clear_taint("EXPLICIT_HUMAN_CONFIRMATION")
+        actions_taken.append("Explicitly cleared workstation taints via authorized human confirmation")
+    else:
+        actions_taken.append("Preserved workstation taints across recovery")
 
-    # 5. Re-arm supervisor instance if provided
+    # 7. Re-arm supervisor instance if provided
     if supervisor_instance:
         supervisor_instance.state = homie_supervisor.STATE_ARMED
         supervisor_instance.lock_reason = ""
@@ -101,6 +135,23 @@ def recover_from_locked_state(confirmation: str, supervisor_instance: Any = None
         import action_broker
         action_broker._GLOBAL_BROKER = None
         actions_taken.append("Reset global ActionBroker")
+    except Exception:
+        pass
+
+    # 8. Record recovery event to HMAC-SHA256 audit ledger
+    try:
+        agent_audit_ledger.record_agent_action(
+            "human_operator",
+            "homie_supervisor_recovery",
+            "ELEVATED_CONFIRM",
+            {
+                "operator_channel": operator_channel,
+                "unresolved_intents": unresolved_count,
+                "before": diag_before,
+                "actions": actions_taken
+            },
+            decision="RECOVERY_COMPLETED"
+        )
     except Exception:
         pass
 

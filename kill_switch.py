@@ -51,8 +51,10 @@ def engage_kill_switch(reason="Manual emergency stop triggered"):
     logger.critical("EMERGENCY KILL SWITCH ENGAGED! Reason: %s", reason)
     return True, f"Emergency kill switch engaged: {reason}"
 
-def disengage_kill_switch(human_auth_token):
-    """Disengages the kill switch ONLY upon explicit verified human confirmation."""
+def disengage_kill_switch(human_auth_token, preserve_taint: bool = False):
+    """Disengages the kill switch ONLY upon explicit verified human confirmation.
+    Optionally preserves workstation taint across disengagement to prevent silent taint laundering.
+    """
     global _KILL_SWITCH_ACTIVE, _ENGAGED_AT, _ENGAGED_REASON
     if not human_auth_token or not (str(human_auth_token).startswith("human_") or human_auth_token == "EXPLICIT_HUMAN_CONFIRMATION"):
         return False, "Denied: Emergency kill switch can only be disengaged by an explicit human action (paired phone)."
@@ -61,8 +63,9 @@ def disengage_kill_switch(human_auth_token):
     _ENGAGED_AT = None
     _ENGAGED_REASON = ""
     desktop_agent.reset_abort()
-    taint_tracker.clear_all_taints()
-    logger.info("Emergency kill switch disengaged by verified human confirmation.")
+    if not preserve_taint:
+        taint_tracker.clear_all_taints()
+    logger.info("Emergency kill switch disengaged by verified human confirmation (preserve_taint=%s).", preserve_taint)
     return True, "Emergency kill switch disengaged. Workstation restored to normal operational state."
 
 def get_engaged_reason() -> str:
