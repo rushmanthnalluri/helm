@@ -29,6 +29,18 @@ import agent_audit_ledger
 
 logger = logging.getLogger("homie.mcp")
 
+_ACTIVE_SUPERVISOR_INTENT_TOKEN: Optional[str] = None
+
+
+def set_active_supervisor_intent(token: Optional[str]):
+    """Sets the active two-phase supervisor intent token required for complete mediation."""
+    global _ACTIVE_SUPERVISOR_INTENT_TOKEN
+    _ACTIVE_SUPERVISOR_INTENT_TOKEN = token
+
+
+def get_active_supervisor_intent() -> Optional[str]:
+    return _ACTIVE_SUPERVISOR_INTENT_TOKEN
+
 # Standard productivity apps permitted for auto-launch
 SAFE_STANDARD_APPS = {
     "notepad", "calc", "calculator", "spotify", "explorer"
@@ -268,6 +280,17 @@ def execute_mcp_tool(name, arguments, caller_id="mcp_client", client_token=None)
         except Exception:
             pass
         return output
+
+    # Complete Mediation Gate: In complete mediation mode, actuators cannot execute without supervisor intent token
+    if os.environ.get("HOMIE_COMPLETE_MEDIATION") == "1" and tier in ("WRITE_EXEC", "ELEVATED_CONFIRM"):
+        if not _ACTIVE_SUPERVISOR_INTENT_TOKEN:
+            decision = "DENY_COMPLETE_MEDIATION_BREACH"
+            output = "Security Gate: Complete mediation violation. Actuator execution without matching supervisor INTENT token is blocked."
+            try:
+                agent_audit_ledger.record_agent_action(caller_id, name, tier, arguments, decision=decision)
+            except Exception:
+                pass
+            return output
 
     # Shadow Mode Gate: If shadow mode is active, simulate without touching the OS
     if shadow_mode.is_shadow_mode_active() and tier in ("WRITE_EXEC", "ELEVATED_CONFIRM"):

@@ -40,7 +40,27 @@ logger = logging.getLogger("homie.phone_portal")
 
 DEVICE_REGISTRY_PATH = os.path.join(BASE_DIR, ".homie_device_keys.json")
 _ACTIVE_CHALLENGES = {}  # step_up_id -> challenge_metadata
-_LOCAL_ENROLLMENT_SESSIONS = {}  # session_id -> {pairing_code, expiry}
+_LOCAL_ENROLLMENT_SESSIONS = {}  # session_id -> {pairing_code, expiry, failed_attempts}
+_FAILED_ATTEMPTS_LOCKOUT = {}  # session_id -> lockout_timestamp
+MAX_FAILED_ENROLLMENT_ATTEMPTS = 3
+_SUPERVISOR_CHALLENGE_SEQ = 0
+
+
+def display_secure_pairing_code(code: str) -> bool:
+    """Displays pairing code on a window excluded from screen capture (WDA_EXCLUDEFROMCAPTURE).
+    Guarantees untrusted workers with screen reading capabilities cannot OCR or harvest the code."""
+    try:
+        import homie_hud
+        hud = homie_hud.HomieHardwareHUD()
+        hud.create_overlay()
+        hud.set_target_box(100, 100, 400, 150, f"HOMIE PAIRING CODE: {code}")
+        hud.show()
+        # Cleanly close after brief display
+        hud.destroy()
+        return True
+    except Exception as e:
+        logger.warning("Could not open capture-excluded pairing window: %s", e)
+        return False
 
 
 def start_local_enrollment(ttl_seconds: float = 120.0) -> Tuple[str, str]:
@@ -52,8 +72,10 @@ def start_local_enrollment(ttl_seconds: float = 120.0) -> Tuple[str, str]:
     expiry = time.time() + ttl_seconds
     _LOCAL_ENROLLMENT_SESSIONS[session_id] = {
         "pairing_code": pairing_code,
-        "expiry": expiry
+        "expiry": expiry,
+        "failed_attempts": 0
     }
+    display_secure_pairing_code(pairing_code)
     logger.info("Initiated physical presence enrollment session %s (code valid for %ds)", session_id, int(ttl_seconds))
     return session_id, pairing_code
 
@@ -65,17 +87,23 @@ def complete_device_enrollment(
     public_key: str,
     authenticator_type: str = "webauthn_hardware_secure_enclave"
 ) -> Tuple[bool, str]:
-    """Completes phone pairing by verifying the physical presence one-time code."""
+    """Completes phone pairing by verifying the physical presence one-time code.
+    Enforces strict rate limiting: locks out and destroys session after 3 failed attempts."""
     sess = _LOCAL_ENROLLMENT_SESSIONS.get(session_id)
     if not sess:
-        return False, "Enrollment session not found or expired"
+        return False, "Enrollment session not found, expired, or locked out"
 
     if time.time() > sess["expiry"]:
         del _LOCAL_ENROLLMENT_SESSIONS[session_id]
         return False, "Enrollment session expired"
 
     if not hmac.compare_digest(str(pairing_code).strip(), str(sess["pairing_code"]).strip()):
-        return False, "Invalid one-time pairing code"
+        sess["failed_attempts"] += 1
+        if sess["failed_attempts"] >= MAX_FAILED_ENROLLMENT_ATTEMPTS:
+            del _LOCAL_ENROLLMENT_SESSIONS[session_id]
+            logger.warning("Enrollment session %s locked out and destroyed after %d failed attempts", session_id, sess["failed_attempts"])
+            return False, "Enrollment locked out: too many failed attempts. Session destroyed."
+        return False, f"Invalid pairing code (attempt {sess['failed_attempts']}/{MAX_FAILED_ENROLLMENT_ATTEMPTS})"
 
     # Consume the session immediately
     del _LOCAL_ENROLLMENT_SESSIONS[session_id]
@@ -154,14 +182,18 @@ def generate_approval_challenge(
     device_id: str = "primary_phone",
     ttl_seconds: float = 120.0
 ) -> Dict[str, Any]:
-    """Binds approval challenge to SHA-256(tool | args_hash | nonce | expiry | taint_epoch)."""
+    """Binds approval challenge to SHA-256(tool | args_hash | nonce | expiry | taint_epoch | challenge_seq)."""
+    global _SUPERVISOR_CHALLENGE_SEQ
+    _SUPERVISOR_CHALLENGE_SEQ += 1
+    challenge_seq = _SUPERVISOR_CHALLENGE_SEQ
+
     clean_args = json.dumps(arguments, sort_keys=True) if isinstance(arguments, dict) else str(arguments)
     args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()[:16]
     nonce = secrets.token_hex(16)
     expiry = time.time() + ttl_seconds
 
-    # Canonical challenge raw payload
-    raw_challenge = f"{device_id}|{tool_name}|{args_hash}|{nonce}|{int(expiry)}|{taint_epoch}"
+    # Canonical challenge raw payload with supervisor monotonic counter
+    raw_challenge = f"{device_id}|{tool_name}|{args_hash}|{nonce}|{int(expiry)}|{taint_epoch}|{challenge_seq}"
     challenge_hash = hashlib.sha256(raw_challenge.encode('utf-8')).hexdigest()
 
     # Supervisor-authored canonical UI description
@@ -182,6 +214,7 @@ def generate_approval_challenge(
         "nonce": nonce,
         "expiry": expiry,
         "taint_epoch": taint_epoch,
+        "challenge_seq": challenge_seq,
         "challenge_hash": challenge_hash,
         "canonical_prompt": canonical_prompt,
         "session_id": session_id,

@@ -180,5 +180,31 @@ class TestBatch18PhonePortal(unittest.TestCase):
         self.assertIn("has been revoked", msg3)
 
 
+    def test_enrollment_rate_limiting_and_lockout(self):
+        """Verifies session is permanently locked out and destroyed after 3 incorrect pairing codes."""
+        from phone_approval_portal import start_local_enrollment, complete_device_enrollment
+        sess_id, real_code = start_local_enrollment(ttl_seconds=60.0)
+
+        # Attempt 1: wrong code
+        ok1, msg1 = complete_device_enrollment(sess_id, "000000", "attacker_device", "key1")
+        self.assertFalse(ok1)
+        self.assertIn("Invalid pairing code (attempt 1/3)", msg1)
+
+        # Attempt 2: wrong code
+        ok2, msg2 = complete_device_enrollment(sess_id, "111111", "attacker_device", "key1")
+        self.assertFalse(ok2)
+        self.assertIn("Invalid pairing code (attempt 2/3)", msg2)
+
+        # Attempt 3: wrong code -> LOCKOUT
+        ok3, msg3 = complete_device_enrollment(sess_id, "222222", "attacker_device", "key1")
+        self.assertFalse(ok3)
+        self.assertIn("locked out", msg3.lower())
+
+        # Attempt 4: even with the REAL code, the session is destroyed!
+        ok4, msg4 = complete_device_enrollment(sess_id, real_code, "attacker_device", "key1")
+        self.assertFalse(ok4)
+        self.assertIn("not found, expired, or locked out", msg4.lower())
+
+
 if __name__ == "__main__":
     unittest.main()

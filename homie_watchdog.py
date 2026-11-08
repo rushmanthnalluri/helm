@@ -40,11 +40,7 @@ LLKHF_LOWER_IL_INJECTED = 0x00000002
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 
-user32.CallNextHookEx.argtypes = [wintypes.HHOOK, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM]
-user32.CallNextHookEx.restype = ctypes.c_longlong if sys.maxsize > 2**32 else ctypes.c_long
-
 LOCKED_FLAG_FILE = os.path.join(BASE_DIR, "homie_supervisor_locked.flag")
-
 
 class KBDLLHOOKSTRUCT(ctypes.Structure):
     _fields_ = [
@@ -56,7 +52,17 @@ class KBDLLHOOKSTRUCT(ctypes.Structure):
     ]
 
 
-HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
+HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_longlong if sys.maxsize > 2**32 else ctypes.c_long,
+                             ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
+
+user32.SetWindowsHookExW.argtypes = [ctypes.c_int, HOOKPROC, ctypes.c_void_p, wintypes.DWORD]
+user32.SetWindowsHookExW.restype = ctypes.c_void_p
+
+user32.UnhookWindowsHookEx.argtypes = [ctypes.c_void_p]
+user32.UnhookWindowsHookEx.restype = wintypes.BOOL
+
+user32.CallNextHookEx.argtypes = [wintypes.HHOOK, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM]
+user32.CallNextHookEx.restype = ctypes.c_longlong if sys.maxsize > 2**32 else ctypes.c_long
 
 
 class MutualHeartbeat:
@@ -155,9 +161,9 @@ class IndependentWatchdog:
         except Exception:
             pass
 
-    def terminate_worker_and_lock(self, reason: str = "WATCHDOG_TRIP") -> float:
-        """Immediately terminates worker Job Object and writes durable locked flag.
-        Returns measured kill latency in milliseconds."""
+    def terminate_worker_and_lock(self, reason: str = "WATCHDOG_TRIP", worker_proc_handle: Optional[int] = None) -> float:
+        """Immediately terminates worker Job Object, waits for process exit, and writes durable locked flag.
+        Returns true measured kill latency until process termination in milliseconds."""
         t_start = time.perf_counter()
         self.locked = True
         self.kill_triggered = True
@@ -170,7 +176,11 @@ class IndependentWatchdog:
             except Exception:
                 pass
 
-        # 2. Write durable locked flag
+        # 2. Wait until worker process has completely terminated at kernel level
+        if worker_proc_handle:
+            kernel32.WaitForSingleObject(worker_proc_handle, 5000)
+
+        # 3. Write durable locked flag
         try:
             with open(LOCKED_FLAG_FILE, "w", encoding="utf-8") as f:
                 f.write(f"LOCKED:{reason}:{time.time()}\n")
@@ -191,13 +201,12 @@ class IndependentWatchdog:
 
     def handle_keyboard_event(self, nCode: int, wParam: int, lParam: int) -> int:
         """Low-level keyboard hook callback.
-        CRITICAL: Ignores any synthesized / injected keys (LLKHF_INJECTED)."""
+        CRITICAL: Ignores any synthesized / injected keys (LLKHF_INJECTED | LLKHF_LOWER_IL_INJECTED)."""
         if nCode >= 0 and wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
             kb = KBDLLHOOKSTRUCT.from_address(lParam)
             # REJECT ALL INJECTED INPUTS
             is_injected = bool(kb.flags & (LLKHF_INJECTED | LLKHF_LOWER_IL_INJECTED))
             if is_injected:
-                # Injected keystroke detected: ignore completely
                 if self._hook:
                     return user32.CallNextHookEx(self._hook, nCode, wParam, lParam)
                 return 0
@@ -206,7 +215,6 @@ class IndependentWatchdog:
             if kb.vkCode == VK_PAUSE:
                 self.terminate_worker_and_lock("PHYSICAL_KILL_HOTKEY_PAUSE")
             elif kb.vkCode == VK_ESCAPE:
-                # Check if Ctrl+Alt are physically held
                 ctrl_down = bool(user32.GetAsyncKeyState(0x11) & 0x8000)
                 alt_down = bool(user32.GetAsyncKeyState(0x12) & 0x8000)
                 if ctrl_down and alt_down:
@@ -217,21 +225,56 @@ class IndependentWatchdog:
         return 0
 
     def start_hook(self):
-        """Installs low-level keyboard hook."""
-        self._hook_proc = HOOKPROC(self.handle_keyboard_event)
-        self._hook = user32.SetWindowsHookExW(
-            WH_KEYBOARD_LL,
-            self._hook_proc,
-            kernel32.GetModuleHandleW(None),
-            0
-        )
+        """Installs low-level keyboard hook on a dedicated thread with its own Win32 message loop.
+        Prevents Windows LowLevelHooksTimeout from silently unhooking slow callbacks."""
+        self._running = True
+        self._hook_ready = threading.Event()
+
+        def hook_loop():
+            self._hook_tid = kernel32.GetCurrentThreadId()
+            self._hook_proc = HOOKPROC(self.handle_keyboard_event)
+            self._hook = user32.SetWindowsHookExW(
+                WH_KEYBOARD_LL,
+                self._hook_proc,
+                None,
+                0
+            )
+            self._hook_ready.set()
+            msg = wintypes.MSG()
+            while self._running:
+                # Use MsgWaitForMultipleObjects or PeekMessage/GetMessage
+                b_ret = user32.GetMessageW(ctypes.byref(msg), None, 0, 0)
+                if b_ret in (0, -1):
+                    break
+                user32.TranslateMessage(ctypes.byref(msg))
+                user32.DispatchMessageW(ctypes.byref(msg))
+
+            if self._hook:
+                user32.UnhookWindowsHookEx(self._hook)
+                self._hook = None
+
+        self._hook_thread = threading.Thread(target=hook_loop, daemon=True)
+        self._hook_thread.start()
+        self._hook_ready.wait(timeout=2.0)
+
+    def check_hook_liveness(self) -> bool:
+        """Self-test verifying that the low-level hook thread and hook handle are active."""
+        if not getattr(self, "_hook", None):
+            return False
+        if not getattr(self, "_hook_thread", None) or not self._hook_thread.is_alive():
+            return False
+        return True
 
     def stop_hook(self):
-        """Uninstalls low-level keyboard hook."""
-        if self._hook:
-            user32.UnhookWindowsHookEx(self._hook)
-            self._hook = None
-            self._hook_proc = None
+        """Uninstalls low-level keyboard hook and stops message loop."""
+        self._running = False
+        if getattr(self, "_hook_tid", None):
+            WM_QUIT = 0x0012
+            user32.PostThreadMessageW(self._hook_tid, WM_QUIT, 0, 0)
+        if getattr(self, "_hook_thread", None):
+            self._hook_thread.join(timeout=1.0)
+        self._hook = None
+        self._hook_proc = None
 
     def start_monitoring(self):
         """Runs background heartbeat monitor loop."""
