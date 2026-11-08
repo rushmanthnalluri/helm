@@ -80,10 +80,15 @@ class TelegramBridge:
         self.presence_monitor = presence_monitor.PresenceMonitor(
             on_user_returned_callback=self._on_user_returned
         )
+        import focus_tracker
+        self.focus_tracker = focus_tracker.FocusTracker()
 
     def _on_windows_notification(self, app_name, title, body, item):
         """Dispatches incoming Windows toast notifications to paired Telegram users."""
         if not self.prefs.get('notificationMirror', True):
+            return
+        # If user is in full screen or active meeting, suppress live popups
+        if item and item.get('suppressed', False):
             return
         # Whitelist / filter logic: ignore Defender routine scans or empty alerts
         if app_name.lower() in ('windows security', 'antivirus') and 'no threats' in (body or '').lower():
@@ -186,6 +191,10 @@ class TelegramBridge:
                 [
                     {"text": "📜 Run Macro...", "callback_data": "action_macro_list"},
                     {"text": "📋 Catch-up Brief", "callback_data": "action_catchup"}
+                ],
+                [
+                    {"text": "📊 Focus Report", "callback_data": "action_focus_report"},
+                    {"text": "🎙️ Meeting Notes", "callback_data": "action_meeting_toggle"}
                 ]
             ]
         }
@@ -378,6 +387,17 @@ class TelegramBridge:
             except Exception as e:
                 self.send_message(chat_id, f"Failed to retrieve file: {e}")
 
+        elif data == 'action_focus_report':
+            self.handle_command(chat_id, '/focus')
+
+        elif data == 'action_meeting_toggle':
+            import meeting_notes
+            sess = meeting_notes.get_meeting_session()
+            if sess.is_active:
+                self.handle_command(chat_id, '/meeting stop')
+            else:
+                self.handle_command(chat_id, '/meeting start Quick Meeting')
+
         elif data.startswith('run_macro_'):
             macro_name = data[10:]
             ok, msg = homie.execute_macro(macro_name)
@@ -533,6 +553,8 @@ class TelegramBridge:
                 "🎙️ **Voice Notes**: Hold mic button, speak, and release!\n"
                 "🎛️ `/panel` - Interactive 1-tap control buttons\n"
                 "📋 `/catchup [hours]` - Timeline of what happened while away\n"
+                "🖥️ `/focus` - Daily application screen-time & focus report\n"
+                "🎙️ `/meeting <start|stop>` - System audio loopback notes & brief\n"
                 "🔍 `/find <query>` - Instant file search across Desktop & Downloads\n"
                 "🔔 `/mirror <on|off>` - Mirror Windows toast notifications\n"
                 "🧠 `/smartclip` - AI analysis & action pill for current clipboard\n"
@@ -664,6 +686,80 @@ class TelegramBridge:
             else:
                 curr = "ON" if self.prefs.get('notificationMirror', True) else "OFF"
                 self.send_message(chat_id, f"🔔 **Windows Notification Mirroring**: {curr}\nUse `/mirror on` or `/mirror off` to toggle.")
+            return
+
+        if cmd in ('/focus', '/focusreport', '/screentime'):
+            hours = 24
+            if args and args[0].isdigit():
+                hours = max(1, min(168, int(args[0])))
+            import focus_tracker
+            report = focus_tracker.get_focus_report(lookback_hours=hours)
+            if not report:
+                self.send_message(chat_id, f"🖥 **Focus Report**: No window activity recorded in the past {hours} hour(s).")
+                return
+            lines = [f"🖥 **PC Productivity Focus Report (Past {hours}h)**:\n"]
+            for r in report:
+                lines.append(f"• `{r['application_name']}`: **{r['formatted_duration']}** ({r['percent']}%)")
+            self.send_message(chat_id, "\n".join(lines))
+            return
+
+        if cmd == '/meeting':
+            sub = args[0].lower() if args else ""
+            import meeting_notes
+            sess = meeting_notes.get_meeting_session()
+
+            if sub in ('start', 'record', 'begin'):
+                m_title = " ".join(args[1:]) if len(args) > 1 else "Team Discussion"
+                ok, msg = sess.start_meeting(m_title)
+                self.send_message(chat_id, msg)
+                return
+
+            elif sub in ('stop', 'end', 'finish'):
+                self.send_message(chat_id, "⏹️ Concluding meeting and compiling summary...")
+                ok, res = sess.stop_meeting()
+                if not ok:
+                    self.send_message(chat_id, f"⚠️ {res}")
+                    return
+
+                self.send_message(chat_id, f"{res['summary']}")
+
+                # Voice reply if enabled
+                if self.prefs.get('voiceReplies', False):
+                    try:
+                        import voice
+                        tmp_wav = os.path.join(tempfile.gettempdir(), f"meeting_{res['id']}.wav")
+                        voice.synthesize_speech_to_wav(f"Meeting concluded for {res['title']}. Duration: {res['duration_formatted']}.", tmp_wav)
+                        self.send_voice(chat_id, tmp_wav)
+                        if os.path.exists(tmp_wav):
+                            os.remove(tmp_wav)
+                    except Exception:
+                        pass
+                return
+
+            elif sub == 'status':
+                if sess.is_active:
+                    dur_m = round((time.time() - sess.started_at) / 60.0, 1)
+                    self.send_message(chat_id, f"🎙️ **Active Meeting**: '{sess.title}' ({dur_m} min elapsed)")
+                else:
+                    self.send_message(chat_id, "⏹️ No meeting currently recording. Use `/meeting start <title>`.")
+                return
+
+            else:
+                self.send_message(chat_id, "Usage: `/meeting start <title>` or `/meeting stop`")
+                return
+
+        if cmd == '/meetings':
+            import meeting_notes
+            recent = meeting_notes.list_recent_meetings(limit=5)
+            if not recent:
+                self.send_message(chat_id, "📝 No past recorded meetings found.")
+                return
+            lines = ["📝 **Recent Recorded Meetings**:\n"]
+            for m in recent:
+                t_str = time.strftime("%b %d, %I:%M %p", time.localtime(m['started_at']))
+                dur_m = round(m['duration_seconds'] / 60.0, 1)
+                lines.append(f"• **{m['title']}** ({dur_m}m) - `{t_str}`")
+            self.send_message(chat_id, "\n".join(lines))
             return
 
         if cmd in ('/macros', '/macro'):
@@ -1165,12 +1261,13 @@ class TelegramBridge:
         threading.Thread(target=self._vitals_monitor_worker, daemon=True).start()
         # Start reminders and timers monitor in background
         threading.Thread(target=self._reminder_monitor_worker, daemon=True).start()
-        # Start Windows toast notification mirror and presence monitor
+        # Start Windows toast notification mirror, presence monitor, and focus tracker
         try:
             self.notification_mirror.start()
             self.presence_monitor.start()
+            self.focus_tracker.start()
         except Exception as e:
-            print(f"[Telegram] Warning starting notification/presence monitors: {e}")
+            print(f"[Telegram] Warning starting background monitors: {e}")
         return True
 
     def stop(self):
@@ -1179,6 +1276,7 @@ class TelegramBridge:
         try:
             self.notification_mirror.stop()
             self.presence_monitor.stop()
+            self.focus_tracker.stop()
         except Exception:
             pass
 

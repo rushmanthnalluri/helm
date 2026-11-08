@@ -504,7 +504,33 @@ def try_fast_command(text):
                 lines.append(f"• `{p['name']}`: {p['mem_pct']}% RAM ({p['mem_mb']} MB) | {p['cpu_pct']}% CPU")
             return True, "\n".join(lines)
 
-    # 16. Quick App / Website Launch (e.g. "open notepad", "launch chrome", "open spotify", "open github")
+    # 16. Focus Report / Screen Time ("focus report", "screen time", "productivity report")
+    if re.search(r'\b(focus\s+report|screen\s*time|productivity\s+report|my\s+screen\s*time)\b', t):
+        import focus_tracker
+        rep = focus_tracker.get_focus_report(lookback_hours=24)
+        if not rep:
+            return True, "🖥️ **Focus Report**: No window activity recorded in the past 24 hours."
+        lines = ["🖥️ **PC Productivity Focus Report (Past 24h)**:"]
+        for r in rep:
+            lines.append(f"• `{r['application_name']}`: {r['formatted_duration']} ({r['percent']}%)")
+        return True, "\n".join(lines)
+
+    # 17. Meeting Notes ("start meeting notes", "stop meeting notes", "end meeting")
+    if re.search(r'\b(start\s+(?:recording\s+)?meeting(?:\s+notes)?|record\s+meeting)\b', t):
+        import meeting_notes
+        sess = meeting_notes.get_meeting_session()
+        ok, msg = sess.start_meeting("Voice Initiated Meeting")
+        return True, msg
+
+    if re.search(r'\b(stop\s+meeting(?:\s+notes)?|end\s+meeting(?:\s+notes)?|finish\s+meeting)\b', t):
+        import meeting_notes
+        sess = meeting_notes.get_meeting_session()
+        ok, res = sess.stop_meeting()
+        if not ok:
+            return True, f"⚠️ {res}"
+        return True, res['summary']
+
+    # 18. Quick App / Website Launch (e.g. "open notepad", "launch chrome", "open spotify", "open github")
     m = re.match(r'^(?:open|launch|start|run)\s+([a-zA-Z0-9\s._-]+)$', t)
     if m:
         target = m.group(1).strip()

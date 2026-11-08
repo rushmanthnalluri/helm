@@ -110,17 +110,27 @@ class NotificationMirror:
                 if not full_text:
                     continue
 
+                # Check focus mode / meeting suppression
+                suppressed = False
+                try:
+                    import focus_tracker
+                    suppressed = focus_tracker.is_foreground_window_fullscreen_or_meeting()
+                except Exception:
+                    pass
+
                 item = {
                     'id': n.id,
                     'app': app_name,
                     'title': title,
                     'body': body,
-                    'full_text': full_text
+                    'full_text': full_text,
+                    'suppressed': suppressed
                 }
                 new_items.append(item)
 
                 # Log to shared event log
-                summary = f"[{app_name}] {full_text}"
+                tag = " (Focus Suppressed)" if suppressed else ""
+                summary = f"[{app_name}]{tag} {full_text}"
                 event_log.log_event(
                     event_type="notification",
                     event_summary=summary,
