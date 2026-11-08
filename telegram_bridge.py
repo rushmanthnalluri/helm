@@ -19,7 +19,26 @@ if BASE_DIR not in sys.path:
 import homie
 import windows_tools
 
+TELEGRAM_API_BASE = "https://api.telegram.org"
 _SHARED_WHISPER = None
+
+def decode_audio_file(file_path, sample_rate=16000):
+    """Decodes OGG/Opus or any audio format to 16kHz float32 numpy array using PyAV."""
+    import av
+    import numpy as np
+    try:
+        container = av.open(file_path, mode='r')
+        resampler = av.AudioResampler(format='fltp', layout='mono', rate=sample_rate)
+        frames = []
+        for frame in container.decode(audio=0):
+            for r_frame in resampler.resample(frame):
+                frames.append(r_frame.to_ndarray().flatten())
+        container.close()
+        if frames:
+            return np.concatenate(frames).astype(np.float32)
+    except Exception as e:
+        print(f"[Telegram] Audio decode error: {e}", flush=True)
+    return None
 
 def get_whisper_model():
     global _SHARED_WHISPER
@@ -214,9 +233,14 @@ class TelegramBridge:
             return
 
         try:
-            # Transcribe via faster-whisper (PyAV handles OGG/Opus automatically)
+            # Decode audio to numpy array and transcribe
+            audio_array = decode_audio_file(audio_path)
+            if audio_array is None or len(audio_array) == 0:
+                self.send_message(chat_id, "Could not decode audio file.")
+                return
+
             model = get_whisper_model()
-            segments, _ = model.transcribe(audio_path, beam_size=1)
+            segments, _ = model.transcribe(audio_array, beam_size=1)
             transcript = " ".join(s.text.strip() for s in segments).strip()
 
             if not transcript:
