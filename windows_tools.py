@@ -256,13 +256,14 @@ def place_window(app_or_title="", where="full", monitor_index=0):
             nx, ny, nw, nh = mx, my, mw, mh
             win32gui.MoveWindow(target_hwnd, nx, ny, nw, nh, True)
 
-        win32gui.SetForegroundWindow(target_hwnd)
+        force_foreground_window(target_hwnd)
         return True, f"Placed window '{win32gui.GetWindowText(target_hwnd)[:30]}' to {where}"
     except Exception as e:
         return False, f"Failed to place window: {e}"
 
 def capture_screens():
     """Captures each screen and writes labeled images to a temporary directory."""
+    ensure_desktop_attached()
     monitors = get_monitors()
     captured_files = []
     tmp_dir = os.path.join(tempfile.gettempdir(), 'homie-screens')
@@ -367,8 +368,7 @@ def launch_app(name_or_query):
     if existing:
         try:
             hwnd = existing[0]['hwnd']
-            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-            win32gui.SetForegroundWindow(hwnd)
+            force_foreground_window(hwnd)
             return True, f"Switched to '{existing[0]['title'][:30]}'"
         except Exception:
             pass
@@ -511,7 +511,8 @@ def read_window_text(app_query=""):
     return "\n".join(texts[:50])
 
 def close_app(app_name):
-    """Gracefully closes a running application by name or window title."""
+    """Gracefully closes a running application by name, window title, or process name."""
+    ensure_desktop_attached()
     wins = find_windows(app_name)
     if wins:
         closed = 0
@@ -524,14 +525,37 @@ def close_app(app_name):
         if closed:
             return True, f"Closed {app_name} window ({closed} instance(s))."
 
-    # Fallback to taskkill
+    # Common process names for Windows apps
+    proc_aliases = {
+        'whatsapp': ['WhatsApp.Root.exe', 'WhatsApp.exe'],
+        'telegram': ['Telegram.exe'],
+        'spotify': ['Spotify.exe'],
+        'chrome': ['chrome.exe'],
+        'edge': ['msedge.exe'],
+        'code': ['Code.exe'],
+        'vscode': ['Code.exe'],
+        'discord': ['Discord.exe'],
+        'calc': ['CalculatorApp.exe', 'calc.exe'],
+        'calculator': ['CalculatorApp.exe', 'calc.exe'],
+        'terminal': ['WindowsTerminal.exe', 'wt.exe'],
+        'notepad': ['Notepad.exe'],
+    }
+
     clean_name = app_name.lower().replace(".exe", "").strip()
-    try:
-        res = subprocess.run(f"taskkill /IM {clean_name}.exe /T", shell=True, capture_output=True, text=True)
-        if res.returncode == 0:
-            return True, f"Terminated {clean_name}."
-    except Exception:
-        pass
+    targets = proc_aliases.get(clean_name, [f"{clean_name}.exe"])
+
+    terminated = False
+    for exe in targets:
+        try:
+            res = subprocess.run(f"taskkill /F /IM {exe} /T", shell=True, capture_output=True, text=True)
+            if res.returncode == 0:
+                terminated = True
+        except Exception:
+            pass
+
+    if terminated:
+        return True, f"Closed {app_name}."
+
     return False, f"Could not find running window or process for '{app_name}'."
 
 def play_youtube(query=""):

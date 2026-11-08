@@ -56,9 +56,9 @@ DEFAULT_PREFS = {
     "hotkey": "ctrl+alt+space",
     "hotkeyMode": "hold",       # "hold" or "toggle"
     "provider": "gemini",       # "gemini" (Google AI Studio), "nvidia" (NVIDIA NIM), "groq", "ollama", "claude"
-    "model": "gemini-2.0-flash",# model name (e.g. gemini-2.0-flash or meta/llama-3.3-70b-instruct)
+    "model": "gemini-flash-lite-latest", # high-availability free tier model
     "safe": True,               # Safe mode prompts before destructive actions
-    "whisperModel": "tiny",     # "tiny", "base", "small", "turbo"
+    "whisperModel": "small",    # "small" (244M, high accuracy), "base", "tiny"
     "whisperLanguage": "en",
     "speak": False,
     "instant": True,            # Instant local commands without AI

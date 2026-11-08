@@ -23,26 +23,28 @@ class TestFastCommands(unittest.TestCase):
         self.assertIn("Triggered media key", msg)
 
     def test_youtube_commands(self):
-        # 1. "open youtube and play the loose songs"
-        handled, msg = homie.try_fast_command("open youtube and play the loose songs")
-        self.assertTrue(handled)
-        self.assertIn("YouTube", msg)
-        self.assertIn("the loose songs", msg)
+        import unittest.mock as mock
+        with mock.patch("windows_tools.subprocess.Popen"), mock.patch("webbrowser.open"):
+            # 1. "open youtube and play the loose songs"
+            handled, msg = homie.try_fast_command("open youtube and play the loose songs")
+            self.assertTrue(handled)
+            self.assertIn("YouTube", msg)
+            self.assertIn("the loose songs", msg)
 
-        # 2. "Isaid open yt and play songs" (with prefix)
-        handled, msg = homie.try_fast_command("Isaid open yt and play songs")
-        self.assertTrue(handled)
-        self.assertIn("YouTube", msg)
+            # 2. "Isaid open yt and play songs" (with prefix)
+            handled, msg = homie.try_fast_command("Isaid open yt and play songs")
+            self.assertTrue(handled)
+            self.assertIn("YouTube", msg)
 
-        # 3. "open youtube"
-        handled, msg = homie.try_fast_command("open youtube")
-        self.assertTrue(handled)
-        self.assertIn("YouTube", msg)
+            # 3. "open youtube"
+            handled, msg = homie.try_fast_command("open youtube")
+            self.assertTrue(handled)
+            self.assertIn("YouTube", msg)
 
-        # 4. "play loose songs on youtube"
-        handled, msg = homie.try_fast_command("play loose songs on youtube")
-        self.assertTrue(handled)
-        self.assertIn("YouTube", msg)
+            # 4. "play loose songs on youtube"
+            handled, msg = homie.try_fast_command("play loose songs on youtube")
+            self.assertTrue(handled)
+            self.assertIn("YouTube", msg)
 
     def test_pc_vitals_command(self):
         handled, msg = homie.try_fast_command("pc status")

@@ -33,5 +33,18 @@ class TestWindowsTools(unittest.TestCase):
         for p in paths:
             self.assertTrue(os.path.exists(p))
 
+    def test_system_vitals(self):
+        v = windows_tools.get_system_vitals()
+        self.assertIsInstance(v, dict)
+        self.assertIn('ram_pct', v)
+        self.assertIn('disk_free_gb', v)
+        self.assertIn('battery', v)
+        self.assertIn('uptime_hours', v)
+        self.assertGreater(v['ram_pct'], 0)
+
+    def test_ensure_desktop_attached(self):
+        # Should execute safely without raising
+        windows_tools.ensure_desktop_attached()
+
 if __name__ == '__main__':
     unittest.main()

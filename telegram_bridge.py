@@ -67,6 +67,7 @@ class TelegramBridge:
         self.offset = 0
         self.running = False
         self._thread = None
+        self._voice_lock = threading.Lock()
 
     def _api_call(self, method, data=None, files=None, timeout=30):
         if not self.token:
@@ -83,17 +84,38 @@ class TelegramBridge:
         return None
 
     def send_message(self, chat_id, text, parse_mode="Markdown"):
-        """Sends a text message to the specified Telegram chat."""
-        # Clean formatting if needed
-        data = {'chat_id': chat_id, 'text': text}
-        if parse_mode:
-            data['parse_mode'] = parse_mode
-        res = self._api_call('sendMessage', data=data, timeout=10)
-        # If markdown fails due to special characters, retry without parse_mode
-        if not res and parse_mode:
-            data.pop('parse_mode', None)
+        """Sends a text message to Telegram, automatically chunking messages longer than 4000 chars."""
+        if not text:
+            return None
+        raw_text = str(text)
+
+        chunks = []
+        if len(raw_text) <= 4000:
+            chunks = [raw_text]
+        else:
+            remaining = raw_text
+            while remaining:
+                if len(remaining) <= 4000:
+                    chunks.append(remaining)
+                    break
+                split_at = remaining.rfind("\n", 0, 4000)
+                if split_at == -1 or split_at < 1500:
+                    split_at = 4000
+                chunks.append(remaining[:split_at])
+                remaining = remaining[split_at:].lstrip()
+
+        last_res = None
+        for chunk in chunks:
+            data = {'chat_id': chat_id, 'text': chunk}
+            if parse_mode:
+                data['parse_mode'] = parse_mode
             res = self._api_call('sendMessage', data=data, timeout=10)
-        return res
+            # If markdown fails due to special characters, retry without parse_mode
+            if not res and parse_mode:
+                data.pop('parse_mode', None)
+                res = self._api_call('sendMessage', data=data, timeout=10)
+            last_res = res
+        return last_res
 
     def send_photo(self, chat_id, photo_path, caption=None):
         """Sends an image to the Telegram chat."""
@@ -175,7 +197,7 @@ class TelegramBridge:
             self.send_message(chat_id, f"▶️ {msg}")
             return
 
-        if cmd == '/screen':
+        if cmd in ('/screen', '/screens', '/screenshot'):
             self.send_message(chat_id, "📸 Capturing desktop...")
             screens = windows_tools.capture_screens()
             if screens:
@@ -192,8 +214,11 @@ class TelegramBridge:
             self.send_message(chat_id, "🔒 Workstation locked successfully.")
             return
 
-        if cmd == '/media':
-            action = args[0] if args else "play_pause"
+        if cmd in ('/media', '/pause', '/resume', '/playpause', '/next', '/prev', '/previous', '/mute', '/volup', '/voldown'):
+            if cmd == '/media':
+                action = args[0] if args else "play_pause"
+            else:
+                action = cmd.lstrip('/')
             ok, msg = windows_tools.control_media(action)
             self.send_message(chat_id, f"🎵 {msg}")
             return
@@ -223,7 +248,7 @@ class TelegramBridge:
             self.send_message(chat_id, f"🛑 {msg}")
             return
 
-        if cmd in ('/status', '/pc'):
+        if cmd in ('/status', '/pc', '/vitals', '/health'):
             v = windows_tools.get_system_vitals()
             msg = (
                 f"💻 **PC Health Snapshot**:\n\n"
@@ -234,6 +259,10 @@ class TelegramBridge:
                 f"• 🪟 **Active**: `{v['active_window']}`"
             )
             self.send_message(chat_id, msg)
+            return
+
+        if cmd in ('/whoami', '/id'):
+            self.send_message(chat_id, f"👤 **Telegram Identity**:\n• Chat ID: `{chat_id}`\n• Authorized Users: `{self.allowed_users}`")
             return
 
         # Regular prompt -> Run through Homie
@@ -274,28 +303,29 @@ class TelegramBridge:
             return
 
         try:
-            # Decode audio to numpy array and transcribe
-            audio_array = decode_audio_file(audio_path)
-            if audio_array is None or len(audio_array) == 0:
-                self.send_message(chat_id, "Could not decode audio file.")
-                return
+            with self._voice_lock:
+                # Decode audio to numpy array and transcribe
+                audio_array = decode_audio_file(audio_path)
+                if audio_array is None or len(audio_array) == 0:
+                    self.send_message(chat_id, "Could not decode audio file.")
+                    return
 
-            model = get_whisper_model()
-            segments, _ = model.transcribe(
-                audio_array,
-                beam_size=5,
-                vad_filter=True,
-                language="en"
-            )
-            transcript = " ".join(s.text.strip() for s in segments).strip()
+                model = get_whisper_model()
+                segments, _ = model.transcribe(
+                    audio_array,
+                    beam_size=5,
+                    vad_filter=True,
+                    language="en"
+                )
+                transcript = " ".join(s.text.strip() for s in segments).strip()
 
-            if not transcript:
-                self.send_message(chat_id, "I couldn't hear any clear words in that voice note.")
-                return
+                if not transcript:
+                    self.send_message(chat_id, "I couldn't hear any clear words in that voice note.")
+                    return
 
-            print(f"[Telegram] Transcribed voice note from {chat_id}: \"{transcript}\"", flush=True)
-            self.send_message(chat_id, f"🗣️ *Heard:* \"{transcript}\"")
-            self.process_homie_task(chat_id, transcript)
+                print(f"[Telegram] Transcribed voice note from {chat_id}: \"{transcript}\"", flush=True)
+                self.send_message(chat_id, f"🗣️ *Heard:* \"{transcript}\"")
+                self.process_homie_task(chat_id, transcript)
         except Exception as e:
             print(f"[Telegram] Voice note processing error: {e}", flush=True)
             self.send_message(chat_id, f"Transcription error: {e}")

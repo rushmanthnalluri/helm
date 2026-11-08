@@ -32,5 +32,17 @@ class TestTelegramBridge(unittest.TestCase):
         finally:
             homie.save_pref('telegramAllowedUsers', orig_users)
 
+    def test_message_chunking(self):
+        import unittest.mock as mock
+        bridge = TelegramBridge(token="test", allowed_users=["1001"])
+        sent_chunks = []
+        with mock.patch.object(bridge, '_api_call', side_effect=lambda method, data=None, files=None, timeout=30: sent_chunks.append(data['text']) or True):
+            # 5000 character message should be chunked into at least 2 pieces
+            long_msg = "A" * 2500 + "\n" + "B" * 2500
+            bridge.send_message(1001, long_msg)
+            self.assertGreaterEqual(len(sent_chunks), 2)
+            for c in sent_chunks:
+                self.assertLessEqual(len(c), 4000)
+
 if __name__ == '__main__':
     unittest.main()
