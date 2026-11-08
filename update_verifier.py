@@ -51,7 +51,6 @@ PROTECTED_SYSTEM_FILES = {
     "homie_audit_ledger.db",
     "homie_supervisor_dirty.flag",
     "homie_supervisor_crashes.json",
-    "publisher_offline_private_key.pem",
 }
 
 WINDOWS_RESERVED_NAMES = {

@@ -32,7 +32,7 @@ import phone_gateway
 import taint_tracker
 import agent_audit_ledger
 import policy_envelope
-from tests.phone_testing_keys import sign_enrollment_approval
+from tests.phone_testing_keys import sign_enrollment_approval, get_test_pairing_code
 
 
 class TestBatch30SecurityHardening(unittest.TestCase):
@@ -40,7 +40,8 @@ class TestBatch30SecurityHardening(unittest.TestCase):
     def setUp(self):
         phone_approval_portal.clear_active_challenges()
         taint_tracker.clear_all_taints()
-        phone_approval_portal.reset_pairing_lockout(is_console_presence=True)
+        tok = phone_approval_portal.generate_console_recovery_token()
+        phone_approval_portal.reset_pairing_lockout(tok)
         if os.path.exists(phone_approval_portal.DEVICE_REGISTRY_PATH):
             try: os.remove(phone_approval_portal.DEVICE_REGISTRY_PATH)
             except Exception: pass
@@ -54,7 +55,8 @@ class TestBatch30SecurityHardening(unittest.TestCase):
     def tearDown(self):
         phone_approval_portal.clear_active_challenges()
         taint_tracker.clear_all_taints()
-        phone_approval_portal.reset_pairing_lockout(is_console_presence=True)
+        tok = phone_approval_portal.generate_console_recovery_token()
+        phone_approval_portal.reset_pairing_lockout(tok)
         if os.path.exists(phone_approval_portal.ENROLLMENT_LOCKOUT_PATH):
             try: os.remove(phone_approval_portal.ENROLLMENT_LOCKOUT_PATH)
             except Exception: pass
@@ -175,10 +177,11 @@ class TestBatch30SecurityHardening(unittest.TestCase):
 
         # Enroll device_b with approval from primary_phone
         sess_b = phone_approval_portal.start_local_enrollment(ttl_seconds=60.0)
-        code_b = phone_approval_portal.get_session_pairing_code_for_testing(sess_b)
+        code_b = get_test_pairing_code(sess_b)
         priv_b, pub_b = generate_test_phone_keypair()
-        sig_b = sign_enrollment_approval(priv_a, sess_b, "device_b", pub_b, expiry=int(time.time())+120)
-        ok_b, _ = phone_approval_portal.complete_device_enrollment(sess_b, code_b, "device_b", pub_b, primary_approval_sig=sig_b)
+        exp_b = int(time.time()) + 120
+        sig_b = sign_enrollment_approval(priv_a, sess_b, "device_b", pub_b, expiry=exp_b)
+        ok_b, _ = phone_approval_portal.complete_device_enrollment(sess_b, code_b, "device_b", pub_b, primary_approval_sig=sig_b, approval_expiry=exp_b)
         self.assertTrue(ok_b)
 
         # Revoke primary_phone
@@ -186,7 +189,7 @@ class TestBatch30SecurityHardening(unittest.TestCase):
 
         # Now attempt to enroll device_c without approval
         sess_c = phone_approval_portal.start_local_enrollment(ttl_seconds=60.0)
-        code_c = phone_approval_portal.get_session_pairing_code_for_testing(sess_c)
+        code_c = get_test_pairing_code(sess_c)
         _, pub_c = generate_test_phone_keypair()
 
         # Enrolling without approval must FAIL because device_b is still active!
@@ -201,7 +204,7 @@ class TestBatch30SecurityHardening(unittest.TestCase):
 
         sess_1 = phone_approval_portal.start_local_enrollment(ttl_seconds=60.0)
         sess_2 = phone_approval_portal.start_local_enrollment(ttl_seconds=60.0)
-        code_2 = phone_approval_portal.get_session_pairing_code_for_testing(sess_2)
+        code_2 = get_test_pairing_code(sess_2)
         _, pub_b = generate_test_phone_keypair()
 
         # Signature minted for sess_1
@@ -214,7 +217,8 @@ class TestBatch30SecurityHardening(unittest.TestCase):
 
     def test_7_global_persistent_enrollment_lockout(self):
         """Vector 7: 5 failed pairing attempts across sessions triggers global persistent lockout."""
-        phone_approval_portal.reset_pairing_lockout(is_console_presence=True)
+        tok = phone_approval_portal.generate_console_recovery_token()
+        phone_approval_portal.reset_pairing_lockout(tok)
 
         dummy_pem = "-----BEGIN PUBLIC KEY-----\n" + ("A" * 64) + "\n-----END PUBLIC KEY-----"
         for i in range(5):
@@ -226,11 +230,12 @@ class TestBatch30SecurityHardening(unittest.TestCase):
         self.assertEqual(sess_locked, "", "Global lockout must prevent creating new enrollment sessions!")
 
         # Unauthenticated reset must be denied
-        res_unauth, _ = phone_approval_portal.reset_pairing_lockout(is_console_presence=False)
+        res_unauth, _ = phone_approval_portal.reset_pairing_lockout(recovery_token=None)
         self.assertFalse(res_unauth)
 
         # Authenticated reset clears lockout
-        res_auth, _ = phone_approval_portal.reset_pairing_lockout(is_console_presence=True)
+        tok2 = phone_approval_portal.generate_console_recovery_token()
+        res_auth, _ = phone_approval_portal.reset_pairing_lockout(recovery_token=tok2)
         self.assertTrue(res_auth)
 
     def test_8_gateway_cors_and_dns_rebinding_protection(self):

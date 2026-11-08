@@ -77,9 +77,10 @@ class TestBatch20CompleteMediationAndRedTeam(unittest.TestCase):
 
         # Vector 1: Enrollment Code Theft via Screen Ingestion
         # Enrollment code is displayed strictly on WDA_EXCLUDEFROMCAPTURE surface
-        from phone_approval_portal import start_local_enrollment, get_session_pairing_code_for_testing
+        from phone_approval_portal import start_local_enrollment
+        from tests.phone_testing_keys import get_test_pairing_code
         sess_id = start_local_enrollment(ttl_seconds=30.0)
-        code = get_session_pairing_code_for_testing(sess_id)
+        code = get_test_pairing_code(sess_id)
         # Attempt to harvest code via unprivileged screen scrape
         harvested = False  # Screen memory cannot capture WDA_EXCLUDEFROMCAPTURE surfaces
         red_team_results["enrollment_code_theft"] = "COMPROMISED" if harvested else "BLOCKED"

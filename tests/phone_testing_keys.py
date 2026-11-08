@@ -113,3 +113,11 @@ def sign_enrollment_approval(
         h = SHA256.new(msg)
         signer = DSS.new(signing_priv_key, 'fips-186-3')
         return signer.sign(h).hex()
+
+
+def get_test_pairing_code(session_id: str) -> str:
+    """Test-only fixture: extracts pairing code from in-memory session (keeps production module clean)."""
+    with phone_approval_portal._ENROLLMENT_LOCK:
+        sess = phone_approval_portal._LOCAL_ENROLLMENT_SESSIONS.get(session_id)
+        return sess["pairing_code"] if sess else ""
+

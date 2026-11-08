@@ -41,7 +41,8 @@ import kill_switch
 from tests.phone_testing_keys import (
     generate_test_phone_keypair,
     enroll_test_device,
-    sign_enrollment_approval
+    sign_enrollment_approval,
+    get_test_pairing_code
 )
 
 
@@ -261,7 +262,7 @@ class TestBatch31SecurityHardening(unittest.TestCase):
 
         # Start legitimate session
         sess_id = phone_approval_portal.start_local_enrollment(ttl_seconds=60)
-        code = phone_approval_portal.get_session_pairing_code_for_testing(sess_id)
+        code = get_test_pairing_code(sess_id)
 
         # Generate second device key
         sec_key, sec_pub = generate_test_phone_keypair()
@@ -285,7 +286,7 @@ class TestBatch31SecurityHardening(unittest.TestCase):
 
         # Try to enroll third device with signature from revoked primary -> MUST FAIL
         sess_3 = phone_approval_portal.start_local_enrollment(ttl_seconds=60)
-        code_3 = phone_approval_portal.get_session_pairing_code_for_testing(sess_3)
+        code_3 = get_test_pairing_code(sess_3)
         third_key, third_pub = generate_test_phone_keypair()
         sig_revoked = sign_enrollment_approval(self.priv_key, sess_3, "third_phone", third_pub, expiry=int(time.time() + 60))
 
@@ -342,7 +343,7 @@ class TestBatch31SecurityHardening(unittest.TestCase):
         epoch = taint_tracker.get_taint_epoch()
 
         # Register direct approval in supervisor internal table
-        supervisor.record_approved_action("homie_set_clipboard", args_hash, epoch)
+        supervisor.record_approved_action("worker", "homie_set_clipboard", args_hash, epoch)
 
         # Worker proposes action with NO step_up_token
         payload = {

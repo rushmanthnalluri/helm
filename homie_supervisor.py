@@ -41,6 +41,7 @@ import kill_switch
 import windows_tools
 import homie_mcp
 import worker_confinement
+import policy_envelope
 
 logger = logging.getLogger("homie.supervisor")
 
@@ -400,15 +401,15 @@ class PolicySupervisor:
         """Legacy helper for backwards compatibility."""
         return False
 
-    def record_approved_action(self, tool: str, args_hash: str, taint_epoch: int, ttl: float = 120.0):
-        """Directive 14: Stores direct challenge approval inside supervisor private memory."""
+    def record_approved_action(self, caller_id: str, tool: str, args_hash: str, taint_epoch: int, ttl: float = 120.0):
+        """Directive 14 & Batch 32: Stores direct challenge approval bound to (caller_id, tool, args_hash, taint_epoch)."""
         with self._approved_lock:
-            self._approved_actions[(tool, args_hash.lower(), int(taint_epoch))] = time.time() + ttl
+            self._approved_actions[(caller_id, tool, args_hash.lower(), int(taint_epoch))] = time.time() + ttl
 
-    def consume_approved_action(self, tool: str, args_hash: str, taint_epoch: int) -> bool:
-        """Directive 14: Atomically checks and consumes a direct approved action without worker bearer token."""
+    def consume_approved_action(self, caller_id: str, tool: str, args_hash: str, taint_epoch: int) -> bool:
+        """Directive 14 & Batch 32: Atomically checks and consumes a direct approved action without worker bearer token."""
         with self._approved_lock:
-            key = (tool, args_hash.lower(), int(taint_epoch))
+            key = (caller_id, tool, args_hash.lower(), int(taint_epoch))
             exp = self._approved_actions.pop(key, None)
             now = time.time()
             # Prune expired
@@ -667,8 +668,15 @@ class PolicySupervisor:
 
         tier = allowed_tools.get(tool, "WRITE_EXEC")
 
-        # 7. Client Token Authentication check
-        if client_token:
+        # 7. Client Token Authentication check (fail-closed if token enforcement required and token omitted)
+        if client_token_auth.is_token_enforcement_active() or client_token:
+            if not client_token:
+                return self._encode_reply(MSG_DECISION, {
+                    "req_id": req_id,
+                    "status": "DENY",
+                    "reason_code": REASON_UNAUTHORIZED_TOKEN,
+                    "reason": "Missing client authentication token: Token enforcement is active"
+                })
             valid_tok, tok_msg, _ = client_token_auth.validate_client_token(client_token, required_tier=tier)
             if not valid_tok:
                 return self._encode_reply(MSG_DECISION, {
@@ -727,9 +735,11 @@ class PolicySupervisor:
             caller_id, tier, tool, args
         )
         if not allowed:
+            if getattr(self, "envelope", None) and getattr(self.envelope, "is_active", False):
+                self.envelope.release_reservation()
             if requires_step_up:
                 current_epoch = taint_tracker.get_taint_epoch()
-                if self.consume_approved_action(tool, args_hash, current_epoch):
+                if self.consume_approved_action(caller_id, tool, args_hash, current_epoch):
                     logger.info("Supervisor authorized action '%s' via internal direct approval for caller '%s'", tool, caller_id)
                 elif step_up_token:
                     valid_step_up, step_up_msg = taint_tracker.verify_and_consume_step_up_token(
@@ -760,6 +770,8 @@ class PolicySupervisor:
 
         # 10. Shadow Mode Simulation check
         if shadow_mode.is_shadow_mode_active():
+            if getattr(self, "envelope", None) and getattr(self.envelope, "is_active", False):
+                self.envelope.release_reservation()
             record = shadow_mode.record_simulated_action(caller_id, tool, tier, args)
             return self._encode_reply(MSG_DECISION, {
                 "req_id": req_id,
@@ -776,9 +788,19 @@ class PolicySupervisor:
         # 11. TWO-PHASE ACTION EXECUTION:
         # Phase 1: Supervisor mints unforgeable cryptographic INTENT token & records in audit ledger
         intent_token = self.mint_intent_token(tool, args, caller_id, frame_seq)
-        agent_audit_ledger.record_agent_action(
-            caller_id, tool, tier, args, decision=f"INTENT:{req_id}:{intent_token[:32]}"
-        )
+        try:
+            agent_audit_ledger.record_agent_action(
+                caller_id, tool, tier, args, decision=f"INTENT:{req_id}:{intent_token[:32]}"
+            )
+        except Exception as intent_err:
+            logger.critical("Audit ledger write failure during INTENT recording: %s", intent_err)
+            self._transition_to_locked(f"Audit ledger failure on INTENT: {intent_err}")
+            if getattr(self, "envelope", None) and getattr(self.envelope, "is_active", False):
+                self.envelope.release_reservation()
+            return self._encode_reply(MSG_ERROR, {
+                "error": f"Audit ledger failure: {intent_err}",
+                "reason_code": REASON_UNAUTHORIZED_TOKEN
+            })
 
         # Phase 2: Privileged Supervisor Actuator executes effect WITH verified intent token
         execution_success = False

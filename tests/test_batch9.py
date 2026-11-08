@@ -19,9 +19,11 @@ if BASE_DIR not in sys.path:
 import homie_mcp
 import agent_audit_ledger
 import homie
+import taint_tracker
 
 class TestBatch9Features(unittest.TestCase):
     def setUp(self):
+        self.old_med = os.environ.pop("HOMIE_COMPLETE_MEDIATION", None)
         import kill_switch
         import desktop_agent
         import taint_tracker
@@ -29,6 +31,10 @@ class TestBatch9Features(unittest.TestCase):
         kill_switch._ENGAGED_REASON = ""
         desktop_agent.reset_abort()
         taint_tracker.clear_all_taints()
+
+    def tearDown(self):
+        if self.old_med is not None:
+            os.environ["HOMIE_COMPLETE_MEDIATION"] = self.old_med
         taint_tracker.set_workstation_tainted(False)
 
     def test_mcp_capability_tier_annotations(self):

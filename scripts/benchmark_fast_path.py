@@ -44,7 +44,7 @@ def benchmark(n_iterations=50):
 
         # Step 2: Actuator verifies and consumes INTENT_V2 token & dispatches tool
         res = actuator.execute_actuator(
-            tool, args, caller_id=caller_id, intent_token=token
+            tool, args, caller_id=caller_id, intent_token=token, seq=seq
         )
 
         t1 = time.perf_counter()

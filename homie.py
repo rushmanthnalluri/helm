@@ -307,6 +307,15 @@ def try_fast_command(text, caller_id="desktop_user"):
     if not t:
         return False, ""
 
+    # 1.5. Mobile Phone Pairing & Local Enrollment Ceremony
+    if re.match(r'^(?:pair\s+(?:phone|device|mobile)|enroll\s+(?:phone|device|mobile)|start\s+pairing|pair)$', t):
+        import phone_approval_portal
+        sess_id = phone_approval_portal.start_local_enrollment(ttl_seconds=120.0)
+        if sess_id:
+            return True, f"Pairing ceremony started! One-time pairing code displayed on secure screen overlay (Session: {sess_id[:8]}...)."
+        else:
+            return True, "Unable to start pairing ceremony: Enrollment may be locked out or HUD overlay failed."
+
     # 2. Media Hardware Controls (play/pause, next, prev, volume)
     media_patterns = {
         r'^(pause|resume)(\s+music|\s+song|\s+track)?$': 'play_pause',

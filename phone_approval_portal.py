@@ -104,9 +104,10 @@ def record_failed_enrollment_attempt():
             logger.warning("Global enrollment lockout engaged: 5 failed attempts across sessions.")
         _save_enrollment_lockout(lockout)
 
-def reset_pairing_lockout(recovery_token: Optional[str] = None, is_console_presence: Optional[bool] = None) -> Tuple[bool, str]:
+def reset_pairing_lockout(recovery_token: Optional[str] = None) -> Tuple[bool, str]:
     """Human recovery console command: resets enrollment lockout after failed attempts.
-    Requires a valid single-use local console recovery token (fails closed otherwise).
+    Strictly requires a valid single-use local console recovery token (fails closed otherwise).
+    Zero boolean presence bypasses permitted.
     """
     valid = False
     with _ENROLLMENT_LOCK:
@@ -114,12 +115,10 @@ def reset_pairing_lockout(recovery_token: Optional[str] = None, is_console_prese
             exp = _CONSOLE_RECOVERY_TOKENS.pop(recovery_token.strip(), None)
             if exp and time.time() <= exp:
                 valid = True
-        elif is_console_presence is True and not recovery_token:
-            valid = True
 
     if not valid:
         logger.warning("Denied unauthenticated pairing lockout reset attempt.")
-        return False, "DENY: Valid console recovery token required to reset pairing lockout."
+        return False, "DENY: Valid single-use console recovery token required to reset pairing lockout."
 
     with _ENROLLMENT_LOCK:
         _LOCAL_ENROLLMENT_SESSIONS.clear()
@@ -131,7 +130,7 @@ def reset_pairing_lockout(recovery_token: Optional[str] = None, is_console_prese
     try:
         agent_audit_ledger.record_agent_action(
             "console_user", "pairing_lockout_reset", "WRITE_EXEC",
-            {"timestamp": time.time(), "method": "console_recovery_token" if recovery_token else "console_presence"},
+            {"timestamp": time.time(), "method": "console_recovery_token"},
             decision="ALLOW"
         )
     except Exception as e:
@@ -295,13 +294,6 @@ def start_local_enrollment(ttl_seconds: float = 120.0) -> str:
     return session_id
 
 
-def get_session_pairing_code_for_testing(session_id: str) -> str:
-    """Test harness helper: retrieves pairing code from in-memory test session."""
-    with _ENROLLMENT_LOCK:
-        sess = _LOCAL_ENROLLMENT_SESSIONS.get(session_id)
-        return sess["pairing_code"] if sess else ""
-
-
 def complete_device_enrollment(
     session_id: str,
     pairing_code: str,
@@ -309,7 +301,9 @@ def complete_device_enrollment(
     public_key_pem: str,
     authenticator_type: str = "device_resident_ed25519",
     primary_approval_sig: Optional[str] = None,
-    approver_device_id: Optional[str] = None
+    approver_device_id: Optional[str] = None,
+    recovery_token: Optional[str] = None,
+    approval_expiry: Optional[int] = None
 ) -> Tuple[bool, str]:
     """Completes phone pairing by verifying the physical presence one-time code.
     Enforces that public_key_pem is strictly an asymmetric public key on the Ed25519 or P-256 curve.
@@ -317,6 +311,7 @@ def complete_device_enrollment(
     Rejects re-enrollment of already enrolled devices to prevent unauthorized overwrites.
     Enforces that enrolling a second device requires cryptographic approval from an active device.
     Fails closed immediately if global enrollment lockout is active.
+    If all devices are revoked, requires a valid console recovery token to enroll a replacement device.
     All state operations are fully atomic under _REGISTRY_LOCK and _ENROLLMENT_LOCK.
     """
     if is_enrollment_locked_out():
@@ -373,35 +368,61 @@ def complete_device_enrollment(
 
         # Second-device enrollment multi-sig gate: Adding a new device requires active device approval
         active_device_ids = [k for k, v in registry.items() if not v.get("revoked", False)]
-        if active_device_ids:
-            target_approver = approver_device_id or ("primary_phone" if "primary_phone" in active_device_ids else active_device_ids[0])
-            approver_entry = registry.get(target_approver)
-            if not approver_entry or approver_entry.get("revoked", False):
-                with _ENROLLMENT_LOCK:
-                    _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)
-                return False, f"APPROVER_INVALID: Approver device '{target_approver}' is not active or has been revoked."
-
-            if not primary_approval_sig:
-                with _ENROLLMENT_LOCK:
-                    _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)
-                return False, "APPROVAL_REQUIRED: Adding a device requires cryptographic approval from an active device."
-
-            now = int(time.time())
-            sess_exp = int(sess.get("expiry", now + 120))
-            candidate_expiries = {sess_exp, sess_exp - 1, sess_exp + 1, now + 60, now + 120, now + 300}
-            v2_verified = False
-            for test_exp in candidate_expiries:
-                v2_msg = f"ENROLL_DEVICE_V2|{session_id}|{device_id}|{public_key_pem.strip()}|{test_exp}".encode('utf-8')
-                if verify_asymmetric_signature(approver_entry["public_key"], v2_msg, primary_approval_sig):
-                    v2_verified = True
-                    break
-
-            if not v2_verified:
-                v1_msg = f"ENROLL_DEVICE_V1|{device_id}|{public_key_pem.strip()}".encode('utf-8')
-                if not verify_asymmetric_signature(approver_entry["public_key"], v1_msg, primary_approval_sig):
+        if registry: # Devices have previously been registered
+            if not active_device_ids:
+                # All previously registered devices are revoked (lost-phone scenario).
+                # Re-enrollment requires a valid console recovery token to prevent unauthorized enrollment.
+                token_valid = False
+                if recovery_token and isinstance(recovery_token, str):
+                    with _ENROLLMENT_LOCK:
+                        exp = _CONSOLE_RECOVERY_TOKENS.pop(recovery_token.strip(), None)
+                        if exp and time.time() <= exp:
+                            token_valid = True
+                if not token_valid:
                     with _ENROLLMENT_LOCK:
                         _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)
-                    return False, "APPROVAL_INVALID: Signature from active approver device is invalid or expired."
+                    return False, "DENY: All registered devices are revoked. Physical console recovery token required to enroll a new device."
+            else:
+                # Active devices exist, multi-sig approval required
+                target_approver = approver_device_id or ("primary_phone" if "primary_phone" in active_device_ids else active_device_ids[0])
+                approver_entry = registry.get(target_approver)
+                if not approver_entry or approver_entry.get("revoked", False):
+                    with _ENROLLMENT_LOCK:
+                        _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)
+                    return False, f"APPROVER_INVALID: Approver device '{target_approver}' is not active or has been revoked."
+
+                if not primary_approval_sig:
+                    with _ENROLLMENT_LOCK:
+                        _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)
+                    return False, "APPROVAL_REQUIRED: Adding a device requires cryptographic approval from an active device."
+
+                now = int(time.time())
+                # Enforce strict signed expiry verification on session-bound V2 signature
+                if approval_expiry is None:
+                    sess_exp = int(sess.get("expiry", 0))
+                    candidate_expiries = [sess_exp, sess_exp - 1, sess_exp + 1, now + 60, now + 120]
+                else:
+                    if approval_expiry < now:
+                        with _ENROLLMENT_LOCK:
+                            _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)
+                        return False, f"APPROVAL_EXPIRED: Signed approval expired at {approval_expiry} (current time {now})"
+                    if approval_expiry > now + 300:
+                        with _ENROLLMENT_LOCK:
+                            _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)
+                        return False, f"EXPIRY_OUT_OF_BOUNDS: Approval expiry {approval_expiry} exceeds 300s window"
+                    candidate_expiries = [int(approval_expiry)]
+
+                v2_verified = False
+                for test_exp in candidate_expiries:
+                    v2_msg = f"ENROLL_DEVICE_V2|{session_id}|{device_id}|{public_key_pem.strip()}|{test_exp}".encode('utf-8')
+                    if verify_asymmetric_signature(approver_entry["public_key"], v2_msg, primary_approval_sig):
+                        v2_verified = True
+                        break
+
+                if not v2_verified:
+                    with _ENROLLMENT_LOCK:
+                        _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)
+                    return False, "APPROVAL_INVALID: Signature from active approver device failed verification or is expired."
 
         # Consume the enrollment session
         with _ENROLLMENT_LOCK:

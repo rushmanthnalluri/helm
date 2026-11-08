@@ -27,7 +27,8 @@ from tests.phone_testing_keys import (
     generate_test_phone_keypair,
     enroll_test_device,
     mint_test_action_approval,
-    sign_test_challenge
+    sign_test_challenge,
+    get_test_pairing_code
 )
 
 
@@ -36,7 +37,8 @@ class TestBatch18PhonePortal(unittest.TestCase):
     def setUp(self):
         clear_active_challenges()
         taint_tracker.clear_all_taints()
-        phone_approval_portal.reset_pairing_lockout(is_console_presence=True)
+        tok = phone_approval_portal.generate_console_recovery_token()
+        phone_approval_portal.reset_pairing_lockout(tok)
         if os.path.exists(phone_approval_portal.DEVICE_REGISTRY_PATH):
             try:
                 os.remove(phone_approval_portal.DEVICE_REGISTRY_PATH)
@@ -52,7 +54,8 @@ class TestBatch18PhonePortal(unittest.TestCase):
     def tearDown(self):
         clear_active_challenges()
         taint_tracker.clear_all_taints()
-        phone_approval_portal.reset_pairing_lockout(is_console_presence=True)
+        tok = phone_approval_portal.generate_console_recovery_token()
+        phone_approval_portal.reset_pairing_lockout(tok)
         if os.path.exists(phone_approval_portal.DEVICE_REGISTRY_PATH):
             try:
                 os.remove(phone_approval_portal.DEVICE_REGISTRY_PATH)
@@ -154,15 +157,15 @@ class TestBatch18PhonePortal(unittest.TestCase):
         """Verifies physical presence pairing ceremony, monotonic counter, and instant revocation."""
         # 1. Start local ceremony
         sess_id = start_local_enrollment(ttl_seconds=60.0)
-        code = phone_approval_portal.get_session_pairing_code_for_testing(sess_id)
+        code = get_test_pairing_code(sess_id)
         self.assertEqual(len(code), 6)
 
-        # 2. Complete pairing with asymmetric public key (approved by primary device)
+        # 2. Complete pairing with asymmetric public key (approved by primary device via V2 session-bound signature)
         new_phone_priv, new_phone_pub_pem = generate_test_phone_keypair()
-        from Crypto.Signature import eddsa
-        enroll_msg = f"ENROLL_DEVICE_V1|secure_phone_01|{new_phone_pub_pem.strip()}".encode('utf-8')
-        primary_sig = eddsa.new(self.phone_priv, 'rfc8032').sign(enroll_msg).hex()
-        ok, msg = complete_device_enrollment(sess_id, code, "secure_phone_01", new_phone_pub_pem, primary_approval_sig=primary_sig)
+        from tests.phone_testing_keys import sign_enrollment_approval
+        exp = int(time.time() + 60)
+        primary_sig = sign_enrollment_approval(self.phone_priv, sess_id, "secure_phone_01", new_phone_pub_pem, exp)
+        ok, msg = complete_device_enrollment(sess_id, code, "secure_phone_01", new_phone_pub_pem, primary_approval_sig=primary_sig, approval_expiry=exp)
         self.assertTrue(ok)
         self.assertIn("successfully paired", msg)
 
@@ -212,7 +215,7 @@ class TestBatch18PhonePortal(unittest.TestCase):
     def test_enrollment_rate_limiting_and_lockout(self):
         """Verifies session is permanently locked out and destroyed after 3 incorrect pairing codes."""
         sess_id = start_local_enrollment(ttl_seconds=60.0)
-        real_code = phone_approval_portal.get_session_pairing_code_for_testing(sess_id)
+        real_code = get_test_pairing_code(sess_id)
         _, fake_pub = generate_test_phone_keypair()
 
         # Attempt 1: wrong code
@@ -302,7 +305,7 @@ class TestBatch18PhonePortal(unittest.TestCase):
     def test_enrollment_anti_overwrite_rejection(self):
         """Batch 28 Security Invariant: Existing enrolled devices cannot be overwritten by re-enrollment."""
         sess_id = start_local_enrollment(ttl_seconds=60.0)
-        code = phone_approval_portal.get_session_pairing_code_for_testing(sess_id)
+        code = get_test_pairing_code(sess_id)
         _, pub = generate_test_phone_keypair()
 
         # primary_phone is already enrolled in setUp -> re-enrollment must fail closed

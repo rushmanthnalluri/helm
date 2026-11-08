@@ -32,7 +32,8 @@ from tests.phone_testing_keys import (
     generate_test_phone_keypair,
     enroll_test_device,
     sign_test_challenge,
-    mint_test_action_approval
+    mint_test_action_approval,
+    get_test_pairing_code
 )
 
 
@@ -41,7 +42,8 @@ class TestBatch29SecurityHardening(unittest.TestCase):
     def setUp(self):
         phone_approval_portal.clear_active_challenges()
         taint_tracker.clear_all_taints()
-        phone_approval_portal.reset_pairing_lockout(is_console_presence=True)
+        tok = phone_approval_portal.generate_console_recovery_token()
+        phone_approval_portal.reset_pairing_lockout(tok)
         if os.path.exists(phone_approval_portal.DEVICE_REGISTRY_PATH):
             try: os.remove(phone_approval_portal.DEVICE_REGISTRY_PATH)
             except Exception: pass
@@ -56,7 +58,8 @@ class TestBatch29SecurityHardening(unittest.TestCase):
     def tearDown(self):
         phone_approval_portal.clear_active_challenges()
         taint_tracker.clear_all_taints()
-        phone_approval_portal.reset_pairing_lockout(is_console_presence=True)
+        tok = phone_approval_portal.generate_console_recovery_token()
+        phone_approval_portal.reset_pairing_lockout(tok)
         if os.path.exists(phone_approval_portal.ENROLLMENT_LOCKOUT_PATH):
             try: os.remove(phone_approval_portal.ENROLLMENT_LOCKOUT_PATH)
             except Exception: pass
@@ -167,7 +170,7 @@ class TestBatch29SecurityHardening(unittest.TestCase):
         """Vector 5: Enrolling and revoking under _REGISTRY_LOCK prevents state clobbering."""
         # Enroll device B
         sess_id = phone_approval_portal.start_local_enrollment(ttl_seconds=60.0)
-        code = phone_approval_portal.get_session_pairing_code_for_testing(sess_id)
+        code = get_test_pairing_code(sess_id)
         _, pub = generate_test_phone_keypair()
 
         # Malformed device_id with invalid characters or length must be rejected
@@ -180,7 +183,7 @@ class TestBatch29SecurityHardening(unittest.TestCase):
     def test_6_second_device_requires_primary_approval(self):
         """Vector 6: Enrolling a second device when primary_phone is already enrolled requires primary approval."""
         sess_id = phone_approval_portal.start_local_enrollment(ttl_seconds=60.0)
-        code = phone_approval_portal.get_session_pairing_code_for_testing(sess_id)
+        code = get_test_pairing_code(sess_id)
         _, pub = generate_test_phone_keypair()
 
         # Attempting to enroll second device without primary approval must be blocked

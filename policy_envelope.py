@@ -31,6 +31,7 @@ import hmac
 import hashlib
 import logging
 from typing import List, Dict, Any, Optional, Tuple, Set
+import threading
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
@@ -112,8 +113,10 @@ class PolicyEnvelope:
 
         # Runtime consumption counters (cannot be reset or widened)
         self.steps_consumed = 0
+        self.reserved_steps = 0
         self.keystrokes_consumed = 0
         self.is_active = False
+        self._envelope_lock = threading.Lock()
 
     def compute_canonical_hash(self) -> str:
         """Computes deterministic canonical hash of the envelope boundary."""
@@ -198,15 +201,20 @@ class PolicyEnvelope:
         if tool_name not in self.allowed_action_types:
             return False, f"DENY: Action '{tool_name}' not permitted in active envelope", 0
 
-        # Check target process image
+        # Check target process image (fail-closed if omitted when allowed_process_images is configured)
         proc_clean = ""
-        if current_process_image:
+        if self.allowed_process_images:
+            if not current_process_image:
+                return False, f"DENY: Missing target process image; envelope requires one of: {self.allowed_process_images}", 0
             proc_clean = os.path.basename(current_process_image).lower()
             if proc_clean not in self.allowed_process_images:
                 return False, f"DENY: Target process '{proc_clean}' not in envelope allowed list: {self.allowed_process_images}", 0
+        elif current_process_image:
+            proc_clean = os.path.basename(current_process_image).lower()
 
-        # Browser Domain Scoping Check with Strict Dot-Boundary Suffix Matching
-        if (proc_clean in BROWSER_IMAGES or current_domain) and self.allowed_domains:
+        # Browser Domain Scoping Check with Strict Dot-Boundary Suffix Matching (fail-closed if domain missing)
+        is_browser_action = proc_clean in BROWSER_IMAGES or "browse" in tool_name.lower() or "click_web" in tool_name.lower()
+        if self.allowed_domains and (is_browser_action or current_domain):
             if not current_domain or not any(is_domain_allowed(current_domain, d) for d in self.allowed_domains):
                 return False, f"DENY: Browser domain '{current_domain}' outside envelope domain scope: {self.allowed_domains}", 0
 
@@ -224,28 +232,41 @@ class PolicyEnvelope:
             if kw in elem_name:
                 return False, f"DENY: Semantic high-risk control detected ('{elem_name}' matches '{kw}'). Requires per-step step-up human approval.", 0
 
-        # Check Enter-to-submit form pattern
-        if "\n" in text_arg or "\r" in text_arg or arguments.get("key") in ("enter", "return"):
+        # Check Enter-to-submit form pattern (case-insensitive)
+        key_arg = str(arguments.get("key", "")).lower().strip()
+        if "\n" in text_arg or "\r" in text_arg or key_arg in ("enter", "return", "{enter}"):
             return False, "DENY: Keystroke contains Enter-to-submit form submission. Requires per-step step-up human approval.", 0
 
-        # Check step budget
-        if self.steps_consumed >= self.step_budget:
-            return False, f"DENY: Step budget exceeded ({self.steps_consumed}/{self.step_budget})", 0
+        with self._envelope_lock:
+            # Check step budget with active reservations
+            if (self.steps_consumed + self.reserved_steps) >= self.step_budget:
+                return False, f"DENY: Step budget exceeded ({self.steps_consumed + self.reserved_steps}/{self.step_budget})", 0
 
-        # Check keystroke cap for text entry actions
-        keystrokes = 0
-        if "type" in tool_name.lower() or "text" in arguments:
-            text = arguments.get("text", "")
-            keystrokes = len(str(text))
-            if self.keystrokes_consumed + keystrokes > self.keystroke_cap:
-                return False, f"DENY: Keystroke cap exceeded ({self.keystrokes_consumed + keystrokes}/{self.keystroke_cap})", 0
+            # Check keystroke cap for text entry actions
+            keystrokes = 0
+            if "type" in tool_name.lower() or "text" in arguments:
+                text = arguments.get("text", "")
+                keystrokes = len(str(text))
+                if self.keystrokes_consumed + keystrokes > self.keystroke_cap:
+                    return False, f"DENY: Keystroke cap exceeded ({self.keystrokes_consumed + keystrokes}/{self.keystroke_cap})", 0
 
-        return True, "ALLOWED_BY_ENVELOPE", keystrokes
+            # Atomically reserve step
+            self.reserved_steps += 1
+            return True, "ALLOWED_BY_ENVELOPE", keystrokes
+
+    def release_reservation(self):
+        """Releases a reserved step if the action proposal was rejected, denied, or aborted."""
+        with self._envelope_lock:
+            if self.reserved_steps > 0:
+                self.reserved_steps -= 1
 
     def commit_step(self, keystrokes: int = 0):
         """Commits one step and keystrokes to the envelope budget (Two-Phase Commit Phase 2)."""
-        self.steps_consumed += 1
-        self.keystrokes_consumed += max(0, int(keystrokes))
+        with self._envelope_lock:
+            if self.reserved_steps > 0:
+                self.reserved_steps -= 1
+            self.steps_consumed += 1
+            self.keystrokes_consumed += max(0, int(keystrokes))
         logger.info(
             "Envelope %s committed: step %d/%d, keystrokes %d/%d",
             self.envelope_id, self.steps_consumed, self.step_budget,
