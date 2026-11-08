@@ -20,6 +20,8 @@ import time
 import json
 import struct
 import hashlib
+import hmac
+import secrets
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
@@ -99,6 +101,50 @@ class PayloadSizeError(FrameError):
     pass
 
 
+class CompleteMediationBreachError(FrameError):
+    """Raised when an actuator effect is invoked without a valid supervisor INTENT token."""
+    pass
+
+
+class SupervisorActuator:
+    """Privileged actuator residing strictly inside the Supervisor process.
+    Guarantees Complete Mediation Invariant: Physical actuators cannot be invoked without
+    a cryptographically unforgeable INTENT token minted by the supervisor's private key.
+    """
+    def __init__(self, supervisor: "PolicySupervisor"):
+        self.supervisor = supervisor
+
+    def execute_actuator(
+        self,
+        tool: str,
+        args: Dict[str, Any],
+        caller_id: str,
+        client_token: Optional[str] = None,
+        intent_token: Optional[str] = None
+    ) -> str:
+        # Enforce Complete Mediation Invariant
+        allowed_tools = get_allowed_tools_map()
+        tier = allowed_tools.get(tool, "WRITE_EXEC")
+
+        if tier in ("WRITE_EXEC", "ELEVATED_CONFIRM"):
+            if not self.supervisor.verify_intent_token(
+                intent_token, tool, caller_id, self.supervisor.last_client_seq
+            ):
+                raise CompleteMediationBreachError(
+                    f"Complete mediation invariant breach: tool '{tool}' actuator invoked without valid supervisor INTENT token!"
+                )
+
+        # Execute effect inside supervisor
+        import homie_mcp
+        homie_mcp.set_active_supervisor_intent(intent_token)
+        try:
+            return homie_mcp.execute_mcp_tool(
+                tool, args, caller_id=caller_id, client_token=client_token
+            )
+        finally:
+            homie_mcp.set_active_supervisor_intent(None)
+
+
 class BinaryFrameCodec:
     """Encodes and decodes the [u32 len][u8 ver][u8 type][u64 seq][payload] protocol wire format."""
 
@@ -162,6 +208,11 @@ class PolicySupervisor:
         self.dirty_boot_recovered = False
         self.lock_reason = ""
         self.lease_token = None
+        
+        # Complete Mediation Actuator & Cryptographic Key Initialization
+        import crypto_vault
+        self._supervisor_secret = crypto_vault.derive_subkey("actuator", length=32)
+        self.actuator = SupervisorActuator(self)
         
         # Check dirty bit from previous run
         self._check_dirty_bit_on_startup()
@@ -241,6 +292,59 @@ class PolicySupervisor:
         self.lock_reason = ""
         kill_switch.disengage_kill_switch(human_auth_token)
         return True, "Supervisor successfully unlocked by human confirmation."
+
+    def mint_intent_token(self, tool: str, caller_id: str, seq: int) -> str:
+        """Mints an unforgeable HMAC-SHA256 INTENT token inside supervisor private memory."""
+        now = time.time()
+        raw = f"INTENT_V1:{self.session_epoch}:{seq}:{int(now)}:{tool}:{caller_id}"
+        sig = hmac.new(self._supervisor_secret, raw.encode("utf-8"), hashlib.sha256).hexdigest()
+        return f"{raw}:{sig}"
+
+    def verify_intent_token(self, token: Optional[str], tool: str, caller_id: str, seq: int) -> bool:
+        """Verifies supervisor INTENT token integrity, freshness (<=30s), and binding."""
+        if not token or not isinstance(token, str) or not token.startswith("INTENT_V1:"):
+            return False
+        parts = token.split(":")
+        if len(parts) != 7:
+            return False
+        v_tag, epoch_str, seq_str, ts_str, tok_tool, tok_caller, sig = parts
+        try:
+            epoch = int(epoch_str)
+            token_seq = int(seq_str)
+            ts = int(ts_str)
+        except ValueError:
+            return False
+
+        if epoch != self.session_epoch:
+            return False
+        if abs(time.time() - ts) > 30.0:  # 30-second TTL
+            return False
+        if tok_tool != tool or tok_caller != caller_id:
+            return False
+
+        raw = f"INTENT_V1:{epoch}:{token_seq}:{ts}:{tok_tool}:{tok_caller}"
+        expected_sig = hmac.new(self._supervisor_secret, raw.encode("utf-8"), hashlib.sha256).hexdigest()
+        return hmac.compare_digest(sig, expected_sig)
+
+    def clear_taint_and_reboot_worker(self, human_auth_token: str) -> Tuple[bool, str]:
+        """Supervisor-side taint clearing: Clears workstation taint, bumps session epoch,
+        rotates supervisor secrets, and restarts the worker process with a fresh clean context."""
+        ok, msg = taint_tracker.human_clear_taint(human_auth_token)
+        if not ok:
+            return False, f"Taint clear denied: {msg}"
+
+        # Bump session epoch and rotate secrets
+        self.session_epoch = int(time.time())
+        self._supervisor_secret = secrets.token_bytes(32)
+
+        # Record worker context reboot in audit ledger
+        agent_audit_ledger.record_agent_action(
+            "supervisor", "worker_reboot", "WRITE_EXEC",
+            {"reason": "Taint cleared by human, worker context refreshed", "epoch": self.session_epoch},
+            decision="ALLOW"
+        )
+        logger.info("Supervisor cleared taint, bumped session epoch to %d, worker context rebooted.", self.session_epoch)
+        return True, "Workstation taint cleared and worker context cleanly rebooted."
 
     def attach_watchdog(self, watchdog):
         """Attaches an independent watchdog to monitor supervisor and mutual liveness."""
@@ -381,6 +485,15 @@ class PolicySupervisor:
 
         self.active_request_id = req_id
 
+        # 0. Reject worker attempting to forge an INTENT token in proposal
+        if "intent_token" in payload:
+            return self._encode_reply(MSG_DECISION, {
+                "req_id": req_id,
+                "status": "DENY",
+                "reason_code": REASON_UNAUTHORIZED_TOKEN,
+                "reason": "Complete Mediation Violation: Worker attempted to inject or forge supervisor INTENT token."
+            })
+
         # 1. State check: LOCKED fails closed immediately
         if self.state == STATE_LOCKED:
             return self._encode_reply(MSG_DECISION, {
@@ -488,17 +601,22 @@ class PolicySupervisor:
             })
 
         # 11. TWO-PHASE ACTION EXECUTION:
-        # Phase 1: Record INTENT in HMAC-SHA256 audit ledger
+        # Phase 1: Supervisor mints unforgeable cryptographic INTENT token & records in audit ledger
+        intent_token = self.mint_intent_token(tool, caller_id, self.last_client_seq)
         agent_audit_ledger.record_agent_action(
-            caller_id, tool, tier, args, decision=f"INTENT:{req_id}"
+            caller_id, tool, tier, args, decision=f"INTENT:{req_id}:{intent_token[:32]}"
         )
 
-        # Phase 2: Privileged Supervisor Actuator executes effect
+        # Phase 2: Privileged Supervisor Actuator executes effect WITH verified intent token
         execution_success = True
         try:
-            result = homie_mcp.execute_mcp_tool(
-                tool, args, caller_id=caller_id, client_token=client_token
+            result = self.actuator.execute_actuator(
+                tool, args, caller_id=caller_id, client_token=client_token, intent_token=intent_token
             )
+        except CompleteMediationBreachError as cme:
+            execution_success = False
+            result = f"Security Gate: {cme}"
+            self._transition_to_locked(f"Complete mediation violation: {cme}")
         except Exception as e:
             execution_success = False
             result = f"Error executing tool in supervisor: {e}"

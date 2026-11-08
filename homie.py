@@ -890,6 +890,12 @@ def main():
 
     cmd = args[0]
 
+    if cmd in ('--pairing-unlock', 'pairing-unlock'):
+        import phone_approval_portal
+        ok, msg = phone_approval_portal.reset_pairing_lockout()
+        print(f"✓ [HOMIE SECURITY] {msg}")
+        return
+
     if cmd == '--look':
         files = windows_tools.capture_screens()
         for f in files:

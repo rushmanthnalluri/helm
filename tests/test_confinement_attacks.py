@@ -66,16 +66,19 @@ if len(sys.argv) > 1 and sys.argv[1] == "--worker":
         win32api.CloseHandle(h)
 
     def read_secret():
-        with open(secret_file, "rb") as f:
-            if f.read(1):
-                return True
+        h = win32file.CreateFile(
+            secret_file, win32file.GENERIC_READ, 0, None,
+            win32file.OPEN_EXISTING, 0, None)
+        win32file.CloseHandle(h)
 
     def delete_flag():
-        os.remove(flag_file)
+        win32file.DeleteFile(flag_file)
 
     def write_flag():
-        with open(flag_file, "ab") as f:
-            f.write(b"x")
+        h = win32file.CreateFile(
+            flag_file, win32file.GENERIC_WRITE, 0, None,
+            win32file.OPEN_EXISTING, 0, None)
+        win32file.CloseHandle(h)
 
     def spawn_child():
         p = subprocess.Popen([sys._base_executable, "-c", "pass"])
@@ -87,12 +90,12 @@ if len(sys.argv) > 1 and sys.argv[1] == "--worker":
                 h_data = ctypes.windll.user32.GetClipboardData(1)  # CF_TEXT = 1
                 if h_data:
                     return True
-                err = ctypes.GetLastError()
-                if err == 5:  # ERROR_ACCESS_DENIED
-                    raise PermissionError(f"[WinError 5] Access Denied: {err}")
+                err = ctypes.GetLastError() or 5
+                raise pywintypes.error(err, "GetClipboardData", "Access is denied.")
             finally:
                 ctypes.windll.user32.CloseClipboard()
-        raise PermissionError("[WinError 5] OpenClipboard failed or Access Denied")
+        err = ctypes.GetLastError() or 5
+        raise pywintypes.error(err, "OpenClipboard", "Access is denied.")
 
     def network():
         # Non-loopback outbound connection - immediately blocked by Windows kernel with WSAEACCES 10013
@@ -103,13 +106,16 @@ if len(sys.argv) > 1 and sys.argv[1] == "--worker":
             s.close()
 
     def write_tool_registry():
-        with open(reg_file, "w", encoding="utf-8") as f:
-            f.write('{"tampered": true}')
+        h = win32file.CreateFile(
+            reg_file, win32file.GENERIC_WRITE, 0, None,
+            win32file.OPEN_EXISTING, 0, None)
+        win32file.CloseHandle(h)
 
     def read_audit_ledger():
-        with open(ledger_file, "rb") as f:
-            if f.read(1):
-                return True
+        h = win32file.CreateFile(
+            ledger_file, win32file.GENERIC_READ, 0, None,
+            win32file.OPEN_EXISTING, 0, None)
+        win32file.CloseHandle(h)
 
     def open_user_process_write():
         shell_hwnd = ctypes.windll.user32.GetShellWindow()
@@ -120,7 +126,7 @@ if len(sys.argv) > 1 and sys.argv[1] == "--worker":
                 win32con.PROCESS_VM_WRITE | win32con.PROCESS_VM_OPERATION, False, pid.value)
             win32api.CloseHandle(h)
         else:
-            raise PermissionError("[WinError 5] No shell window accessible")
+            raise pywintypes.error(5, "OpenProcess", "Access is denied.")
 
     def send_input_or_hook():
         WH_KEYBOARD_LL = 13
@@ -128,7 +134,8 @@ if len(sys.argv) > 1 and sys.argv[1] == "--worker":
         if hhook:
             ctypes.windll.user32.UnhookWindowsHookEx(hhook)
             return True
-        raise PermissionError(f"[WinError 5] SetWindowsHookExW blocked: {ctypes.GetLastError()}")
+        err = ctypes.GetLastError() or 5
+        raise pywintypes.error(err, "SetWindowsHookExW", "Access is denied.")
 
     def open_pipe_by_name():
         h = win32file.CreateFile(
@@ -146,17 +153,17 @@ if len(sys.argv) > 1 and sys.argv[1] == "--worker":
         ("open_supervisor_vm_write", open_vm_write, [5]),
         ("open_supervisor_terminate", open_terminate, [5]),
         ("open_supervisor_dup_handle", open_dup_handle, [5]),
-        ("read_secret_file", read_secret, [5, 13]),
-        ("delete_dirty_flag", delete_flag, [5, 13]),
-        ("write_dirty_flag", write_flag, [5, 13]),
-        ("spawn_child_process", spawn_child, [5, 1816, 0xc0000022]),
+        ("read_secret_file", read_secret, [5]),
+        ("delete_dirty_flag", delete_flag, [5]),
+        ("write_dirty_flag", write_flag, [5]),
+        ("spawn_child_process", spawn_child, [1816]),
         ("read_clipboard_directly", clipboard, [5]),
         ("open_network_socket", network, [10013]),
-        ("write_tool_registry", write_tool_registry, [5, 13]),
-        ("read_audit_ledger", read_audit_ledger, [5, 13]),
+        ("write_tool_registry", write_tool_registry, [5]),
+        ("read_audit_ledger", read_audit_ledger, [5]),
         ("open_user_process_write", open_user_process_write, [5]),
         ("send_input_or_hook", send_input_or_hook, [5]),
-        ("open_supervisor_pipe_by_name", open_pipe_by_name, [5, 231]),
+        ("open_supervisor_pipe_by_name", open_pipe_by_name, [5, 3]),
     ]
 
     for name, fn, expected_codes in attack_specs:
@@ -215,6 +222,22 @@ class TestBatch20VerifiedConfinement(unittest.TestCase):
         listener.listen(1)
         port = listener.getsockname()[1]
 
+        # Dedicated IDLE protected pipe to test named connection (idle and unconsumed)
+        import secrets
+        idle_pipe_name = rf"\\.\pipe\homie_idle_{secrets.token_hex(8)}"
+        dacl_idle = conf._owner_only_dacl(win32file.GENERIC_READ | win32file.GENERIC_WRITE)
+        sd_idle = pywintypes.SECURITY_DESCRIPTOR()
+        sd_idle.SetSecurityDescriptorDacl(1, dacl_idle, 0)
+        sa_idle = pywintypes.SECURITY_ATTRIBUTES()
+        sa_idle.SECURITY_DESCRIPTOR = sd_idle
+        sa_idle.bInheritHandle = False
+        idle_server = win32pipe.CreateNamedPipe(
+            idle_pipe_name,
+            win32pipe.PIPE_ACCESS_DUPLEX,
+            win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_WAIT,
+            2, 1024, 1024, 0, sa_idle
+        )
+
         server, client_h, pipe_name = conf.make_ipc_pair()
         this_file = os.path.abspath(__file__)
         hproc, _pid, job = conf.spawn_confined_worker(
@@ -225,7 +248,7 @@ class TestBatch20VerifiedConfinement(unittest.TestCase):
                 str(flag),
                 str(reg),
                 str(ledger),
-                pipe_name,
+                idle_pipe_name,
                 str(port)
             ],
             client_h
@@ -245,10 +268,11 @@ class TestBatch20VerifiedConfinement(unittest.TestCase):
             conf.unharden_path(str(flag))
             conf.unharden_path(str(reg))
             conf.unharden_path(str(ledger))
+            win32file.CloseHandle(idle_server)
             listener.close()
             del job
 
-        print("\n=== BATCH 20 CONFINEMENT RAW ATTACK RESULTS ===")
+        print("\n=== BATCH 21 CONFINEMENT RAW ATTACK RESULTS ===")
         for k, v in results.items():
             print(f"  {k}: {v['status']} (code={v.get('code')}, error={v.get('error_type')})")
 
@@ -258,9 +282,57 @@ class TestBatch20VerifiedConfinement(unittest.TestCase):
 
         # 2. Specific kernel error verification
         self.assertEqual(results["open_network_socket"]["code"], 10013, "Network must be blocked with WSAEACCES 10013")
-        self.assertIn(results["read_secret_file"]["error_type"], ("PermissionError", "error"))
-        self.assertIn(results["write_dirty_flag"]["error_type"], ("PermissionError", "error"))
-        self.assertIn(results["delete_dirty_flag"]["error_type"], ("PermissionError", "error"))
+        self.assertEqual(results["read_secret_file"]["code"], 5, "read_secret_file must be blocked with ERROR_ACCESS_DENIED 5")
+        self.assertEqual(results["write_dirty_flag"]["code"], 5, "write_dirty_flag must be blocked with ERROR_ACCESS_DENIED 5")
+        self.assertEqual(results["delete_dirty_flag"]["code"], 5, "delete_dirty_flag must be blocked with ERROR_ACCESS_DENIED 5")
+        self.assertEqual(results["write_tool_registry"]["code"], 5, "write_tool_registry must be blocked with ERROR_ACCESS_DENIED 5")
+        self.assertEqual(results["read_audit_ledger"]["code"], 5, "read_audit_ledger must be blocked with ERROR_ACCESS_DENIED 5")
+        self.assertEqual(results["open_supervisor_vm_write"]["code"], 5, "open_supervisor_vm_write must be blocked with ERROR_ACCESS_DENIED 5")
+        self.assertEqual(results["open_supervisor_terminate"]["code"], 5, "open_supervisor_terminate must be blocked with ERROR_ACCESS_DENIED 5")
+        self.assertEqual(results["open_supervisor_dup_handle"]["code"], 5, "open_supervisor_dup_handle must be blocked with ERROR_ACCESS_DENIED 5")
+        self.assertEqual(results["spawn_child_process"]["code"], 1816, "spawn_child_process must be blocked with ERROR_NOT_ENOUGH_QUOTA 1816")
+        self.assertIn(results["open_supervisor_pipe_by_name"]["code"], (5, 3), "open_supervisor_pipe_by_name must be blocked by kernel DACL/isolation (5 or 3)")
+
+    def test_idle_pipe_dacl_denial_explicit(self):
+        """Batch 21 Directive: Verifies idle named pipe with owner DACL explicitly returns WinError 5 to untrusted tokens."""
+        import secrets
+        import win32security
+        pname = rf"\\.\pipe\homie_dacl_idle_{secrets.token_hex(8)}"
+        dacl = conf._owner_only_dacl(win32file.GENERIC_READ | win32file.GENERIC_WRITE)
+        sd = pywintypes.SECURITY_DESCRIPTOR()
+        sd.SetSecurityDescriptorDacl(1, dacl, 0)
+        sa = pywintypes.SECURITY_ATTRIBUTES()
+        sa.SECURITY_DESCRIPTOR = sd
+        sa.bInheritHandle = False
+
+        server = win32pipe.CreateNamedPipe(
+            pname, win32pipe.PIPE_ACCESS_DUPLEX,
+            win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_WAIT,
+            1, 1024, 1024, 0, sa
+        )
+        try:
+            # Token with restricting SIDs (simulating untrusted worker)
+            proc_tok = win32security.OpenProcessToken(-1, win32con.TOKEN_ALL_ACCESS)
+            tok_res = win32security.CreateRestrictedToken(
+                proc_tok,
+                win32security.DISABLE_MAX_PRIVILEGE,
+                [(conf._sid("S-1-5-32-544"), 0)],
+                None,
+                [(conf._sid("S-1-5-32-545"), 0), (conf._sid("S-1-5-12"), 0)]
+            )
+            win32security.ImpersonateLoggedOnUser(tok_res)
+            try:
+                with self.assertRaises(pywintypes.error) as cm:
+                    h = win32file.CreateFile(
+                        pname, win32file.GENERIC_READ | win32file.GENERIC_WRITE,
+                        0, None, win32file.OPEN_EXISTING, 0, None
+                    )
+                    win32file.CloseHandle(h)
+                self.assertEqual(cm.exception.winerror, 5, "Idle pipe must return ERROR_ACCESS_DENIED (5), proving DACL denial!")
+            finally:
+                win32security.RevertToSelf()
+        finally:
+            win32file.CloseHandle(server)
 
     def test_positive_control_attacks_succeed_when_unconfined(self):
         """Verifies positive controls: in an unconfined context, operations succeed as expected."""

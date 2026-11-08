@@ -21,6 +21,8 @@ logger = logging.getLogger("homie.step_up_gate")
 
 def push_step_up_request_to_phone(step_up_id, session_id, tool_name, arguments, source="untrusted_content"):
     """Pushes an interactive confirmation to the user's paired Telegram phone."""
+    if os.environ.get("HOMIE_TEST_ENV") == "1":
+        return True, "Test environment: simulated step-up push"
     try:
         import homie
         prefs = homie.get_prefs()

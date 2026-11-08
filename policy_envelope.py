@@ -1,19 +1,26 @@
-"""policy_envelope.py - Batch 19C: Dynamic Workstation Policy Envelope.
+"""policy_envelope.py - Batch 19C & Batch 21: Dynamic Workstation Policy Envelope.
 
-Solves human approval fatigue by allowing mobile-signed bounded execution envelopes:
+Solves human approval fatigue by allowing mobile-signed bounded execution envelopes
+with strict architectural hardening:
   - Canonical Envelope Fields:
       target process image paths, allowed action types, step budget, keystroke cap,
-      expiry, and taint_epoch.
-  - Phone Signing:
-      Cryptographically signed challenge bound to canonical envelope fields.
+      expiry, taint_epoch, and browser domain scope.
+  - Prohibited Approvable Images:
+      Execution environments, macro-enabled office suites, and arbitrary file managers
+      (Explorer, Cmd, PowerShell, WT, Code, Word, Excel) CANNOT be approved in an envelope.
+  - Browser Domain Scoping:
+      Browsers in an envelope MUST be restricted to an explicit allowed domain list (e.g. docs.python.org).
+      Out-of-scope domain navigations are hard denied.
+  - Semantic High-Risk Control Detection:
+      Detects disguised controls ("Continue", "Next", "Agree", "Transfer", "Buy", "Checkout")
+      and treats Enter-in-forms as high-risk submits. Unknown controls default to high-risk.
   - Strict Hard-Denial Enforcement:
       Actions outside the envelope, steps exceeding budget, or keystrokes exceeding cap
       are HARD DENIED (never silently prompted or permitted).
       Envelopes cannot be widened mid-run.
       Taint epoch mismatch immediately invalidates envelope.
   - Non-Bypassable High-Risk Controls:
-      High-risk destructive/financial operations (Send, Delete, Pay, Submit, Install)
-      ALWAYS require per-step approval even inside an approved envelope.
+      High-risk destructive/financial operations ALWAYS require per-step approval even inside an approved envelope.
 """
 
 import os
@@ -34,10 +41,28 @@ import agent_audit_ledger
 
 logger = logging.getLogger("homie.envelope")
 
-# Actions that ALWAYS require per-step explicit human step-up even inside an envelope
+# Prohibited images that CANNOT be approved in any policy envelope
+PROHIBITED_ENVELOPE_IMAGES: Set[str] = {
+    "explorer.exe", "cmd.exe", "powershell.exe", "wt.exe",
+    "bash.exe", "code.exe", "vscode.exe", "excel.exe", "winword.exe"
+}
+
+# Known browser process images requiring domain scoping
+BROWSER_IMAGES: Set[str] = {
+    "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe"
+}
+
+# High-risk action names
 HIGH_RISK_PER_STEP_CLASSES: Set[str] = {
     "send", "delete", "pay", "submit", "install",
     "homie_execute_cmd", "homie_delete_file"
+}
+
+# Semantic keywords indicating high-risk controls (even if labeled "Continue", "Next", etc.)
+HIGH_RISK_CONTROL_KEYWORDS: Set[str] = {
+    "send", "delete", "remove", "pay", "checkout", "buy", "order",
+    "transfer", "wire", "submit", "install", "confirm", "continue",
+    "next", "agree", "accept terms", "purchase", "authorize"
 }
 
 
@@ -53,16 +78,26 @@ class PolicyEnvelope:
         keystroke_cap: int,
         expiry: float,
         taint_epoch: int,
+        allowed_domains: Optional[List[str]] = None,
         device_id: str = "primary_phone",
         signature: Optional[str] = None
     ):
+        clean_images = [os.path.basename(p).lower() for p in allowed_process_images]
+        # Disallow prohibited executable/macro environments
+        for img in clean_images:
+            if img in PROHIBITED_ENVELOPE_IMAGES:
+                raise ValueError(
+                    f"Prohibited process image '{img}' cannot be included in a policy envelope: execution environments and arbitrary file/macro processors are barred."
+                )
+
         self.envelope_id = envelope_id
-        self.allowed_process_images = [p.lower() for p in allowed_process_images]
+        self.allowed_process_images = clean_images
         self.allowed_action_types = list(allowed_action_types)
         self.step_budget = step_budget
         self.keystroke_cap = keystroke_cap
         self.expiry = expiry
         self.taint_epoch = taint_epoch
+        self.allowed_domains = [d.lower() for d in allowed_domains] if allowed_domains else []
         self.device_id = device_id
         self.signature = signature
 
@@ -75,7 +110,8 @@ class PolicyEnvelope:
         """Computes deterministic canonical hash of the envelope boundary."""
         imgs = ",".join(sorted(self.allowed_process_images))
         acts = ",".join(sorted(self.allowed_action_types))
-        raw = f"{self.envelope_id}|{imgs}|{acts}|{self.step_budget}|{self.keystroke_cap}|{int(self.expiry)}|{self.taint_epoch}"
+        doms = ",".join(sorted(self.allowed_domains))
+        raw = f"{self.envelope_id}|{imgs}|{acts}|{doms}|{self.step_budget}|{self.keystroke_cap}|{int(self.expiry)}|{self.taint_epoch}"
         return hashlib.sha256(raw.encode('utf-8')).hexdigest()
 
     def generate_phone_challenge(self) -> Dict[str, Any]:
@@ -84,6 +120,7 @@ class PolicyEnvelope:
         canonical_prompt = (
             f"Workstation Policy Envelope Authorization:\n"
             f"• Target Apps: {', '.join(self.allowed_process_images) or 'Any'}\n"
+            f"• Domain Scope: {', '.join(self.allowed_domains) or 'None (Non-Browser)'}\n"
             f"• Action Types: {', '.join(self.allowed_action_types)}\n"
             f"• Step Budget: {self.step_budget} steps\n"
             f"• Keystroke Cap: {self.keystroke_cap} chars\n"
@@ -97,6 +134,7 @@ class PolicyEnvelope:
             "step_budget": self.step_budget,
             "keystroke_cap": self.keystroke_cap,
             "expiry": self.expiry,
+            "allowed_domains": self.allowed_domains,
             "device_id": self.device_id
         }
 
@@ -122,7 +160,8 @@ class PolicyEnvelope:
         tool_name: str,
         arguments: Dict[str, Any],
         current_process_image: Optional[str],
-        current_taint_epoch: int
+        current_taint_epoch: int,
+        current_domain: Optional[str] = None
     ) -> Tuple[bool, str]:
         """Enforces envelope boundary:
         - Must be active
@@ -130,7 +169,8 @@ class PolicyEnvelope:
         - current_taint_epoch == envelope.taint_epoch
         - tool_name in allowed_action_types
         - target process image in allowed_process_images
-        - High-risk operations require separate per-step approval
+        - browser domain matches allowed_domains
+        - Semantic high-risk control classification
         - step_budget and keystroke_cap not exceeded
         """
         if not self.is_active:
@@ -150,15 +190,34 @@ class PolicyEnvelope:
             return False, f"DENY: Action '{tool_name}' not permitted in active envelope"
 
         # Check target process image
+        proc_clean = ""
         if current_process_image:
             proc_clean = os.path.basename(current_process_image).lower()
             if proc_clean not in self.allowed_process_images:
                 return False, f"DENY: Target process '{proc_clean}' not in envelope allowed list: {self.allowed_process_images}"
 
-        # Non-bypassable high-risk class check
+        # Browser Domain Scoping Check
+        if proc_clean in BROWSER_IMAGES and self.allowed_domains:
+            if not current_domain or not any(current_domain.lower().endswith(d) for d in self.allowed_domains):
+                return False, f"DENY: Browser domain '{current_domain}' outside envelope domain scope: {self.allowed_domains}"
+
+        # Non-bypassable high-risk class check (tool name)
         for high_risk_kw in HIGH_RISK_PER_STEP_CLASSES:
             if high_risk_kw in tool_name.lower():
                 return False, f"DENY: High-risk action '{tool_name}' requires per-step step-up human approval"
+
+        # Semantic High-Risk Control & Stealth Submission Detection
+        elem_name = str(arguments.get("element_name", "")).lower()
+        text_arg = str(arguments.get("text", ""))
+
+        # Check element name against high-risk keywords (e.g. "Continue", "Next", "Agree" in payment/submission context)
+        for kw in HIGH_RISK_CONTROL_KEYWORDS:
+            if kw in elem_name:
+                return False, f"DENY: Semantic high-risk control detected ('{elem_name}' matches '{kw}'). Requires per-step step-up human approval."
+
+        # Check Enter-to-submit form pattern
+        if "\n" in text_arg or "\r" in text_arg or arguments.get("key") in ("enter", "return"):
+            return False, "DENY: Keystroke contains Enter-to-submit form submission. Requires per-step step-up human approval."
 
         # Check step budget
         if self.steps_consumed >= self.step_budget:

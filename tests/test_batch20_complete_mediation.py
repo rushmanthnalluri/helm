@@ -125,6 +125,81 @@ class TestBatch20CompleteMediationAndRedTeam(unittest.TestCase):
 
         self.assertEqual(asr, 0.0, f"Red team attack success rate must be 0.0%: compromised={compromised}")
 
+    def test_supervisor_actuator_requires_cryptographic_intent_token(self):
+        """Batch 21 Directive: Actuator inside supervisor process strictly enforces unforgeable HMAC INTENT token."""
+        supervisor = homie_supervisor.PolicySupervisor()
+        supervisor.state = homie_supervisor.STATE_ARMED
+        actuator = supervisor.actuator
+
+        # 1. Invocation without intent token -> raises CompleteMediationBreachError
+        with self.assertRaises(homie_supervisor.CompleteMediationBreachError):
+            actuator.execute_actuator(
+                "homie_snap_window", {"app_name": "notepad"},
+                caller_id="worker", intent_token=None
+            )
+
+        # 2. Invocation with forged intent token -> raises CompleteMediationBreachError
+        with self.assertRaises(homie_supervisor.CompleteMediationBreachError):
+            actuator.execute_actuator(
+                "homie_snap_window", {"app_name": "notepad"},
+                caller_id="worker", intent_token="INTENT_V1:1:1:1700000000:homie_snap_window:worker:bad_signature"
+            )
+
+        # 3. Invocation with valid supervisor-minted token -> succeeds
+        seq = 42
+        valid_token = supervisor.mint_intent_token("homie_snap_window", "worker", seq)
+        supervisor.last_client_seq = seq
+        res = actuator.execute_actuator(
+            "homie_snap_window", {"app_name": "notepad"},
+            caller_id="worker", intent_token=valid_token
+        )
+        self.assertIn("Success:", res)
+        supervisor.clean_shutdown()
+
+    def test_worker_forged_intent_frame_rejected_by_supervisor(self):
+        """Batch 21 Directive: Worker sending frame claiming an INTENT is rejected by supervisor."""
+        supervisor = homie_supervisor.PolicySupervisor()
+        supervisor.state = homie_supervisor.STATE_ARMED
+        client = homie_supervisor.SupervisorClient(supervisor)
+        client.connect()
+        client.hello()
+
+        # Worker attempts to send a proposal with a forged intent token
+        client.seq += 1
+        forged_payload = {
+            "req_id": "forged_req_1",
+            "tool": "homie_snap_window",
+            "args": {"app_name": "notepad"},
+            "caller_id": "worker",
+            "intent_token": "INTENT_V1:999:1:1700000000:homie_snap_window:worker:forged_sig"
+        }
+        raw_frame = homie_supervisor.BinaryFrameCodec.encode_frame(
+            homie_supervisor.MSG_PROPOSE, client.seq, forged_payload
+        )
+        reply_bytes = supervisor.handle_raw_frame(raw_frame)
+        _, _, _, reply_dict, _ = homie_supervisor.BinaryFrameCodec.decode_frame(reply_bytes)
+
+        self.assertEqual(reply_dict["status"], "DENY")
+        self.assertEqual(reply_dict["reason_code"], homie_supervisor.REASON_UNAUTHORIZED_TOKEN)
+        self.assertIn("Complete Mediation Violation", reply_dict["reason"])
+        supervisor.clean_shutdown()
+
+    def test_supervisor_taint_clearing_reboots_worker_context(self):
+        """Batch 21 Directive: Supervisor-side taint clearing bumps epoch, rotates keys, and refreshes worker."""
+        supervisor = homie_supervisor.PolicySupervisor()
+        supervisor.state = homie_supervisor.STATE_ARMED
+        initial_epoch = supervisor.session_epoch
+        initial_secret = supervisor._supervisor_secret
+
+        taint_tracker.mark_session_tainted("worker", source="tool_provenance:homie_read_screen_memory")
+        self.assertTrue(taint_tracker.is_session_tainted("worker"))
+
+        ok, msg = supervisor.clear_taint_and_reboot_worker("human_approved_stepup_override")
+        self.assertTrue(ok)
+        self.assertFalse(taint_tracker.is_session_tainted("worker"))
+        self.assertNotEqual(supervisor._supervisor_secret, initial_secret)
+        supervisor.clean_shutdown()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -135,6 +135,69 @@ class TestBatch19PolicyEnvelope(unittest.TestCase):
         self.assertIn("Taint epoch mismatch", res)
         self.assertFalse(self.env.is_active)
 
+    def test_prohibited_images_cannot_be_approved_in_envelope(self):
+        """Batch 21 Directive: Arbitrary execution environments (cmd, explorer, code) cannot be in envelopes."""
+        for prohibited in ["explorer.exe", "cmd.exe", "powershell.exe", "wt.exe", "code.exe"]:
+            with self.assertRaises(ValueError):
+                PolicyEnvelope(
+                    envelope_id="bad_env",
+                    allowed_process_images=[prohibited],
+                    allowed_action_types=["homie_type_text"],
+                    step_budget=5,
+                    keystroke_cap=50,
+                    expiry=time.time() + 100,
+                    taint_epoch=self.epoch
+                )
+
+    def test_browser_domain_scoping_enforcement(self):
+        """Batch 21 Directive: Browser envelopes strictly enforce domain allowlist."""
+        browser_env = PolicyEnvelope(
+            envelope_id="browser_env",
+            allowed_process_images=["chrome.exe"],
+            allowed_action_types=["homie_click_coords", "homie_type_text"],
+            step_budget=5,
+            keystroke_cap=100,
+            expiry=time.time() + 100,
+            taint_epoch=self.epoch,
+            allowed_domains=["docs.python.org"]
+        )
+        ch = browser_env.generate_phone_challenge()
+        sig = phone_approval_portal.compute_device_signature(ch["canonical_hash"], self.device_key)
+        browser_env.activate_with_signature(sig, device_key_override=self.device_key)
+
+        # 1. Allowed domain navigation: OK
+        ok1, _ = browser_env.check_and_consume(
+            "homie_click_coords", {"x": 100, "y": 100}, "chrome.exe", self.epoch, current_domain="docs.python.org"
+        )
+        self.assertTrue(ok1)
+
+        # 2. Out-of-scope domain escape (e.g. webmail): HARD DENY
+        ok2, res2 = browser_env.check_and_consume(
+            "homie_click_coords", {"x": 100, "y": 100}, "chrome.exe", self.epoch, current_domain="mail.google.com"
+        )
+        self.assertFalse(ok2)
+        self.assertIn("outside envelope domain scope", res2)
+
+    def test_semantic_high_risk_disguised_controls_and_enter_submit(self):
+        """Batch 21 Directive: Disguised high-risk controls ('Continue', 'Next') and Enter submits require step-up."""
+        ch = self.env.generate_phone_challenge()
+        sig = phone_approval_portal.compute_device_signature(ch["canonical_hash"], self.device_key)
+        self.env.activate_with_signature(sig, device_key_override=self.device_key)
+
+        # 1. Button labeled "Continue" or "Agree" (disguised checkout/submission): DENY
+        ok1, res1 = self.env.check_and_consume(
+            "homie_click_coords", {"element_name": "Continue to Purchase", "x": 10, "y": 10}, "notepad.exe", self.epoch
+        )
+        self.assertFalse(ok1)
+        self.assertIn("Semantic high-risk control detected", res1)
+
+        # 2. Typing text ending with Enter (\n) to trigger form submit: DENY
+        ok2, res2 = self.env.check_and_consume(
+            "homie_type_text", {"text": "password123\n"}, "notepad.exe", self.epoch
+        )
+        self.assertFalse(ok2)
+        self.assertIn("Enter-to-submit", res2)
+
 
 if __name__ == "__main__":
     unittest.main()

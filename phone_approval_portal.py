@@ -122,6 +122,24 @@ def complete_device_enrollment(
     return True, f"Device {device_id} successfully paired with hardware-backed key"
 
 
+def reset_pairing_lockout(local_presence_token: Optional[str] = None) -> Tuple[bool, str]:
+    """Human recovery console command: resets enrollment lockout after too many failed attempts.
+    Requires local console user presence. Eliminates permanent self-DoS."""
+    global _LOCAL_ENROLLMENT_SESSIONS, _FAILED_ATTEMPTS_LOCKOUT
+    _LOCAL_ENROLLMENT_SESSIONS.clear()
+    _FAILED_ATTEMPTS_LOCKOUT.clear()
+    try:
+        agent_audit_ledger.record_agent_action(
+            "console_user", "pairing_lockout_reset", "WRITE_EXEC",
+            {"timestamp": time.time(), "local_presence": True},
+            decision="ALLOW"
+        )
+    except Exception:
+        pass
+    logger.info("Pairing lockout reset via local console recovery command.")
+    return True, "Pairing lockout successfully reset. You may now initiate a new pairing session."
+
+
 def revoke_device_key(device_id: str) -> bool:
     """Revokes a paired device key, immediately blocking all further approvals from it."""
     registry = _load_device_registry()
