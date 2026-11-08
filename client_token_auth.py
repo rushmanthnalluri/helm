@@ -165,6 +165,18 @@ def revoke_client_token(token_id):
         return True, f"Token '{token_id}' has been revoked."
     return False, f"Token '{token_id}' not found or already revoked."
 
+_ENFORCEMENT_REQUIRED = False
+
+def set_token_enforcement(required=True):
+    """Enables or disables mandatory token authentication across all MCP dispatch calls."""
+    global _ENFORCEMENT_REQUIRED
+    _ENFORCEMENT_REQUIRED = required
+    logger.info("MCP client token enforcement set to: %s", required)
+
+def is_token_enforcement_active():
+    """Returns True if client token authentication is strictly required."""
+    return _ENFORCEMENT_REQUIRED
+
 def list_client_tokens():
     """Lists all registered client tokens and their states."""
     with db_utils.get_db() as conn:

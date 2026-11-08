@@ -23,10 +23,12 @@ class TestDesktopAgentEvals(unittest.TestCase):
     def setUp(self):
         desktop_agent.reset_abort()
         desktop_agent.set_driving_state(False)
+        taint_tracker.clear_all_taints()
 
     def tearDown(self):
         desktop_agent.reset_abort()
         desktop_agent.set_driving_state(False)
+        taint_tracker.clear_all_taints()
 
     def test_eval_driving_state_toggle(self):
         """Measures operational driving banner state."""

@@ -65,11 +65,16 @@ def handle_step_up_callback(callback_data, chat_id):
         step_up_id = callback_data[15:]
         ok, item, msg = taint_tracker.approve_step_up(step_up_id)
         if ok and item:
-            # Execute the approved tool
+            # Execute the approved tool with temporary workstation taint bypass
             import homie_mcp
             tool_name = item["tool_name"]
             args = item["arguments"]
-            res = homie_mcp.execute_mcp_tool(tool_name, args, caller_id=f"approved_{chat_id}")
+            was_ws = taint_tracker.is_workstation_tainted()
+            taint_tracker.set_workstation_tainted(False)
+            try:
+                res = homie_mcp.execute_mcp_tool(tool_name, args, caller_id=f"approved_{chat_id}")
+            finally:
+                taint_tracker.set_workstation_tainted(was_ws)
             agent_audit_ledger.record_agent_action(f"telegram_approved_{chat_id}", tool_name, "WRITE_EXEC", args, decision="USER_APPROVED")
             return True, f"✅ **Approved & Executed**: `{tool_name}`\nResult: {res}"
         return False, f"⚠️ Could not approve: {msg}"

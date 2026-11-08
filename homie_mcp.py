@@ -183,7 +183,16 @@ wrap_untrusted_content = wrap_untrusted_content_with_nonce
 def execute_mcp_tool(name, arguments, caller_id="mcp_client", client_token=None):
     """Executes an MCP tool call with capability tier validation, client token verification, and audit logging."""
     tier_map = {t["name"]: t.get("capabilityTier", "WRITE_EXEC") for t in MCP_TOOLS}
-    tier = tier_map.get(name, "WRITE_EXEC")
+    if name not in tier_map:
+        decision = "DENY_UNKNOWN"
+        output = f"Error: Unknown tool '{name}'"
+        try:
+            agent_audit_ledger.record_agent_action(caller_id, name, "UNKNOWN", arguments, decision=decision)
+        except Exception:
+            pass
+        return output
+
+    tier = tier_map[name]
 
     # Scoped Token Gate: Validates client token scope against required capability tier
     if client_token:
@@ -198,11 +207,22 @@ def execute_mcp_tool(name, arguments, caller_id="mcp_client", client_token=None)
                 pass
             return output
 
+    # Mandatory Token Gate: If token enforcement is enabled, reject unauthenticated requests
+    import client_token_auth
+    if client_token_auth.is_token_enforcement_active() and not client_token:
+        decision = "DENY_TOKEN_REQUIRED"
+        output = "Security Gate: Missing client authentication token (token enforcement active)"
+        try:
+            agent_audit_ledger.record_agent_action(caller_id, name, tier, arguments, decision=decision)
+        except Exception:
+            pass
+        return output
+
     # Taint Tracking Gate: Blocks write tools if caller session has ingested untrusted content
     import taint_tracker
     allowed, requires_step_up, reason = taint_tracker.check_action_privilege(caller_id, tier, name, arguments)
-    if not allowed and requires_step_up:
-        decision = "DENY_TAINT_STEP_UP_REQUIRED"
+    if not allowed:
+        decision = "DENY_TAINT_STEP_UP_REQUIRED" if requires_step_up else "DENY_PRIVILEGE"
         output = f"Security Gate: {reason}"
         try:
             agent_audit_ledger.record_agent_action(caller_id, name, tier, arguments, decision=decision)
@@ -291,18 +311,33 @@ def execute_mcp_tool(name, arguments, caller_id="mcp_client", client_token=None)
         elif name == "homie_agent_click":
             x = int(arguments.get("x", 0))
             y = int(arguments.get("y", 0))
-            elem_name = arguments.get("element_name", "unknown")
-            import pyautogui
-            pyautogui.click(x, y)
-            output = f"Agent clicked ({x}, {y}) on '{elem_name}'"
+            elem_name = str(arguments.get("element_name", "")).lower()
+
+            # Defense against synthetic self-approval & UAC evasion
+            blocked_targets = ["telegram", "user account control", "run", "task manager", "credential manager", "windows security", "step_up", "uac"]
+            if any(bt in elem_name for bt in blocked_targets):
+                decision = "DENY_SECURITY_TARGET"
+                output = f"Security Gate: Synthetic clicks targeting privileged security dialog or approval interface '{elem_name}' are prohibited."
+            else:
+                import pyautogui
+                pyautogui.click(x, y)
+                output = f"Agent clicked ({x}, {y}) on '{elem_name}'"
 
         elif name == "homie_agent_type":
-            txt = arguments.get("text", "")
-            elem_name = arguments.get("element_name", "unknown")
-            import pyautogui, pyperclip
-            pyperclip.copy(txt)
-            pyautogui.hotkey("ctrl", "v")
-            output = f"Agent typed {len(txt)} chars into '{elem_name}'"
+            txt = str(arguments.get("text", ""))
+            elem_name = str(arguments.get("element_name", "unknown"))
+
+            # Defense against synthetic shell injection
+            blocked_binaries = ["powershell", "cmd", "cmd.exe", "powershell.exe", "wt.exe", "bash", "regedit", "certutil", "wscript", "cscript"]
+            txt_lower = txt.lower()
+            if any(b in txt_lower for b in blocked_binaries):
+                decision = "DENY_BLOCKED_BINARY_TYPING"
+                output = f"Security Gate: Synthetic keystrokes containing prohibited shell execution '{txt[:30]}' are blocked."
+            else:
+                import pyautogui, pyperclip
+                pyperclip.copy(txt)
+                pyautogui.hotkey("ctrl", "v")
+                output = f"Agent typed {len(txt)} chars into '{elem_name}'"
 
         else:
             decision = "DENY_UNKNOWN"

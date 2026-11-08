@@ -60,8 +60,10 @@ def _derive_keystream(key, iv, length):
         counter += 1
     return bytes(keystream[:length])
 
-def encrypt(plaintext, key=None):
-    """Encrypts a plaintext string and returns a self-contained authenticated token."""
+def encrypt(plaintext, key=None, context=None):
+    """Encrypts a plaintext string and returns a self-contained authenticated token.
+    Supports Associated Authenticated Data (context) to prevent ciphertext transplantation.
+    """
     if plaintext is None:
         return None
     if isinstance(plaintext, str):
@@ -76,15 +78,16 @@ def encrypt(plaintext, key=None):
     # XOR plaintext with keystream
     ciphertext = bytes(a ^ b for a, b in zip(data, keystream))
     
-    # Compute authentication tag over IV + ciphertext
-    tag = hmac.new(k, iv + ciphertext, hashlib.sha256).digest()
+    # Compute authentication tag over IV + context + ciphertext
+    ctx_bytes = (str(context).encode("utf-8") if context is not None else b"")
+    tag = hmac.new(k, iv + ctx_bytes + ciphertext, hashlib.sha256).digest()
     
     # Payload format: IV (16) + Tag (32) + Ciphertext
     payload = iv + tag + ciphertext
     return "vault:" + base64.urlsafe_b64encode(payload).decode("ascii")
 
-def decrypt(token, key=None):
-    """Decrypts a vault token string after verifying HMAC authenticity."""
+def decrypt(token, key=None, context=None):
+    """Decrypts a vault token string after verifying HMAC authenticity against key and context."""
     if token is None:
         return None
     if not isinstance(token, str) or not token.startswith("vault:"):
@@ -104,10 +107,11 @@ def decrypt(token, key=None):
     ciphertext = payload[48:]
 
     k = key if key is not None else get_vault_key()
-    computed_tag = hmac.new(k, iv + ciphertext, hashlib.sha256).digest()
+    ctx_bytes = (str(context).encode("utf-8") if context is not None else b"")
+    computed_tag = hmac.new(k, iv + ctx_bytes + ciphertext, hashlib.sha256).digest()
 
     if not hmac.compare_digest(computed_tag, expected_tag):
-        raise ValueError("Tampering detected: HMAC authentication tag does not match")
+        raise ValueError("Tampering detected: HMAC authentication tag does not match (or context mismatch)")
 
     keystream = _derive_keystream(k, iv, len(ciphertext))
     plaintext_bytes = bytes(a ^ b for a, b in zip(ciphertext, keystream))

@@ -22,8 +22,14 @@ import homie_mcp
 import pipeline_telemetry
 import phone_gateway
 import voice
+import taint_tracker
 
 class TestFuzzAndGuardrails(unittest.TestCase):
+    def setUp(self):
+        taint_tracker.clear_all_taints()
+
+    def tearDown(self):
+        taint_tracker.clear_all_taints()
     def test_command_injection_fuzzing(self):
         """Fuzzes windows_tools.execute_safe_command with hostile shell metacharacters."""
         malicious_payloads = [

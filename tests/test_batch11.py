@@ -22,11 +22,11 @@ import homie
 
 class TestBatch11Features(unittest.TestCase):
     def setUp(self):
-        taint_tracker.clear_session_taint("test_attacker_session")
+        taint_tracker.clear_all_taints()
         desktop_agent.reset_abort()
 
     def tearDown(self):
-        taint_tracker.clear_session_taint("test_attacker_session")
+        taint_tracker.clear_all_taints()
         desktop_agent.reset_abort()
 
     def test_multi_step_injection_attack_intercepted_by_taint(self):
