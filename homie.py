@@ -670,6 +670,12 @@ def try_fast_command(text):
         voice.stop_speaking()
         return True, "Silenced."
 
+    # 27. Cryptographic Agent Audit Ledger ("agent audit", "what did agents do")
+    if re.search(r'\b(agent\s+audit|agent\s+ledger|what\s+did\s+agents\s+do|ai\s+activity)\b', t):
+        import agent_audit_ledger
+        rep = agent_audit_ledger.format_audit_report(limit=8)
+        return True, rep
+
     return False, ""
 
 # ----------------- Web Search & Read -----------------

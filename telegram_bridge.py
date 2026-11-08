@@ -860,6 +860,18 @@ class TelegramBridge:
             self.send_message(chat_id, summary)
             return
 
+        if cmd in ('/agents', '/agentlog', '/audit'):
+            import agent_audit_ledger
+            rep = agent_audit_ledger.format_audit_report(limit=10)
+            self.send_message(chat_id, rep)
+            return
+
+        if cmd in ('/telemetry', '/latency', '/speed'):
+            import pipeline_telemetry
+            rep = pipeline_telemetry.format_telemetry_report()
+            self.send_message(chat_id, rep)
+            return
+
         if cmd == '/meeting':
             sub = args[0].lower() if args else ""
             import meeting_notes
