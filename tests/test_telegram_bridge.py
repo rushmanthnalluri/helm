@@ -19,15 +19,16 @@ class TestTelegramBridge(unittest.TestCase):
         # Unauthorized user
         self.assertFalse(bridge.is_user_authorized(9999, 9999))
 
-    def test_auto_pairing_first_user(self):
+    def test_unpaired_bot_requires_local_pairing_code(self):
         import homie
         orig_users = homie.get_prefs().get('telegramAllowedUsers', [])
         try:
             bridge = TelegramBridge(token="test", allowed_users=[])
-            # First user is automatically paired as owner
-            self.assertTrue(bridge.is_user_authorized(5555, 5555))
-            self.assertIn("5555", bridge.allowed_users)
-            # Second user is blocked
+            # A Telegram message alone cannot claim an unpaired PC.
+            self.assertRegex(bridge.get_pairing_command(), r"^/pair [A-HJ-NP-Z2-9]{10}$")
+            self.assertFalse(bridge.is_user_authorized(5555, 5555))
+            self.assertEqual(bridge.allowed_users, [])
+            # All unpaired senders remain blocked until local approval.
             self.assertFalse(bridge.is_user_authorized(7777, 7777))
         finally:
             homie.save_pref('telegramAllowedUsers', orig_users)

@@ -60,6 +60,26 @@ def get_pinned_notes_menu_items():
 
 def build_tray_menu(app=None):
     """Constructs the comprehensive unified HUD system tray menu."""
+    def on_copy_telegram_pairing_command(icon, item):
+        bridge = getattr(app, 'telegram', None) if app else None
+        if not bridge or not bridge.token:
+            message = "Configure TELEGRAM_BOT_TOKEN before pairing a phone."
+        else:
+            command = bridge.get_pairing_command()
+            if not command:
+                message = "Telegram is already paired, or no pairing is available."
+            else:
+                ok, _ = windows_tools.set_clipboard_text(command)
+                message = (
+                    "Pairing command copied. Paste it into Homie's private Telegram chat within 15 minutes."
+                    if ok else "Could not copy the pairing command to the clipboard."
+                )
+
+        try:
+            icon.notify(message, "Homie Telegram pairing")
+        except Exception:
+            print(f"[Homie] {message}", flush=True)
+
     def on_meeting_start(icon, item):
         sess = meeting_notes.get_meeting_session()
         sess.start_meeting("Desktop Quick Meeting")
@@ -67,6 +87,21 @@ def build_tray_menu(app=None):
     def on_meeting_stop(icon, item):
         sess = meeting_notes.get_meeting_session()
         sess.stop_meeting()
+
+    def on_copy_phone_call_url(icon, item):
+        import phone_gateway
+        import socket
+        phone_gateway.start_phone_gateway(5055)
+        try:
+            ip = socket.gethostbyname(socket.gethostname())
+        except Exception:
+            ip = "localhost"
+        url = f"http://{ip}:5055/call"
+        windows_tools.set_clipboard_text(url)
+        try:
+            icon.notify(f"Copied: {url}\nOpen on your phone to call your PC!", "Homie Phone Call")
+        except Exception:
+            pass
 
     def on_focus_report(icon, item):
         report = focus_tracker.get_focus_report(lookback_hours=24)
@@ -87,6 +122,8 @@ def build_tray_menu(app=None):
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("🖥 Workspaces", pystray.Menu(lambda: get_workspace_menu_items())),
         pystray.MenuItem("📌 Pinned Notes", pystray.Menu(lambda: get_pinned_notes_menu_items())),
+        pystray.MenuItem("📱 Copy Telegram pairing command", on_copy_telegram_pairing_command),
+        pystray.MenuItem("📞 Copy Phone Call URL", on_copy_phone_call_url),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem(
             "⏹ Stop Meeting Notes" if is_meeting else "🎙 Start Meeting Notes",

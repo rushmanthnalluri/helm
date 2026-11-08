@@ -31,3 +31,5 @@ def get_db_connection(db_path=None):
             conn.close()
         except Exception:
             pass
+
+get_db = get_db_connection

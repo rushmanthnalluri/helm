@@ -7,6 +7,9 @@ import os
 import sys
 import time
 import json
+import hmac
+import re
+import secrets
 import tempfile
 import threading
 import requests
@@ -21,6 +24,9 @@ import windows_tools
 
 TELEGRAM_API_BASE = "https://api.telegram.org"
 _SHARED_WHISPER = None
+PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+PAIRING_CODE_LENGTH = 10
+PAIRING_CODE_TTL_SECONDS = 15 * 60
 
 def decode_audio_file(file_path, sample_rate=16000):
     """Decodes OGG/Opus or any audio format to 16kHz float32 numpy array using PyAV."""
@@ -57,6 +63,42 @@ def get_whisper_model():
                 print(f"[Telegram] Failed to load Whisper {m}: {e}", flush=True)
     return _SHARED_WHISPER
 
+def sanitize_upload_filename(file_name):
+    """Returns a safe single-component Windows filename for a Telegram upload."""
+    name = str(file_name or "").replace("\\", "/").rsplit("/", 1)[-1]
+    name = re.sub(r'[\x00-\x1f<>:"/\\|?*]', "_", name).strip(" .")[:180].rstrip(" .")
+    if not name or name in (".", ".."):
+        name = f"telegram_upload_{int(time.time())}"
+
+    stem = name.split(".", 1)[0].rstrip(" .").upper()
+    reserved_names = {"CON", "PRN", "AUX", "NUL"}
+    reserved_names.update(f"COM{i}" for i in range(1, 10))
+    reserved_names.update(f"LPT{i}" for i in range(1, 10))
+    if stem in reserved_names:
+        name = f"_{name}"
+    return name
+
+def reserve_upload_path(directory, file_name):
+    """Creates a unique empty file, so uploads cannot overwrite existing files."""
+    os.makedirs(directory, exist_ok=True)
+    root = os.path.abspath(directory)
+    safe_name = sanitize_upload_filename(file_name)
+    stem, extension = os.path.splitext(safe_name)
+
+    for index in range(1000):
+        candidate_name = safe_name if index == 0 else f"{stem} ({index}){extension}"
+        candidate = os.path.abspath(os.path.join(root, candidate_name))
+        if os.path.commonpath((root, candidate)) != root:
+            raise ValueError("Upload path escaped its destination folder.")
+        try:
+            fd = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            continue
+        os.close(fd)
+        return candidate
+
+    raise FileExistsError("Could not reserve a unique filename in the destination folder.")
+
 class TelegramBridge:
     def __init__(self, token=None, allowed_users=None):
         self.prefs = homie.get_prefs()
@@ -64,6 +106,10 @@ class TelegramBridge:
         self.allowed_users = allowed_users if allowed_users is not None else self.prefs.get('telegramAllowedUsers', [])
         # Ensure allowed_users are integers/strings
         self.allowed_users = [str(u) for u in self.allowed_users if u]
+        self._pairing_lock = threading.Lock()
+        self._pairing_code = self._new_pairing_code() if not self.allowed_users else None
+        self._pairing_code_expires_at = time.time() + PAIRING_CODE_TTL_SECONDS if self._pairing_code else 0
+        self._pairing_failures = {}
         self.offset = 0
         self.running = False
         self._thread = None
@@ -195,6 +241,10 @@ class TelegramBridge:
                 [
                     {"text": "📊 Focus Report", "callback_data": "action_focus_report"},
                     {"text": "🎙️ Meeting Notes", "callback_data": "action_meeting_toggle"}
+                ],
+                [
+                    {"text": "📞 Live Voice Call", "callback_data": "action_phone_portal"},
+                    {"text": "🖥️ Screen Timeline", "callback_data": "action_screen_timeline"}
                 ]
             ]
         }
@@ -397,6 +447,12 @@ class TelegramBridge:
             except Exception as e:
                 self.send_message(chat_id, f"Failed to toggle note pin: {e}")
 
+        elif data == 'action_phone_portal':
+            self.handle_command(chat_id, '/call')
+
+        elif data == 'action_screen_timeline':
+            self.handle_command(chat_id, '/timeline')
+
         elif data == 'action_focus_report':
             self.handle_command(chat_id, '/focus')
 
@@ -534,21 +590,81 @@ class TelegramBridge:
             print(f"[Telegram] File download error: {e}")
         return False
 
+    @staticmethod
+    def _new_pairing_code():
+        return "".join(secrets.choice(PAIRING_CODE_ALPHABET) for _ in range(PAIRING_CODE_LENGTH))
+
+    def get_pairing_command(self):
+        """Returns a locally requested one-time pairing command, if still unpaired."""
+        if not self.token or self.allowed_users:
+            return None
+        with self._pairing_lock:
+            if not self._pairing_code or time.time() >= self._pairing_code_expires_at:
+                self._pairing_code = self._new_pairing_code()
+                self._pairing_code_expires_at = time.time() + PAIRING_CODE_TTL_SECONDS
+            return f"/pair {self._pairing_code}"
+
+    def handle_pairing_message(self, user_id, chat_id, text):
+        """Pairs one private Telegram account using a locally copied one-time code."""
+        if str(user_id or "") != str(chat_id or ""):
+            return False
+
+        pieces = (text or "").strip().split()
+        code = pieces[1].upper() if len(pieces) == 2 else ""
+        uid_str = str(user_id)
+
+        with self._pairing_lock:
+            if self.allowed_users:
+                reply = "🔒 This PC is already paired. Manage its Telegram allowlist from the PC."
+            elif not code:
+                reply = "🔒 Pairing requires a local code. In Homie's tray menu, choose ‘Copy Telegram pairing command’ and paste it here."
+            elif self._pairing_code is None or time.time() >= self._pairing_code_expires_at:
+                self._pairing_code = self._new_pairing_code()
+                self._pairing_code_expires_at = time.time() + PAIRING_CODE_TTL_SECONDS
+                reply = "⌛ That pairing code expired. Copy the current command from Homie's tray menu and try again."
+            else:
+                now = time.monotonic()
+                recent_failures = [
+                    attempt_at
+                    for attempt_at in self._pairing_failures.get(uid_str, [])
+                    if now - attempt_at < 60
+                ]
+                self._pairing_failures[uid_str] = recent_failures
+
+                if len(recent_failures) >= 5:
+                    reply = "⛔ Too many pairing attempts. Wait one minute, then try the current local code again."
+                elif (
+                    len(code) != PAIRING_CODE_LENGTH
+                    or any(char not in PAIRING_CODE_ALPHABET for char in code)
+                    or not hmac.compare_digest(code, self._pairing_code)
+                ):
+                    recent_failures.append(now)
+                    self._pairing_failures[uid_str] = recent_failures
+                    remaining = max(0, 5 - len(recent_failures))
+                    reply = f"⛔ Pairing code is incorrect. Attempts remaining in this minute: {remaining}."
+                else:
+                    try:
+                        homie.save_pref('telegramAllowedUsers', [uid_str])
+                    except Exception:
+                        reply = "⚠️ Homie could not save the pairing. Try again from the private chat."
+                    else:
+                        self.allowed_users = [uid_str]
+                        self.prefs['telegramAllowedUsers'] = self.allowed_users
+                        self._pairing_code = None
+                        self._pairing_code_expires_at = 0
+                        self._pairing_failures.clear()
+                        reply = "✅ This private Telegram account is now paired with Homie. Send /start to see the controls."
+
+        self.send_message(chat_id, reply)
+        return reply.startswith("✅")
+
     def is_user_authorized(self, user_id, chat_id):
         """Verifies if the sender is authorized to control this PC."""
         uid_str = str(user_id)
-        if not self.allowed_users:
-            self.allowed_users = [uid_str]
-            self.prefs['telegramAllowedUsers'] = self.allowed_users
-            homie.save_pref('telegramAllowedUsers', self.allowed_users)
-            print(f"[Telegram] Automatically paired owner user ID: {uid_str}", flush=True)
-            self.send_message(
-                chat_id,
-                f"🛡️ **Security Pairing Complete!**\n"
-                f"You ({uid_str}) are now the authorized owner of this PC.\n"
-                f"You can now send voice notes, /screen, /lock, /media, or any text command!"
-            )
-            return True
+        # Only private one-to-one chats may control the desktop. An allowlisted
+        # owner speaking in a group could otherwise expose screenshots and files.
+        if not uid_str or uid_str != str(chat_id or ""):
+            return False
         return uid_str in self.allowed_users
 
     def handle_command(self, chat_id, text):
@@ -713,6 +829,35 @@ class TelegramBridge:
             for r in report:
                 lines.append(f"• `{r['application_name']}`: **{r['formatted_duration']}** ({r['percent']}%)")
             self.send_message(chat_id, "\n".join(lines))
+            return
+
+        if cmd in ('/call', '/phone', '/voip'):
+            import phone_gateway
+            import socket
+            phone_gateway.start_phone_gateway(5055)
+            try:
+                ip = socket.gethostbyname(socket.gethostname())
+            except Exception:
+                ip = "localhost"
+            call_url = f"http://{ip}:5055/call"
+            remote_url = f"http://{ip}:5055/remote"
+            msg = (
+                "📞 **Homie Live Voice Call & Touchpad**\n\n"
+                f"• 🎙️ **Call Your PC (Duplex Voice)**:\n{call_url}\n\n"
+                f"• 📱 **Wireless Trackpad & Deck**:\n{remote_url}\n\n"
+                "• ☎️ **Telephone (Twilio Webhook)**: `/voice`\n\n"
+                "Tap the Call link on your phone to start speaking to your PC with live two-way voice!"
+            )
+            self.send_message(chat_id, msg)
+            return
+
+        if cmd in ('/timeline', '/screenhistory', '/history'):
+            import semantic_screen_memory
+            mins = 30
+            if args and args[0].isdigit():
+                mins = int(args[0])
+            summary = semantic_screen_memory.summarize_timeline_text(minutes=mins)
+            self.send_message(chat_id, summary)
             return
 
         if cmd == '/meeting':
@@ -1217,12 +1362,18 @@ class TelegramBridge:
         if "#desktop" in (caption or "").lower():
             save_dir = os.path.join(os.path.expanduser("~"), "Desktop")
 
-        dest_path = os.path.join(save_dir, file_name or f"file_{int(time.time())}")
+        dest_path = None
+        download_complete = False
         try:
+            dest_path = reserve_upload_path(save_dir, file_name or f"file_{int(time.time())}")
             ok = self.download_file(doc_file_id, dest_path)
             if not ok or not os.path.exists(dest_path):
+                if os.path.exists(dest_path):
+                    os.remove(dest_path)
+                dest_path = None
                 self.send_message(chat_id, "Failed to download document to PC.")
                 return
+            download_complete = True
 
             size_kb = round(os.path.getsize(dest_path) / 1024, 1)
             self.send_message(
@@ -1246,6 +1397,11 @@ class TelegramBridge:
                 except Exception:
                     pass
         except Exception as e:
+            if not download_complete and dest_path and os.path.exists(dest_path):
+                try:
+                    os.remove(dest_path)
+                except Exception:
+                    pass
             self.send_message(chat_id, f"File handling error: {e}")
 
     def poll_updates(self):
@@ -1268,9 +1424,10 @@ class TelegramBridge:
                         cq_id = cq.get('id')
                         cq_user = cq.get('from', {}).get('id')
                         cq_chat = cq.get('message', {}).get('chat', {}).get('id')
+                        cq_chat_type = cq.get('message', {}).get('chat', {}).get('type')
                         cq_data = cq.get('data', '')
 
-                        if not self.is_user_authorized(cq_user, cq_chat):
+                        if cq_chat_type != 'private' or not self.is_user_authorized(cq_user, cq_chat):
                             self.answer_callback_query(cq_id, "Access denied.", alert=True)
                             continue
 
@@ -1283,11 +1440,20 @@ class TelegramBridge:
 
                     user = msg.get('from', {})
                     user_id = user.get('id')
-                    chat_id = msg.get('chat', {}).get('id')
+                    chat = msg.get('chat', {})
+                    chat_id = chat.get('id')
 
                     # Security Verification
                     if not self.is_user_authorized(user_id, chat_id):
-                        self.send_message(chat_id, "⛔ Access denied. This PC belongs to another user.")
+                        if chat.get('type') != 'private':
+                            self.send_message(chat_id, "🔒 Please use Homie's private chat to control this PC.")
+                            continue
+                        text = msg.get('text', '')
+                        command = text.strip().split(maxsplit=1)[0].split('@', 1)[0].lower() if text.strip() else ''
+                        if command == '/pair':
+                            self.handle_pairing_message(user_id, chat_id, text)
+                        else:
+                            self.send_message(chat_id, "🔒 This account is not paired. Use Homie's local tray menu to copy a one-time pairing command.")
                         continue
 
                     # Voice Note from Phone

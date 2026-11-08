@@ -1,0 +1,603 @@
+"""Homie Phone Gateway.
+Provides interactive telephone voice calling to your Windows PC via:
+1. Twilio Voice PSTN Webhook: Call your PC from any standard mobile phone or landline.
+2. Mobile Duplex Web Audio Portal (/call): Call your PC from any smartphone browser over Wi-Fi/LAN without Twilio fees.
+3. Outbound Telephone Alerts: Homie can dial your phone when critical alerts or timers trigger.
+"""
+
+import os
+import sys
+import json
+import time
+import logging
+import threading
+import urllib.parse
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from pathlib import Path
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+import windows_tools
+import db_utils
+
+logger = logging.getLogger("homie.phone_gateway")
+
+# Default gateway configuration
+DEFAULT_PHONE_CONFIG = {
+    "enabled": True,
+    "port": 5055,
+    "pin": "1234",
+    "require_pin": True,
+    "allowed_numbers": [],
+    "twilio_account_sid": "",
+    "twilio_auth_token": "",
+    "twilio_phone_number": "",
+    "user_phone_number": "",
+    "voice_greeting": "Homie workstation online. How can I assist you?",
+    "voice_name": "Polly.Danielle"
+}
+
+_server_instance = None
+_server_thread = None
+_call_state = {}
+
+import secrets
+import qrcode
+import io
+import base64
+import socket
+
+def init_device_pairing_db():
+    with db_utils.get_db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS paired_mobile_devices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token TEXT UNIQUE NOT NULL,
+                device_name TEXT,
+                paired_at REAL NOT NULL,
+                last_used REAL NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS pending_pairing_codes (
+                code TEXT PRIMARY KEY,
+                token TEXT NOT NULL,
+                expires_at REAL NOT NULL
+            )
+        """)
+        conn.commit()
+
+init_device_pairing_db()
+
+def create_mobile_pairing_code(valid_seconds=900):
+    """Generates a secure 6-character short code and full session token."""
+    code = secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") + "".join(secrets.choice("23456789ABCDEFGHJKLMNPQRSTUVWXYZ") for _ in range(5))
+    token = secrets.token_hex(24)
+    expires = time.time() + valid_seconds
+
+    with db_utils.get_db() as conn:
+        conn.execute("INSERT OR REPLACE INTO pending_pairing_codes (code, token, expires_at) VALUES (?, ?, ?)", (code, token, expires))
+        conn.commit()
+    return code, token
+
+def exchange_pairing_code_for_token(code, device_name="Mobile Device"):
+    """Validates short code and returns permanent device token."""
+    clean_code = (code or "").strip().upper()
+    now = time.time()
+
+    with db_utils.get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT token, expires_at FROM pending_pairing_codes WHERE code = ?", (clean_code,))
+        row = cur.fetchone()
+        if not row:
+            return None, "Invalid pairing code."
+        token, expires = row[0], row[1]
+        if now > expires:
+            conn.execute("DELETE FROM pending_pairing_codes WHERE code = ?", (clean_code,))
+            conn.commit()
+            return None, "Pairing code has expired."
+
+        # Register permanent device token
+        conn.execute("DELETE FROM pending_pairing_codes WHERE code = ?", (clean_code,))
+        conn.execute("INSERT OR REPLACE INTO paired_mobile_devices (token, device_name, paired_at, last_used) VALUES (?, ?, ?, ?)",
+                     (token, device_name, now, now))
+        conn.commit()
+    return token, "Device paired successfully."
+
+def is_device_token_valid(token):
+    if not token:
+        return False
+    with db_utils.get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM paired_mobile_devices WHERE token = ?", (str(token).strip(),))
+        row = cur.fetchone()
+        if row:
+            conn.execute("UPDATE paired_mobile_devices SET last_used = ? WHERE token = ?", (time.time(), str(token).strip()))
+            conn.commit()
+            return True
+    return False
+
+def generate_qr_base64(url):
+    """Generates a PNG QR code in base64 format for rendering in HTML."""
+    qr = qrcode.QRCode(box_size=6, border=2)
+    qr.add_data(url)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+def get_phone_config_path():
+    cfg_dir = Path.home() / ".config" / "homie"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    return cfg_dir / "phone_config.json"
+
+def load_phone_config():
+    path = get_phone_config_path()
+    if path.exists():
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+                conf = DEFAULT_PHONE_CONFIG.copy()
+                conf.update(saved)
+                return conf
+        except Exception as e:
+            logger.error("Failed to load phone config: %s", e)
+    return DEFAULT_PHONE_CONFIG.copy()
+
+def save_phone_config(conf):
+    path = get_phone_config_path()
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(conf, f, indent=2)
+        return True
+    except Exception as e:
+        logger.error("Failed to save phone config: %s", e)
+        return False
+
+def execute_phone_instruction(speech_text, session_id="call"):
+    """Executes spoken instruction from a phone call on the local Windows PC."""
+    speech = (speech_text or "").strip()
+    if not speech:
+        return "I didn't hear anything. Could you please repeat?"
+
+    logger.info("Executing phone instruction: %s", speech)
+
+    # 1. Try instant fast-command first (<50ms)
+    try:
+        import homie
+        handled, msg = homie.try_fast_command(speech)
+        if handled:
+            # Clean up message for voice output (short & clear)
+            clean_msg = msg.replace("\n", ". ").replace("`", "")
+            return clean_msg
+    except Exception as e:
+        logger.warning("Fast command check failed: %s", e)
+
+    # 2. Try AI Engine tool execution or general prompt
+    try:
+        import ai_engine
+        import homie
+        prefs = homie.get_prefs()
+        provider = ai_engine.get_active_provider(prefs)
+        
+        system_prompt = (
+            "You are Homie, speaking over a live telephone call to your user about their Windows PC. "
+            "Keep replies brief, conversational, and helpful (1-3 sentences). "
+            "Do not output markdown, bullet points, asterisks, or code blocks, as this is read over a phone call."
+        )
+        reply = ai_engine.run_query(
+            prompt_text=f"{system_prompt}\nUser says: {speech}",
+            provider=provider,
+            prefs=prefs
+        )
+        if reply:
+            return reply.strip()
+    except Exception as e:
+        logger.error("AI execution failed: %s", e)
+
+    return f"I received: {speech}, but could not complete the operation."
+
+class PhoneGatewayHandler(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        # Suppress noisy standard HTTP logs
+        return
+
+    def _send_response(self, code, content_type, body):
+        self.send_response(code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.end_headers()
+        if isinstance(body, str):
+            body = body.encode("utf-8")
+        self.wfile.write(body)
+
+    def do_OPTIONS(self):
+        self._send_response(200, "text/plain", "")
+
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+
+        if path == "/" or path == "/call":
+            # Serve the mobile Duplex Web Audio Call Portal
+            self._serve_web_phone_portal()
+        elif path == "/remote":
+            # Handled by mobile_remote module if available, or basic portal
+            from mobile_remote import render_remote_html
+            html = render_remote_html()
+            self._send_response(200, "text/html; charset=utf-8", html)
+        elif path == "/status":
+            conf = load_phone_config()
+            vitals = windows_tools.get_system_vitals()
+            data = {
+                "status": "online",
+                "phone_enabled": conf.get("enabled", True),
+                "vitals": vitals
+            }
+            self._send_response(200, "application/json", json.dumps(data))
+        else:
+            self._send_response(404, "text/plain", "Not Found")
+
+    def do_POST(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode("utf-8", errors="ignore")
+
+        # 1. Twilio Inbound Voice Webhook
+        if path == "/voice" or path == "/voice/incoming":
+            self._handle_twilio_incoming(body)
+        elif path == "/voice/process":
+            self._handle_twilio_process(body)
+        elif path == "/api/web-call":
+            self._handle_web_call_speech(body)
+        elif path == "/api/pair":
+            self._handle_device_pairing(body)
+        elif path == "/api/remote-action":
+            self._handle_remote_action(body)
+        else:
+            self._send_response(404, "text/plain", "Endpoint not found")
+
+    def _serve_web_phone_portal(self):
+        conf = load_phone_config()
+        pin_required = conf.get("require_pin", True)
+        
+        html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Homie Phone Call</title>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
+  body {{ background: #0d1117; color: #e6edf3; display: flex; flex-direction: column; height: 100vh; overflow: hidden; justify-content: space-between; align-items: center; padding: 24px; }}
+  .header {{ text-align: center; margin-top: 16px; }}
+  .header h1 {{ font-size: 24px; font-weight: 700; color: #58a6ff; letter-spacing: -0.5px; }}
+  .header p {{ font-size: 14px; color: #8b949e; margin-top: 4px; }}
+  .status-badge {{ display: inline-flex; align-items: center; gap: 6px; background: rgba(56, 139, 253, 0.15); color: #58a6ff; border: 1px solid rgba(56, 139, 253, 0.3); border-radius: 20px; padding: 4px 12px; font-size: 12px; margin-top: 12px; }}
+  .status-dot {{ width: 8px; height: 8px; border-radius: 50%; background: #3fb950; animation: pulse 2s infinite; }}
+  @keyframes pulse {{ 0% {{ opacity: 0.4; transform: scale(0.9); }} 50% {{ opacity: 1; transform: scale(1.1); }} 100% {{ opacity: 0.4; transform: scale(0.9); }} }}
+  
+  .transcript-box {{ width: 100%; max-width: 440px; flex: 1; margin: 24px 0; background: rgba(22, 27, 34, 0.8); border: 1px solid #30363d; border-radius: 16px; padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }}
+  .bubble {{ max-width: 85%; padding: 10px 14px; border-radius: 14px; font-size: 14px; line-height: 1.4; }}
+  .bubble.user {{ align-self: flex-end; background: #1f6feb; color: #fff; }}
+  .bubble.assistant {{ align-self: flex-start; background: #21262d; border: 1px solid #30363d; color: #c9d1d9; }}
+  
+  .call-controls {{ width: 100%; max-width: 440px; display: flex; flex-direction: column; align-items: center; gap: 16px; margin-bottom: 24px; }}
+  .btn-call {{ width: 84px; height: 84px; border-radius: 50%; background: #238636; border: none; color: white; display: flex; justify-content: center; align-items: center; cursor: pointer; transition: all 0.2s; box-shadow: 0 0 24px rgba(35, 134, 54, 0.4); }}
+  .btn-call:active {{ transform: scale(0.92); }}
+  .btn-call.in-call {{ background: #da3633; box-shadow: 0 0 24px rgba(218, 54, 51, 0.5); }}
+  .btn-call svg {{ width: 36px; height: 36px; fill: currentColor; }}
+  
+  .quick-links {{ display: flex; gap: 16px; }}
+  .quick-links a {{ color: #8b949e; text-decoration: none; font-size: 13px; }}
+  .quick-links a:hover {{ color: #58a6ff; }}
+</style>
+</head>
+<body>
+  <div class="header">
+    <h1>🏠 Homie Voice Call</h1>
+    <p>Live audio connection to your Windows PC</p>
+    <div class="status-badge"><span class="status-dot"></span> PC Connected</div>
+  </div>
+
+  <div class="transcript-box" id="transcript">
+    <div class="bubble assistant">Workstation ready. Tap the call button and say anything to your PC.</div>
+  </div>
+
+  <div class="call-controls">
+    <button class="btn-call" id="callBtn" onclick="toggleCall()">
+      <svg id="callIcon" viewBox="0 0 24 24"><path d="M6.62 10.79a15.053 15.053 0 006.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.25.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.2z"/></svg>
+    </button>
+    <div style="font-size: 13px; color: #8b949e;" id="callStatus">Tap to Start Voice Call</div>
+  </div>
+
+  <div class="quick-links">
+    <a href="/remote">📱 Remote Touchpad</a>
+    <a href="/status">⚡ PC Vitals</a>
+  </div>
+
+<script>
+let inCall = false;
+let recognition = null;
+const transcript = document.getElementById('transcript');
+const callBtn = document.getElementById('callBtn');
+const callStatus = document.getElementById('callStatus');
+
+function addBubble(text, role) {{
+  const b = document.createElement('div');
+  b.className = 'bubble ' + role;
+  b.textContent = text;
+  transcript.appendChild(b);
+  transcript.scrollTop = transcript.scrollHeight;
+}}
+
+function speakTTS(text) {{
+  if ('speechSynthesis' in window) {{
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.rate = 1.0;
+    u.pitch = 1.0;
+    window.speechSynthesis.speak(u);
+  }}
+}}
+
+function initSpeech() {{
+  const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRec) {{
+    alert("Speech recognition is not supported in this browser. Please use Chrome/Safari.");
+    return false;
+  }}
+  recognition = new SpeechRec();
+  recognition.continuous = true;
+  recognition.interimResults = false;
+  recognition.lang = 'en-US';
+
+  recognition.onresult = async (event) => {{
+    const lastResult = event.results[event.results.length - 1];
+    if (lastResult.isFinal) {{
+      const userText = lastResult[0].transcript.trim();
+      if (!userText) return;
+      addBubble(userText, 'user');
+      callStatus.textContent = 'Processing with Homie...';
+      
+      try {{
+        const resp = await fetch('/api/web-call', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ speech: userText, pin: '{conf.get("pin", "1234")}' }})
+        }});
+        const data = await resp.json();
+        addBubble(data.reply, 'assistant');
+        speakTTS(data.reply);
+      }} catch (err) {{
+        addBubble("Network error communicating with PC.", 'assistant');
+      }} finally {{
+        callStatus.textContent = 'Listening... Speak anytime';
+      }}
+    }}
+  }};
+
+  recognition.onerror = (e) => {{
+    console.error('Speech error', e);
+  }};
+
+  recognition.onend = () => {{
+    if (inCall) {{
+      try {{ recognition.start(); }} catch(e) {{}}
+    }}
+  }};
+  return true;
+}}
+
+function toggleCall() {{
+  if (!inCall) {{
+    if (!recognition && !initSpeech()) return;
+    try {{
+      recognition.start();
+      inCall = true;
+      callBtn.classList.add('in-call');
+      callStatus.textContent = 'Listening... Speak anytime';
+      speakTTS("Homie online. I am listening.");
+    }} catch(e) {{
+      console.error(e);
+    }}
+  }} else {{
+    inCall = false;
+    if (recognition) recognition.stop();
+    callBtn.classList.remove('in-call');
+    callStatus.textContent = 'Call Ended. Tap to restart.';
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  }}
+}}
+</script>
+</body>
+</html>"""
+        self._send_response(200, "text/html; charset=utf-8", html)
+
+    def _handle_twilio_incoming(self, form_body):
+        """Generates TwiML response for incoming PSTN call."""
+        params = urllib.parse.parse_qs(form_body)
+        caller = params.get("From", ["Unknown"])[0]
+        logger.info("Incoming phone call from: %s", caller)
+
+        conf = load_phone_config()
+        greeting = conf.get("voice_greeting", "Homie workstation online. How can I assist you?")
+        voice = conf.get("voice_name", "Polly.Danielle")
+
+        # TwiML response with Gather
+        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Gather input="speech" action="/voice/process" method="POST" speechTimeout="auto" timeout="4">
+        <Say voice="{voice}">{greeting}</Say>
+    </Gather>
+    <Say voice="{voice}">I did not hear anything. Goodbye!</Say>
+    <Hangup/>
+</Response>"""
+        self._send_response(200, "application/xml", twiml)
+
+    def _handle_twilio_process(self, form_body):
+        """Processes user speech from Twilio and returns TwiML reply."""
+        params = urllib.parse.parse_qs(form_body)
+        speech = params.get("SpeechResult", [""])[0]
+        caller = params.get("From", ["Unknown"])[0]
+        conf = load_phone_config()
+        voice = conf.get("voice_name", "Polly.Danielle")
+
+        logger.info("Twilio speech from %s: %s", caller, speech)
+        reply = execute_phone_instruction(speech, session_id=f"phone_{caller}")
+        
+        # Check if caller wants to hang up
+        speech_lower = speech.lower()
+        should_hangup = any(w in speech_lower for w in ["bye", "goodbye", "hang up", "exit", "quit", "done"])
+
+        if should_hangup:
+            twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="{voice}">{reply}. Goodbye!</Say>
+    <Hangup/>
+</Response>"""
+        else:
+            twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Gather input="speech" action="/voice/process" method="POST" speechTimeout="auto" timeout="4">
+        <Say voice="{voice}">{reply}</Say>
+    </Gather>
+    <Say voice="{voice}">Call timed out. Goodbye!</Say>
+    <Hangup/>
+</Response>"""
+
+        self._send_response(200, "application/xml", twiml)
+
+    def _handle_device_pairing(self, json_body):
+        try:
+            data = json.loads(json_body) if json_body else {}
+        except Exception:
+            data = {}
+        code = data.get("code", "")
+        token, msg = exchange_pairing_code_for_token(code, device_name=data.get("name", "Mobile Phone"))
+        if token:
+            self._send_response(200, "application/json", json.dumps({"success": True, "token": token, "message": msg}))
+        else:
+            self._send_response(400, "application/json", json.dumps({"success": False, "message": msg}))
+
+    def _handle_web_call_speech(self, json_body):
+        """Handles speech text from Web Audio Duplex portal."""
+        try:
+            data = json.loads(json_body) if json_body else {}
+        except Exception:
+            data = {}
+
+        speech = data.get("speech", "")
+        pin = data.get("pin", "")
+        token = data.get("token", "") or self.headers.get("Authorization", "").replace("Bearer ", "")
+        conf = load_phone_config()
+
+        # Check cryptographic token or fallback PIN
+        is_auth = is_device_token_valid(token) or (conf.get("require_pin", True) and str(pin) == str(conf.get("pin", "1234")))
+
+        if not is_auth:
+            self._send_response(401, "application/json", json.dumps({"reply": "Unauthorized: Device pairing token or PIN required."}))
+            return
+
+        reply = execute_phone_instruction(speech, session_id="web_call")
+        self._send_response(200, "application/json", json.dumps({"reply": reply}))
+
+    def _handle_remote_action(self, json_body):
+        """Handles remote trackpad or presentation clicker action."""
+        try:
+            data = json.loads(json_body) if json_body else {}
+        except Exception:
+            data = {}
+
+        token = data.get("token", "") or self.headers.get("Authorization", "").replace("Bearer ", "")
+        pin = data.get("pin", "")
+        conf = load_phone_config()
+
+        is_auth = is_device_token_valid(token) or (conf.get("require_pin", True) and str(pin) == str(conf.get("pin", "1234")))
+        if not is_auth:
+            self._send_response(401, "application/json", json.dumps({"success": False, "error": "Unauthorized"}))
+            return
+
+        action = data.get("action", "")
+        result = {"success": True, "action": action}
+
+        import pyautogui
+        pyautogui.FAILSAFE = False
+
+        if action == "move":
+            dx = int(data.get("dx", 0))
+            dy = int(data.get("dy", 0))
+            pyautogui.moveRel(dx, dy)
+        elif action == "click":
+            btn = data.get("button", "left")
+            pyautogui.click(button=btn)
+        elif action == "scroll":
+            dy = int(data.get("dy", 0))
+            pyautogui.scroll(dy)
+        elif action == "key":
+            k = data.get("key", "")
+            if k:
+                pyautogui.press(k)
+        elif action == "type":
+            txt = data.get("text", "")
+            if txt:
+                import pyperclip
+                pyperclip.copy(txt)
+                pyautogui.hotkey("ctrl", "v")
+        elif action == "media":
+            cmd = data.get("command", "")
+            windows_tools.send_media_key(cmd)
+        else:
+            result = {"success": False, "error": "unknown action"}
+
+        self._send_response(200, "application/json", json.dumps(result))
+
+def start_phone_gateway(port=5055):
+    """Starts the Phone Gateway HTTP server in a background daemon thread."""
+    global _server_instance, _server_thread
+    if _server_instance is not None:
+        return True, f"Phone Gateway already running on port {port}"
+
+    try:
+        conf = load_phone_config()
+        target_port = port or conf.get("port", 5055)
+        _server_instance = HTTPServer(("0.0.0.0", target_port), PhoneGatewayHandler)
+        _server_thread = threading.Thread(target=_server_instance.serve_forever, daemon=True)
+        _server_thread.start()
+        logger.info("Phone Gateway successfully started on port %s", target_port)
+        return True, f"Phone Gateway listening on port {target_port} (/call, /remote, /voice)"
+    except Exception as e:
+        logger.error("Failed to start Phone Gateway: %s", e)
+        return False, str(e)
+
+def stop_phone_gateway():
+    """Stops the Phone Gateway HTTP server."""
+    global _server_instance, _server_thread
+    if _server_instance is None:
+        return True, "Phone Gateway is not running."
+
+    try:
+        _server_instance.shutdown()
+        _server_instance.server_close()
+        _server_instance = None
+        _server_thread = None
+        return True, "Phone Gateway stopped."
+    except Exception as e:
+        return False, str(e)
+
+if __name__ == "__main__":
+    ok, msg = start_phone_gateway(5055)
+    print("Start result:", ok, msg)
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        stop_phone_gateway()

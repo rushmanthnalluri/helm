@@ -58,7 +58,7 @@ DEFAULT_PREFS = {
     "hotkeyMode": "hold",       # "hold" or "toggle"
     "provider": "gemini",       # "gemini" (Google AI Studio), "nvidia" (NVIDIA NIM), "groq", "ollama", "claude"
     "model": "gemini-flash-lite-latest", # high-availability free tier model
-    "safe": True,               # Safe mode prompts before destructive actions
+    "safe": True,               # Safe mode blocks outgoing chat messages
     "whisperModel": "small",    # "small" (244M, high accuracy), "base", "tiny"
     "whisperLanguage": "en",
     "speak": False,
@@ -597,6 +597,58 @@ def try_fast_command(text):
         ctypes.windll.user32.LockWorkStation()
         return True, "Workstation locked."
 
+    # 21. Phone Gateway & Calling to PC ("start phone server", "phone status", "call my pc")
+    if re.search(r'\b(start\s+(?:phone|call)\s+(?:server|gateway)|enable\s+phone\s+calls)\b', t):
+        import phone_gateway
+        ok, msg = phone_gateway.start_phone_gateway()
+        return True, f"📞 {msg}"
+
+    if re.search(r'\b(stop\s+(?:phone|call)\s+(?:server|gateway)|disable\s+phone\s+calls)\b', t):
+        import phone_gateway
+        ok, msg = phone_gateway.stop_phone_gateway()
+        return True, f"📞 {msg}"
+
+    if re.search(r'\b(phone\s+status|call\s+status|phone\s+gateway\s+status)\b', t):
+        import phone_gateway
+        conf = phone_gateway.load_phone_config()
+        status_txt = "Online" if phone_gateway._server_instance else "Offline"
+        return True, f"📞 **Phone Gateway**: {status_txt} on port {conf.get('port', 5055)}\n• Web Call Portal: `http://localhost:{conf.get('port', 5055)}/call`\n• Remote Touchpad: `http://localhost:{conf.get('port', 5055)}/remote`"
+
+    # 22. Semantic Screen Memory Recall ("what was on my screen", "find on screen")
+    screen_recall_m = re.match(r'^(?:what\s+was\s+on\s+my\s+screen(?:\s+(\d+)\s+minutes?\s+ago)?|screen\s+timeline)$', t)
+    if screen_recall_m:
+        import semantic_screen_memory
+        mins = int(screen_recall_m.group(1)) if screen_recall_m.group(1) else 30
+        summary = semantic_screen_memory.summarize_timeline_text(minutes=mins)
+        return True, summary
+
+    screen_find_m = re.match(r'^(?:find|search)\s+on\s+screen\s+(.+)$', t)
+    if screen_find_m:
+        import semantic_screen_memory
+        q = screen_find_m.group(1).strip()
+        hits = semantic_screen_memory.search_screen_history(q, limit=5)
+        if not hits:
+            return True, f"🔍 No occurrences of '{q}' found in screen history."
+        lines = [f"🔍 Screen History matches for '{q}':"]
+        for h in hits:
+            lines.append(f"• [{h['time_str']}] `{h['proc_name']}` — {h['window_title']}")
+        return True, "\n".join(lines)
+
+    # 23. Claude Chrome Bridge ("ask claude", "send to claude", "claude status")
+    claude_ask_m = re.match(r'^(?:ask\s+claude|send\s+to\s+claude)\s+(.+)$', t)
+    if claude_ask_m:
+        import claude_bridge
+        q = claude_ask_m.group(1).strip()
+        ok, msg = claude_bridge.send_message_to_claude(q)
+        return True, f"🤖 Claude Bridge: {msg}"
+
+    if re.search(r'\b(claude\s+status|claude\s+window)\b', t):
+        import claude_bridge
+        win = claude_bridge.find_claude_window()
+        if win:
+            return True, f"🤖 **Claude AI Chrome**: Detected! Title: `{win['title']}`, HWND: {win['hwnd']}"
+        return True, "🤖 **Claude AI Chrome**: No active Claude AI window detected in Chrome."
+
     return False, ""
 
 # ----------------- Web Search & Read -----------------
@@ -724,13 +776,31 @@ def run_ai(task_text, step_callback=None):
     # Universal engine (Gemini, NVIDIA NIM, Groq, Ollama)
     import ai_engine
     return ai_engine.run_query(task_text, prefs, step_callback=step_callback)
+
+
+def run_claude(task_text, step_callback=None):
+    """Run Claude Code as a text-only provider for Homie's chat response.
+
+    Local actions stay behind Homie's own command and tool routing. Claude Code
+    must not receive unrestricted shell, file, or browser access from this path.
+    """
     claude = shutil.which('claude')
     if not claude:
         return "Claude CLI is not installed or not in PATH. Please install Claude Code."
 
-    system_prompt = build_system_prompt()
     prefs = get_prefs()
-    model = prefs.get('model', 'haiku')
+    model = prefs.get('model') or 'sonnet'
+    # Homie's shared model preference may still contain a Gemini/OpenAI model
+    # name. Claude Code accepts Claude aliases or model IDs only.
+    if model not in {'haiku', 'sonnet', 'opus'} and not str(model).startswith('claude-'):
+        model = 'sonnet'
+    system_prompt = (
+        "You are Homie, a concise Windows desktop assistant. Answer the user's "
+        "request accurately and directly. You cannot operate the computer from "
+        "this response provider; do not claim to have opened apps, changed files, "
+        "sent messages, or performed other actions. Homie's local command router "
+        "handles supported actions separately."
+    )
 
     cmd = [
         claude,
@@ -738,7 +808,8 @@ def run_ai(task_text, step_callback=None):
         task_text,
         '--system-prompt', system_prompt,
         '--model', model,
-        '--dangerously-skip-permissions'
+        '--output-format', 'text',
+        '--tools', ''
     ]
 
     env = os.environ.copy()
@@ -748,32 +819,24 @@ def run_ai(task_text, step_callback=None):
             env['ANTHROPIC_AUTH_TOKEN'] = prefs['apiKey']
 
     try:
-        process = subprocess.Popen(
+        completed = subprocess.run(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            stderr=subprocess.PIPE,
             text=True,
             env=env,
-            bufsize=1
+            timeout=120,
+            check=False
         )
-
-        full_output = []
-        for line in iter(process.stdout.readline, ''):
-            if not line:
-                break
-            full_output.append(line)
-            clean_line = line.strip()
-            if step_callback and clean_line:
-                if clean_line.startswith(('·', '▸', '✓', '-', '*')):
-                    step_callback(clean_line)
-
-        process.stdout.close()
-        process.wait()
-
-        raw_text = "".join(full_output).strip()
-        # Clean up any ANSI escape codes
-        clean_text = re.sub(r'\x1b\[[0-9;]*[mGKF]', '', raw_text)
-        return clean_text if clean_text else "Task completed."
+        clean_text = re.sub(r'\x1b\[[0-9;]*[mGKF]', '', completed.stdout).strip()
+        if completed.returncode != 0:
+            detail = completed.stderr.strip() or clean_text or f'exit code {completed.returncode}'
+            return f"Claude CLI failed: {detail}"
+        if step_callback and clean_text:
+            step_callback(f"✓ {clean_text}")
+        return clean_text or "Claude returned an empty response."
+    except subprocess.TimeoutExpired:
+        return "Claude CLI timed out after 120 seconds."
     except Exception as e:
         return f"Error executing task: {e}"
 

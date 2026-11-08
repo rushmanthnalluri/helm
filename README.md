@@ -66,9 +66,9 @@ Or configure it in your `~/.config/homie/settings.json`:
 
 ---
 
-## 📱 Call / Message Your PC from Telegram (100% Free)
+## 📱 Message or Send Voice Notes to Your PC from Telegram (100% Free)
 
-You can call or message your PC remotely from your phone using Telegram at zero cost:
+You can message Homie from your phone or send a voice note in walkie-talkie style. Homie processes it on your PC and sends a reply:
 
 - 🎙️ **Voice Walkie-Talkie**: Hold the microphone button in Telegram, speak naturally, and send. Homie transcribes your voice with local Whisper, executes the action, and replies back!
 - 📸 **Live Desktop Screen**: Send `/screen` to get an instant high-res photo of your Windows displays.
@@ -77,7 +77,7 @@ You can call or message your PC remotely from your phone using Telegram at zero 
 - 🎵 **Media Playback**: Send `/media pause`, `/media play`, or `/media volup`.
 - 🚀 **App Launcher**: Send `/open chrome` or `/open notepad`.
 - 💬 **Ask Anything**: Any prompt or question is processed by Homie via Gemini / NVIDIA NIM and replied back to your phone.
-- 🛡️ **Secure Auto-Pairing**: The first person to message your bot is registered as the sole owner. Other Telegram users are blocked from controlling your PC.
+- 🛡️ **Local one-time pairing**: New installs do not trust the first person who messages the bot. Copy a short-lived pairing command from Homie's Windows tray menu and send it from your private Telegram chat. Group chats cannot control the PC.
 
 ### How to Set It Up in 60 Seconds:
 1. Open Telegram on your phone and message **`@BotFather`**.
@@ -87,7 +87,19 @@ You can call or message your PC remotely from your phone using Telegram at zero 
    ```powershell
    setx TELEGRAM_BOT_TOKEN "7890123456:AAH..."
    ```
-5. Run Homie (`.\run.bat` or `python app.py`). Homie will automatically connect to Telegram in the background. Now just send a message or voice note to your bot from your phone!
+5. Run Homie (`.\run.bat` or `python app.py`). In the Windows tray menu, choose **Copy Telegram pairing command**, then paste the command into the bot's private chat within 15 minutes. Send `/start` after pairing to see the controls.
+
+---
+
+## 📞 Call Your PC from Any Phone (Duplex Voice & Remote Control)
+
+Homie allows you to make live two-way voice telephone calls to your Windows workstation:
+
+- 🎙️ **Direct Mobile Web Audio Call (`/call`)**: Open `http://<your-pc-ip>:5055/call` in any mobile browser on Wi-Fi. Tap the call button, speak freely to Homie, and hear synthesized vocal answers directly through your phone earpiece with zero lag.
+- ☎️ **Twilio PSTN Inbound Calling (`/voice`)**: Dial a real telephone number from any landline or mobile phone. Homie picks up, says *"Homie workstation online, how can I assist you?"*, executes your requested desktop task, and replies over the phone line.
+- 📱 **Wireless Trackpad & Presentation Remote (`/remote`)**: Turns your smartphone into a wireless trackpad, media controller, and presentation clicker (F5 fullscreen, slide advance, blackout screen, remote keyboard typing).
+- 🧠 **Semantic Screen Memory & Recall**: Automatically indexes what you read or saw on your screen so you can ask: *"What was on my screen 15 minutes ago?"* or *"Find on screen invoice"*.
+- 🤖 **Chrome Claude AI Bridge**: Bi-directional loop bridge interacting directly with your active Claude AI web tab in Google Chrome for autonomous review and iterative engineering loops.
 
 ---
 

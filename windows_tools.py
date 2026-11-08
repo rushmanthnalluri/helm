@@ -633,6 +633,17 @@ def play_youtube(query=""):
 
 def send_chat_message(app_name, recipient="", message=""):
     """Automates sending a chat message to a contact in WhatsApp or Telegram on Windows."""
+    # This low-level entry point is shared by the fast parser, AI tools, and
+    # Telegram commands, so enforce the preference here rather than relying on
+    # any individual caller to remember the policy.
+    try:
+        import homie
+        if homie.get_prefs().get('safe', True):
+            app_disp = "WhatsApp" if app_name.lower() == "whatsapp" else app_name.capitalize()
+            return False, f"Blocked by Safe Mode. Turn Safe Mode off to send a {app_disp} message."
+    except Exception as e:
+        return False, f"Blocked: could not verify Safe Mode ({e})."
+
     import pyautogui
     import pyperclip
     import urllib.parse
