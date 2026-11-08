@@ -207,8 +207,8 @@ MUTATIONS = [
         "id": "MUTATION_19_DEVICE_RE_ENROLLMENT_OVERWRITE_BYPASS",
         "name": "Bypass Device Anti-Overwrite Gate in complete_device_enrollment",
         "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
-        "target": "        if device_id in registry:\n            del _LOCAL_ENROLLMENT_SESSIONS[session_id]\n            return False, f\"DEVICE_EXISTS: Device '{device_id}' is already enrolled. Overwrites are forbidden.\"",
-        "replacement": "        if False: pass # MUTATION BYPASS: anti-overwrite check disabled",
+        "target": "        # Anti-overwrite invariant: Reject re-enrollment of already enrolled devices\n        if device_id in registry:",
+        "replacement": "        # Anti-overwrite invariant: Reject re-enrollment of already enrolled devices\n        if False: # MUTATION BYPASS: allow device overwrite",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch18_phone_portal.py::TestBatch18PhonePortal::test_enrollment_anti_overwrite_rejection"]
     },
     {
@@ -247,8 +247,8 @@ MUTATIONS = [
         "id": "MUTATION_24_SECOND_DEVICE_MULTISIG_BYPASS",
         "name": "Bypass Second Device Multi-Sig Gate in complete_device_enrollment",
         "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
-        "target": "        active_devices = [v for k, v in registry.items() if not v.get(\"revoked\", False)]\n        if active_devices:\n            primary_entry = next((v for v in active_devices if v.get(\"device_id\") == \"primary_phone\"), active_devices[0])\n            if not primary_approval_sig:",
-        "replacement": "        active_devices = [v for k, v in registry.items() if not v.get(\"revoked\", False)]\n        if active_devices:\n            primary_entry = next((v for v in active_devices if v.get(\"device_id\") == \"primary_phone\"), active_devices[0])\n            if False: # MUTATION BYPASS: approval check bypassed",
+        "target": "            if not primary_approval_sig:\n                with _ENROLLMENT_LOCK:\n                    _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)\n                return False, \"APPROVAL_REQUIRED: Adding a device requires cryptographic approval from an active device.\"",
+        "replacement": "            if False: # MUTATION BYPASS: approval check bypassed\n                pass",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch29_security_hardening.py::TestBatch29SecurityHardening::test_6_second_device_requires_primary_approval"]
     },
     {
@@ -263,8 +263,8 @@ MUTATIONS = [
         "id": "MUTATION_26_PENDING_CHALLENGES_AUTH_BYPASS",
         "name": "Bypass Authentication Gate in _handle_get_pending_challenges",
         "file": os.path.join(BASE_DIR, "phone_gateway.py"),
-        "target": 'if not is_device_token_valid(token):\n            self._send_response(401, "application/json", json.dumps({"error": "Unauthorized: Valid paired device token required"}))\n            return',
-        "replacement": 'if False: # MUTATION BYPASS: auth check disabled\n            pass',
+        "target": '    def _handle_get_pending_challenges(self, parsed):\n        import phone_approval_portal\n        # Authenticate caller device\n        headers = getattr(self, "headers", None) or {}\n        token = headers.get("X-Homie-Token", "") or headers.get("Authorization", "").replace("Bearer ", "")\n        if not is_device_token_valid(token):',
+        "replacement": '    def _handle_get_pending_challenges(self, parsed):\n        import phone_approval_portal\n        # Authenticate caller device\n        headers = getattr(self, "headers", None) or {}\n        token = headers.get("X-Homie-Token", "") or headers.get("Authorization", "").replace("Bearer ", "")\n        if False: # MUTATION BYPASS: auth check disabled',
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch29_security_hardening.py::TestBatch29SecurityHardening::test_3_unauthenticated_listing_and_challenge_cancellation_denied"]
     },
     {
@@ -287,24 +287,24 @@ MUTATIONS = [
         "id": "MUTATION_29_SUPERVISOR_ENVELOPE_BYPASS",
         "name": "Bypass Policy Envelope Check in PolicySupervisor._handle_propose",
         "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
-        "target": "        # 5.1. Policy Envelope domain scoping, step budget & prohibited environments\n        if getattr(self, \"envelope\", None) and getattr(self.envelope, \"is_active\", False):",
-        "replacement": "        # 5.1. Policy Envelope domain scoping, step budget & prohibited environments\n        if False: # MUTATION BYPASS: envelope check disabled",
+        "target": "        ks_to_commit = 0\n        if getattr(self, \"envelope\", None) and getattr(self.envelope, \"is_active\", False):",
+        "replacement": "        ks_to_commit = 0\n        if False: # MUTATION BYPASS: envelope check disabled",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch30_security_hardening.py::TestBatch30SecurityHardening::test_3_supervisor_envelope_enforcement_in_handle_propose"]
     },
     {
         "id": "MUTATION_30_REVOKED_PRIMARY_BYPASS",
         "name": "Bypass Active Device Multi-Sig Gate in complete_device_enrollment",
         "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
-        "target": "        # Second-device enrollment multi-sig gate: Adding a new device requires active device approval\n        active_devices = [v for k, v in registry.items() if not v.get(\"revoked\", False)]\n        if active_devices:",
-        "replacement": "        # Second-device enrollment multi-sig gate: Adding a new device requires active device approval\n        active_devices = [v for k, v in registry.items() if not v.get(\"revoked\", False)]\n        if False: # MUTATION BYPASS: active device check disabled",
+        "target": "        # Second-device enrollment multi-sig gate: Adding a new device requires active device approval\n        active_device_ids = [k for k, v in registry.items() if not v.get(\"revoked\", False)]\n        if active_device_ids:",
+        "replacement": "        # Second-device enrollment multi-sig gate: Adding a new device requires active device approval\n        active_device_ids = [k for k, v in registry.items() if not v.get(\"revoked\", False)]\n        if False: # MUTATION BYPASS: active device check disabled",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch30_security_hardening.py::TestBatch30SecurityHardening::test_5_enrollment_multi_sig_prevents_revoked_primary_bypass"]
     },
     {
         "id": "MUTATION_31_SESSION_BOUND_MULTISIG_BYPASS",
         "name": "Bypass Session-Bound V2 Multi-Sig Verification in complete_device_enrollment",
         "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
-        "target": "            now = int(time.time())\n            v2_verified = False",
-        "replacement": "            now = int(time.time())\n            v2_verified = True # MUTATION BYPASS: session binding check bypassed",
+        "target": "            v2_verified = False\n            for test_exp in candidate_expiries:",
+        "replacement": "            v2_verified = True # MUTATION BYPASS: session binding check bypassed\n            for test_exp in candidate_expiries:",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch30_security_hardening.py::TestBatch30SecurityHardening::test_6_enrollment_multi_sig_binds_session_and_expiry"]
     },
     {
@@ -314,6 +314,46 @@ MUTATIONS = [
         "target": "    if is_enrollment_locked_out():\n        logger.warning(\"Enrollment blocked: Global pairing attempt lockout is active.\")\n        return \"\"",
         "replacement": "    if False: # MUTATION BYPASS: global lockout check disabled\n        pass",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch30_security_hardening.py::TestBatch30SecurityHardening::test_7_global_persistent_enrollment_lockout"]
+    },
+    {
+        "id": "MUTATION_33_DOT_BOUNDARY_DOMAIN_BYPASS",
+        "name": "Bypass Dot-Boundary Domain Scoping in is_domain_allowed",
+        "file": os.path.join(BASE_DIR, "policy_envelope.py"),
+        "target": "    return c == a or c.endswith(\".\" + a)",
+        "replacement": "    return c.endswith(a) # MUTATION BYPASS: allows fakebank.com to match bank.com",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch31_security_hardening.py::TestBatch31SecurityHardening::test_1_dot_boundary_domain_matching_in_policy_envelope"]
+    },
+    {
+        "id": "MUTATION_34_ENROLLMENT_LOCKOUT_ENTRY_BYPASS",
+        "name": "Bypass Global Lockout Check in complete_device_enrollment",
+        "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
+        "target": "    if is_enrollment_locked_out():\n        return False, \"DENY: Global enrollment lockout is active. Please wait or reset via console.\"",
+        "replacement": "    if False: # MUTATION BYPASS: entry lockout check bypassed\n        pass",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch31_security_hardening.py::TestBatch31SecurityHardening::test_7_enrollment_lockout_enforced_in_complete_device_enrollment"]
+    },
+    {
+        "id": "MUTATION_35_CONSOLE_RECOVERY_TOKEN_BYPASS",
+        "name": "Bypass Console Recovery Token Verification in reset_pairing_lockout",
+        "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
+        "target": "        if recovery_token and isinstance(recovery_token, str):\n            exp = _CONSOLE_RECOVERY_TOKENS.pop(recovery_token.strip(), None)\n            if exp and time.time() <= exp:\n                valid = True",
+        "replacement": "        if recovery_token and isinstance(recovery_token, str):\n            valid = True # MUTATION BYPASS: accept any arbitrary token string",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch31_security_hardening.py::TestBatch31SecurityHardening::test_6_console_recovery_token_for_pairing_lockout_reset"]
+    },
+    {
+        "id": "MUTATION_36_OUTCOME_UNKNOWN_EXCEPTION_BYPASS",
+        "name": "Bypass UNKNOWN Outcome Classification on Exception in _handle_propose",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": "            if execution_success:\n                outcome_status = \"SUCCESS\"\n            elif exception_occurred:\n                outcome_status = \"UNKNOWN\"",
+        "replacement": "            if execution_success:\n                outcome_status = \"SUCCESS\"\n            elif exception_occurred:\n                outcome_status = \"FAILED\" # MUTATION BYPASS: misclassify exception as FAILED",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch31_security_hardening.py::TestBatch31SecurityHardening::test_10_audit_ledger_outcome_unknown_on_exception_and_locks_on_write_failure"]
+    },
+    {
+        "id": "MUTATION_37_SUPERVISOR_DIRECT_APPROVAL_BYPASS",
+        "name": "Bypass Supervisor Direct Approved Action Lookup in _handle_propose",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": "                current_epoch = taint_tracker.get_taint_epoch()\n                if self.consume_approved_action(tool, args_hash, current_epoch):",
+        "replacement": "                current_epoch = taint_tracker.get_taint_epoch()\n                if False: # MUTATION BYPASS: disable direct internal approval lookup",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch31_security_hardening.py::TestBatch31SecurityHardening::test_11_supervisor_direct_internal_approval_lookup"]
     }
 ]
 
@@ -343,7 +383,7 @@ def _safe_copy(src: str, dst: str, retries: int = 5):
 
 def run_mutation_tests() -> bool:
     print("=" * 75)
-    print("=== BATCH 30 EXPANDED AUTOMATED CI MUTATION TEST HARNESS ===")
+    print("=== BATCH 31 EXPANDED AUTOMATED CI MUTATION TEST HARNESS ===")
     print("=" * 75)
     print(f"Total Security Mutations to Evaluate: {len(MUTATIONS)}\n")
 

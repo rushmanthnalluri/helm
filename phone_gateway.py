@@ -552,7 +552,11 @@ function renderChallenges(challenges) {
     card.id = 'ch-' + ch.step_up_id;
 
     const remainingSecs = Math.max(0, ch.expiry - Math.floor(Date.now() / 1000));
-    const canonicalText = ch.canonical_args || JSON.stringify(ch.arguments, null, 2);
+    const canonicalText = ch.canonical_args;
+    if (!canonicalText) {
+      console.error("Malformed challenge: missing canonical_args", ch);
+      return;
+    }
 
     const headerDiv = document.createElement('div');
     headerDiv.style.cssText = 'display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;';
@@ -638,20 +642,41 @@ async function getOrCreateDeviceKey() {
     _deviceCryptoKey = keyPair;
     return keyPair;
   } catch(e) {
-    console.warn("WebCrypto generateKey fallback:", e);
+    console.warn("WebCrypto generateKey error:", e);
     return null;
   }
 }
 
 async function signAndApprove(ch, payloadSize) {
+  if (!window.isSecureContext || !window.crypto || !window.crypto.subtle) {
+    alert("❌ Security Error: WebCrypto requires a Secure Context (HTTPS or localhost). Signing aborted.");
+    return;
+  }
+
   if (payloadSize > 65536) {
     alert("❌ Security Gate: Action argument payload exceeds maximum 64KB size limit. Signing aborted.");
     return;
   }
   const devId = getDeviceId();
 
-  // 1. Locally recompute challenge hash from displayed fields ("What You See Is What You Sign")
-  const rawChallenge = "CHALLENGE_V2|" + ch.device_id + "|" + ch.tool_name + "|" + ch.args_hash + "|" + ch.nonce + "|" + ch.expiry + "|" + ch.taint_epoch + "|" + ch.challenge_seq;
+  // 1. "What You See Is What You Sign": Hash the exact displayed argument text in DOM
+  const pre = document.querySelector('#ch-' + ch.step_up_id + ' pre.args');
+  const displayedArgs = pre ? pre.textContent : '';
+  if (!displayedArgs) {
+    alert("❌ Security Error: Displayed arguments not found in DOM. Signing aborted.");
+    return;
+  }
+  const argsBytes = new TextEncoder().encode(displayedArgs);
+  const argsDigest = await window.crypto.subtle.digest("SHA-256", argsBytes);
+  const computedArgsHash = Array.from(new Uint8Array(argsDigest)).map(b => b.toString(16).padStart(2, '0')).join('');
+
+  if (computedArgsHash.toLowerCase() !== ch.args_hash.toLowerCase()) {
+    alert("❌ Security Violation: Displayed argument hash (" + computedArgsHash + ") does NOT match server challenge args_hash (" + ch.args_hash + ")! Tampering detected. Signing aborted.");
+    return;
+  }
+
+  // 2. Recompute challenge hash using verified computedArgsHash
+  const rawChallenge = "CHALLENGE_V2|" + ch.device_id + "|" + ch.tool_name + "|" + computedArgsHash + "|" + ch.nonce + "|" + ch.expiry + "|" + ch.taint_epoch + "|" + ch.challenge_seq;
   const rawBytes = new TextEncoder().encode(rawChallenge);
   const digestBuffer = await window.crypto.subtle.digest("SHA-256", rawBytes);
   const localHashHex = Array.from(new Uint8Array(digestBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -661,34 +686,53 @@ async function signAndApprove(ch, payloadSize) {
     return;
   }
 
-  // 2. Perform asymmetric cryptographic signature
+  if (typeof ch.expected_counter !== 'number') {
+    alert("❌ Security Error: Monotonic counter missing from server challenge. Signing aborted.");
+    return;
+  }
+
+  // 3. Perform asymmetric cryptographic signature (Fail-Closed on error)
   let signatureHex = "";
   try {
     const keyPair = await getOrCreateDeviceKey();
-    if (keyPair && keyPair.privateKey) {
-      const challengeBytes = new TextEncoder().encode(ch.challenge_hash);
-      const sigBuffer = await window.crypto.subtle['sign'](
-        { name: "ECDSA", hash: { name: "SHA-256" } },
-        keyPair.privateKey,
-        challengeBytes
-      );
-      signatureHex = Array.from(new Uint8Array(sigBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+    if (!keyPair || !keyPair.privateKey) {
+      alert("❌ WebCrypto Error: Keypair generation or retrieval failed. Signing aborted.");
+      return;
     }
+    const challengeBytes = new TextEncoder().encode(ch.challenge_hash);
+    const sigBuffer = await window.crypto.subtle['sign'](
+      { name: "ECDSA", hash: { name: "SHA-256" } },
+      keyPair.privateKey,
+      challengeBytes
+    );
+    signatureHex = Array.from(new Uint8Array(sigBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
   } catch(err) {
-    console.warn("Signing failed:", err);
+    alert("❌ Signing Error: Cryptographic signing threw exception: " + err);
+    return; // STOP IMMEDIATELY! NEVER SEND EMPTY SIGNATURE
+  }
+
+  if (!signatureHex) {
+    alert("❌ Signing Error: Empty signature produced. Submission aborted.");
+    return;
   }
 
   const sigPayload = {
     step_up_id: ch.step_up_id,
     device_id: devId,
-    counter: ch.expected_counter || 1,
+    counter: ch.expected_counter,
     signature: signatureHex
   };
+
+  const urlParams = new URLSearchParams(window.location.search);
+  const token = urlParams.get('token') || sessionStorage.getItem('homie_token') || localStorage.getItem('homie_token') || '';
 
   try {
     const res = await fetch('/api/submit-approval', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + token
+      },
       body: JSON.stringify(sigPayload)
     });
     const result = await res.json();
@@ -705,10 +749,15 @@ async function signAndApprove(ch, payloadSize) {
 
 async function denyChallenge(stepUpId) {
   const devId = getDeviceId();
+  const urlParams = new URLSearchParams(window.location.search);
+  const token = urlParams.get('token') || sessionStorage.getItem('homie_token') || localStorage.getItem('homie_token') || '';
   try {
     await fetch('/api/deny-challenge', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + token
+      },
       body: JSON.stringify({ step_up_id: stepUpId, device_id: devId })
     });
   } catch(e) {
@@ -766,13 +815,6 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        # Only reflect Origin if valid local origin; NEVER send wildcard '*'
-        headers = getattr(self, "headers", None) or {}
-        origin = headers.get("Origin")
-        if origin and is_request_origin_allowed(origin):
-            self.send_header("Access-Control-Allow-Origin", origin)
-            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Homie-Token")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.end_headers()
         if isinstance(body, str):
             body = body.encode("utf-8")
@@ -870,10 +912,6 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(html.encode("utf-8"))))
         self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'self' 'unsafe-inline'; connect-src 'self'; style-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'self'")
-        headers = getattr(self, "headers", None) or {}
-        origin = headers.get("Origin")
-        if origin and is_request_origin_allowed(origin):
-            self.send_header("Access-Control-Allow-Origin", origin)
         self.end_headers()
         self.wfile.write(html.encode("utf-8"))
 
@@ -883,6 +921,13 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
             data = json.loads(body) if body else {}
         except Exception:
             data = {}
+
+        headers = getattr(self, "headers", None) or {}
+        token = headers.get("X-Homie-Token", "") or headers.get("Authorization", "").replace("Bearer ", "") or (data.get("token") if isinstance(data, dict) else "")
+        if not is_device_token_valid(token):
+            self._send_response(401, "application/json", json.dumps({"error": "Unauthorized: Valid paired device token required"}))
+            return
+
         step_up_id = data.get("step_up_id", "")
         dev_id = data.get("device_id", "primary_phone")
         ok, msg = phone_approval_portal.deny_approval_challenge(step_up_id, device_id=dev_id)
@@ -947,6 +992,13 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
             data = json.loads(body) if body else {}
         except Exception:
             data = {}
+
+        headers = getattr(self, "headers", None) or {}
+        token = headers.get("X-Homie-Token", "") or headers.get("Authorization", "").replace("Bearer ", "") or (data.get("token") if isinstance(data, dict) else "")
+        if not is_device_token_valid(token):
+            self._send_response(401, "application/json", json.dumps({"error": "Unauthorized: Valid paired device token required"}))
+            return
+
         step_up_id = data.get("step_up_id", "")
         sig = data.get("signature", "")
         dev_id = data.get("device_id", "primary_phone")
@@ -957,12 +1009,8 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
             except (ValueError, TypeError):
                 counter = None
 
-        headers = getattr(self, "headers", None) or {}
-        token = headers.get("X-Homie-Token", "") or headers.get("Authorization", "").replace("Bearer ", "")
-        is_auth = is_device_token_valid(token)
-
         ok, msg, item = phone_approval_portal.verify_device_approval(
-            step_up_id, sig, device_id=dev_id, counter=counter, is_authenticated_caller=is_auth
+            step_up_id, sig, device_id=dev_id, counter=counter, is_authenticated_caller=True
         )
         status = 200 if ok else 400
         self._send_response(status, "application/json", json.dumps({

@@ -66,6 +66,15 @@ HIGH_RISK_CONTROL_KEYWORDS: Set[str] = {
 }
 
 
+def is_domain_allowed(candidate: str, allowed: str) -> bool:
+    """Strict host or dot-boundary subdomain matching.
+    Prevents subdomain confusion / substring spoofing (e.g., 'fakebank.com' matching 'bank.com').
+    """
+    c = candidate.lower().strip()
+    a = allowed.lower().strip()
+    return c == a or c.endswith("." + a)
+
+
 class PolicyEnvelope:
     """Represents a bounded workstation policy envelope signed cryptographically on phone."""
 
@@ -162,56 +171,49 @@ class PolicyEnvelope:
         logger.info("Policy envelope %s activated by device %s", self.envelope_id, self.device_id)
         return True, "Envelope successfully activated"
 
-    def check_and_consume(
+    def check_boundary(
         self,
         tool_name: str,
         arguments: Dict[str, Any],
         current_process_image: Optional[str],
         current_taint_epoch: int,
         current_domain: Optional[str] = None
-    ) -> Tuple[bool, str]:
-        """Enforces envelope boundary:
-        - Must be active
-        - Current time <= expiry
-        - current_taint_epoch == envelope.taint_epoch
-        - tool_name in allowed_action_types
-        - target process image in allowed_process_images
-        - browser domain matches allowed_domains
-        - Semantic high-risk control classification
-        - step_budget and keystroke_cap not exceeded
+    ) -> Tuple[bool, str, int]:
+        """Validates envelope boundaries WITHOUT consuming steps or keystrokes (Two-Phase Commit Phase 1).
+        Returns: (is_valid, reason_message, keystrokes_for_action)
         """
         if not self.is_active:
-            return False, "DENY: Envelope is not active"
+            return False, "DENY: Envelope is not active", 0
 
         now = time.time()
         if now > self.expiry:
             self.is_active = False
-            return False, "DENY: Envelope has expired"
+            return False, "DENY: Envelope has expired", 0
 
         if current_taint_epoch != self.taint_epoch:
             self.is_active = False
-            return False, f"DENY: Taint epoch mismatch (envelope={self.taint_epoch}, current={current_taint_epoch})"
+            return False, f"DENY: Taint epoch mismatch (envelope={self.taint_epoch}, current={current_taint_epoch})", 0
 
         # Check action type
         if tool_name not in self.allowed_action_types:
-            return False, f"DENY: Action '{tool_name}' not permitted in active envelope"
+            return False, f"DENY: Action '{tool_name}' not permitted in active envelope", 0
 
         # Check target process image
         proc_clean = ""
         if current_process_image:
             proc_clean = os.path.basename(current_process_image).lower()
             if proc_clean not in self.allowed_process_images:
-                return False, f"DENY: Target process '{proc_clean}' not in envelope allowed list: {self.allowed_process_images}"
+                return False, f"DENY: Target process '{proc_clean}' not in envelope allowed list: {self.allowed_process_images}", 0
 
-        # Browser Domain Scoping Check
+        # Browser Domain Scoping Check with Strict Dot-Boundary Suffix Matching
         if (proc_clean in BROWSER_IMAGES or current_domain) and self.allowed_domains:
-            if not current_domain or not any(current_domain.lower().endswith(d) for d in self.allowed_domains):
-                return False, f"DENY: Browser domain '{current_domain}' outside envelope domain scope: {self.allowed_domains}"
+            if not current_domain or not any(is_domain_allowed(current_domain, d) for d in self.allowed_domains):
+                return False, f"DENY: Browser domain '{current_domain}' outside envelope domain scope: {self.allowed_domains}", 0
 
         # Non-bypassable high-risk class check (tool name)
         for high_risk_kw in HIGH_RISK_PER_STEP_CLASSES:
             if high_risk_kw in tool_name.lower():
-                return False, f"DENY: High-risk action '{tool_name}' requires per-step step-up human approval"
+                return False, f"DENY: High-risk action '{tool_name}' requires per-step step-up human approval", 0
 
         # Semantic High-Risk Control & Stealth Submission Detection
         elem_name = str(arguments.get("element_name", "")).lower()
@@ -220,15 +222,15 @@ class PolicyEnvelope:
         # Check element name against high-risk keywords (e.g. "Continue", "Next", "Agree" in payment/submission context)
         for kw in HIGH_RISK_CONTROL_KEYWORDS:
             if kw in elem_name:
-                return False, f"DENY: Semantic high-risk control detected ('{elem_name}' matches '{kw}'). Requires per-step step-up human approval."
+                return False, f"DENY: Semantic high-risk control detected ('{elem_name}' matches '{kw}'). Requires per-step step-up human approval.", 0
 
         # Check Enter-to-submit form pattern
         if "\n" in text_arg or "\r" in text_arg or arguments.get("key") in ("enter", "return"):
-            return False, "DENY: Keystroke contains Enter-to-submit form submission. Requires per-step step-up human approval."
+            return False, "DENY: Keystroke contains Enter-to-submit form submission. Requires per-step step-up human approval.", 0
 
         # Check step budget
         if self.steps_consumed >= self.step_budget:
-            return False, f"DENY: Step budget exceeded ({self.steps_consumed}/{self.step_budget})"
+            return False, f"DENY: Step budget exceeded ({self.steps_consumed}/{self.step_budget})", 0
 
         # Check keystroke cap for text entry actions
         keystrokes = 0
@@ -236,15 +238,33 @@ class PolicyEnvelope:
             text = arguments.get("text", "")
             keystrokes = len(str(text))
             if self.keystrokes_consumed + keystrokes > self.keystroke_cap:
-                return False, f"DENY: Keystroke cap exceeded ({self.keystrokes_consumed + keystrokes}/{self.keystroke_cap})"
+                return False, f"DENY: Keystroke cap exceeded ({self.keystrokes_consumed + keystrokes}/{self.keystroke_cap})", 0
 
-        # Consume budget
+        return True, "ALLOWED_BY_ENVELOPE", keystrokes
+
+    def commit_step(self, keystrokes: int = 0):
+        """Commits one step and keystrokes to the envelope budget (Two-Phase Commit Phase 2)."""
         self.steps_consumed += 1
-        self.keystrokes_consumed += keystrokes
-
+        self.keystrokes_consumed += max(0, int(keystrokes))
         logger.info(
-            "Envelope %s consumed: step %d/%d, keystrokes %d/%d",
+            "Envelope %s committed: step %d/%d, keystrokes %d/%d",
             self.envelope_id, self.steps_consumed, self.step_budget,
             self.keystrokes_consumed, self.keystroke_cap
         )
-        return True, "ALLOWED_BY_ENVELOPE"
+
+    def check_and_consume(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        current_process_image: Optional[str],
+        current_taint_epoch: int,
+        current_domain: Optional[str] = None
+    ) -> Tuple[bool, str]:
+        """Convenience method combining boundary check and immediate budget commit."""
+        valid, msg, ks = self.check_boundary(
+            tool_name, arguments, current_process_image, current_taint_epoch, current_domain
+        )
+        if not valid:
+            return False, msg
+        self.commit_step(ks)
+        return True, msg

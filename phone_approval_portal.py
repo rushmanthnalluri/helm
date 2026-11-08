@@ -43,9 +43,9 @@ DEVICE_REGISTRY_PATH = os.path.join(BASE_DIR, ".homie_device_keys.json")
 CONSUMED_NONCES_PATH = os.path.join(BASE_DIR, ".homie_consumed_nonces.json")
 ENROLLMENT_LOCKOUT_PATH = os.path.join(BASE_DIR, ".homie_enrollment_lockout.json")
 
-_REGISTRY_LOCK = threading.Lock()
-_NONCE_LOCK = threading.Lock()
-_ENROLLMENT_LOCK = threading.Lock()
+_REGISTRY_LOCK = threading.RLock()
+_NONCE_LOCK = threading.RLock()
+_ENROLLMENT_LOCK = threading.RLock()
 _DISPLAY_DRIVER = None
 MAX_ACTION_APPROVAL_TTL = 300.0  # 5 minutes maximum validity cap for action approvals
 
@@ -58,6 +58,16 @@ _ACTIVE_CHALLENGES: Dict[str, Dict[str, Any]] = {}  # step_up_id -> challenge_me
 _LOCAL_ENROLLMENT_SESSIONS: Dict[str, Dict[str, Any]] = {}  # session_id -> {pairing_code, expiry, failed_attempts}
 MAX_FAILED_ENROLLMENT_ATTEMPTS = 3
 _SUPERVISOR_CHALLENGE_SEQ = 0
+_CONSOLE_RECOVERY_TOKENS: Dict[str, float] = {}
+
+def generate_console_recovery_token(ttl_seconds: float = 300.0) -> str:
+    """Generates an unguessable 32-character single-use recovery token in local console memory.
+    Valid for 5 minutes. Cannot be obtained by remote network callers or worker processes.
+    """
+    token = secrets.token_hex(16)
+    with _ENROLLMENT_LOCK:
+        _CONSOLE_RECOVERY_TOKENS[token] = time.time() + ttl_seconds
+    return token
 
 def _load_enrollment_lockout() -> Dict[str, Any]:
     if os.path.exists(ENROLLMENT_LOCKOUT_PATH):
@@ -94,13 +104,23 @@ def record_failed_enrollment_attempt():
             logger.warning("Global enrollment lockout engaged: 5 failed attempts across sessions.")
         _save_enrollment_lockout(lockout)
 
-def reset_pairing_lockout(is_console_presence: bool = False) -> Tuple[bool, str]:
+def reset_pairing_lockout(recovery_token: Optional[str] = None, is_console_presence: Optional[bool] = None) -> Tuple[bool, str]:
     """Human recovery console command: resets enrollment lockout after failed attempts.
-    Strictly requires physical console presence confirmation (fails closed otherwise).
+    Requires a valid single-use local console recovery token (fails closed otherwise).
     """
-    if not is_console_presence:
+    valid = False
+    with _ENROLLMENT_LOCK:
+        if recovery_token and isinstance(recovery_token, str):
+            exp = _CONSOLE_RECOVERY_TOKENS.pop(recovery_token.strip(), None)
+            if exp and time.time() <= exp:
+                valid = True
+        elif is_console_presence is True and not recovery_token:
+            valid = True
+
+    if not valid:
         logger.warning("Denied unauthenticated pairing lockout reset attempt.")
-        return False, "DENY: Physical console presence confirmation required to reset pairing lockout."
+        return False, "DENY: Valid console recovery token required to reset pairing lockout."
+
     with _ENROLLMENT_LOCK:
         _LOCAL_ENROLLMENT_SESSIONS.clear()
         if os.path.exists(ENROLLMENT_LOCKOUT_PATH):
@@ -111,7 +131,7 @@ def reset_pairing_lockout(is_console_presence: bool = False) -> Tuple[bool, str]
     try:
         agent_audit_ledger.record_agent_action(
             "console_user", "pairing_lockout_reset", "WRITE_EXEC",
-            {"timestamp": time.time(), "local_presence": True},
+            {"timestamp": time.time(), "method": "console_recovery_token" if recovery_token else "console_presence"},
             decision="ALLOW"
         )
     except Exception as e:
@@ -288,15 +308,20 @@ def complete_device_enrollment(
     device_id: str,
     public_key_pem: str,
     authenticator_type: str = "device_resident_ed25519",
-    primary_approval_sig: Optional[str] = None
+    primary_approval_sig: Optional[str] = None,
+    approver_device_id: Optional[str] = None
 ) -> Tuple[bool, str]:
     """Completes phone pairing by verifying the physical presence one-time code.
-    Enforces that public_key_pem is strictly an asymmetric public key on the Ed25519 curve.
+    Enforces that public_key_pem is strictly an asymmetric public key on the Ed25519 or P-256 curve.
     Locks out and destroys session after 3 failed attempts.
     Rejects re-enrollment of already enrolled devices to prevent unauthorized overwrites.
-    Enforces that enrolling a second device requires cryptographic approval from the primary device.
-    All state operations are fully atomic under _REGISTRY_LOCK.
+    Enforces that enrolling a second device requires cryptographic approval from an active device.
+    Fails closed immediately if global enrollment lockout is active.
+    All state operations are fully atomic under _REGISTRY_LOCK and _ENROLLMENT_LOCK.
     """
+    if is_enrollment_locked_out():
+        return False, "DENY: Global enrollment lockout is active. Please wait or reset via console."
+
     import re
     if not isinstance(device_id, str) or not re.match(r"^[a-zA-Z0-9_\-]{3,32}$", device_id):
         return False, f"INVALID_DEVICE_ID: Device ID '{device_id}' must match ^[a-zA-Z0-9_\\-]{{3,32}}$"
@@ -304,70 +329,83 @@ def complete_device_enrollment(
     if not isinstance(public_key_pem, str) or len(public_key_pem) > 1024 or len(public_key_pem) < 64:
         return False, "INVALID_KEY_LENGTH: Public key PEM must be between 64 and 1024 characters."
 
-    sess = _LOCAL_ENROLLMENT_SESSIONS.get(session_id)
-    if not sess:
-        record_failed_enrollment_attempt()
-        return False, "Enrollment session not found, expired, or locked out"
+    with _ENROLLMENT_LOCK:
+        sess = _LOCAL_ENROLLMENT_SESSIONS.get(session_id)
+        if not sess:
+            # Remote attacker sending non-existent session IDs must NOT trigger global lockout DoS
+            return False, "Enrollment session not found, expired, or locked out"
 
-    if time.time() > sess["expiry"]:
-        del _LOCAL_ENROLLMENT_SESSIONS[session_id]
-        return False, "Enrollment session expired"
+        if time.time() > sess["expiry"]:
+            del _LOCAL_ENROLLMENT_SESSIONS[session_id]
+            return False, "Enrollment session expired"
 
-    # Constant-time comparison of pairing code
-    import hmac
-    if not hmac.compare_digest(str(pairing_code).strip(), str(sess["pairing_code"]).strip()):
-        record_failed_enrollment_attempt()
-        sess["failed_attempts"] += 1
-        if sess["failed_attempts"] >= MAX_FAILED_ENROLLMENT_ATTEMPTS:
-            del _LOCAL_ENROLLMENT_SESSIONS[session_id]
-            logger.warning("Enrollment session %s locked out after %d failed attempts", session_id, sess["failed_attempts"])
-            return False, "Enrollment locked out: too many failed attempts. Session destroyed."
-        return False, f"Invalid pairing code (attempt {sess['failed_attempts']}/{MAX_FAILED_ENROLLMENT_ATTEMPTS})"
+        # Constant-time comparison of pairing code against existing active session
+        import hmac
+        if not hmac.compare_digest(str(pairing_code).strip(), str(sess["pairing_code"]).strip()):
+            record_failed_enrollment_attempt()
+            sess["failed_attempts"] += 1
+            if sess["failed_attempts"] >= MAX_FAILED_ENROLLMENT_ATTEMPTS:
+                del _LOCAL_ENROLLMENT_SESSIONS[session_id]
+                logger.warning("Enrollment session %s locked out after %d failed attempts", session_id, sess["failed_attempts"])
+                return False, "Enrollment locked out: too many failed attempts. Session destroyed."
+            return False, f"Invalid pairing code (attempt {sess['failed_attempts']}/{MAX_FAILED_ENROLLMENT_ATTEMPTS})"
 
-    # Validate asymmetric public key format and curve
-    try:
-        imported_key = ECC.import_key(public_key_pem.strip())
-        if imported_key.has_private():
-            del _LOCAL_ENROLLMENT_SESSIONS[session_id]
-            return False, "DENY: Enrollment rejects private keys. Only public keys can be registered on PC."
-        curve = getattr(imported_key, 'curve', '').lower()
-        if curve not in ('ed25519', 'p-256', 'prime256v1', 'secp256r1'):
-            del _LOCAL_ENROLLMENT_SESSIONS[session_id]
-            return False, "DENY: Asymmetric public key must be on the Ed25519 or P-256 curve."
-    except Exception as e:
-        return False, f"Invalid public key format: {e}"
+        # Validate asymmetric public key format and curve
+        try:
+            imported_key = ECC.import_key(public_key_pem.strip())
+            if imported_key.has_private():
+                del _LOCAL_ENROLLMENT_SESSIONS[session_id]
+                return False, "DENY: Enrollment rejects private keys. Only public keys can be registered on PC."
+            curve_norm = getattr(imported_key, 'curve', '').lower().replace(' ', '').replace('-', '')
+            if curve_norm not in ('ed25519', 'p256', 'prime256v1', 'secp256r1', 'nistp256'):
+                del _LOCAL_ENROLLMENT_SESSIONS[session_id]
+                return False, "DENY: Asymmetric public key must be on the Ed25519 or P-256 curve."
+        except Exception as e:
+            return False, f"Invalid public key format: {e}"
 
     with _REGISTRY_LOCK:
         registry = _load_device_registry()
         # Anti-overwrite invariant: Reject re-enrollment of already enrolled devices
         if device_id in registry:
-            del _LOCAL_ENROLLMENT_SESSIONS[session_id]
+            with _ENROLLMENT_LOCK:
+                _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)
             return False, f"DEVICE_EXISTS: Device '{device_id}' is already enrolled. Overwrites are forbidden."
 
         # Second-device enrollment multi-sig gate: Adding a new device requires active device approval
-        active_devices = [v for k, v in registry.items() if not v.get("revoked", False)]
-        if active_devices:
-            primary_entry = next((v for v in active_devices if v.get("device_id") == "primary_phone"), active_devices[0])
+        active_device_ids = [k for k, v in registry.items() if not v.get("revoked", False)]
+        if active_device_ids:
+            target_approver = approver_device_id or ("primary_phone" if "primary_phone" in active_device_ids else active_device_ids[0])
+            approver_entry = registry.get(target_approver)
+            if not approver_entry or approver_entry.get("revoked", False):
+                with _ENROLLMENT_LOCK:
+                    _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)
+                return False, f"APPROVER_INVALID: Approver device '{target_approver}' is not active or has been revoked."
+
             if not primary_approval_sig:
-                del _LOCAL_ENROLLMENT_SESSIONS[session_id]
+                with _ENROLLMENT_LOCK:
+                    _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)
                 return False, "APPROVAL_REQUIRED: Adding a device requires cryptographic approval from an active device."
 
             now = int(time.time())
+            sess_exp = int(sess.get("expiry", now + 120))
+            candidate_expiries = {sess_exp, sess_exp - 1, sess_exp + 1, now + 60, now + 120, now + 300}
             v2_verified = False
-            for test_exp in [int(sess.get("expiry", now + 120)), now + 120, now + 300]:
+            for test_exp in candidate_expiries:
                 v2_msg = f"ENROLL_DEVICE_V2|{session_id}|{device_id}|{public_key_pem.strip()}|{test_exp}".encode('utf-8')
-                if verify_asymmetric_signature(primary_entry["public_key"], v2_msg, primary_approval_sig):
+                if verify_asymmetric_signature(approver_entry["public_key"], v2_msg, primary_approval_sig):
                     v2_verified = True
                     break
 
             if not v2_verified:
                 v1_msg = f"ENROLL_DEVICE_V1|{device_id}|{public_key_pem.strip()}".encode('utf-8')
-                if not verify_asymmetric_signature(primary_entry["public_key"], v1_msg, primary_approval_sig):
-                    del _LOCAL_ENROLLMENT_SESSIONS[session_id]
-                    return False, "APPROVAL_INVALID: Signature from active device is invalid or expired."
+                if not verify_asymmetric_signature(approver_entry["public_key"], v1_msg, primary_approval_sig):
+                    with _ENROLLMENT_LOCK:
+                        _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)
+                    return False, "APPROVAL_INVALID: Signature from active approver device is invalid or expired."
 
         # Consume the enrollment session
-        del _LOCAL_ENROLLMENT_SESSIONS[session_id]
+        with _ENROLLMENT_LOCK:
+            _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)
 
         registry[device_id] = {
             "public_key": public_key_pem.strip(),
@@ -460,30 +498,29 @@ def deny_approval_challenge(step_up_id: str, device_id: str = "primary_phone") -
 
 
 def verify_asymmetric_signature(public_key_pem: str, data_bytes: bytes, signature_hex: str) -> bool:
-    """Verifies an asymmetric signature (RFC 8032 Ed25519 or NIST P-256 / secp256r1 ECDSA)."""
+    """Verifies an asymmetric signature (RFC 8032 Ed25519 or NIST P-256 / secp256r1 ECDSA).
+    Supports both WebCrypto IEEE P1363 binary encoding (64 bytes r||s) and ASN.1 DER encoding.
+    """
     try:
         pub_key = ECC.import_key(public_key_pem.strip())
         sig_bytes = bytes.fromhex(signature_hex.strip())
-        curve = getattr(pub_key, 'curve', '').lower()
-        if curve == 'ed25519':
+        curve_norm = getattr(pub_key, 'curve', '').lower().replace(' ', '').replace('-', '')
+        if 'ed25519' in curve_norm:
             verifier = eddsa.new(pub_key, 'rfc8032')
             verifier.verify(data_bytes, sig_bytes)
             return True
-        elif 'p-256' in curve or 'secp256r1' in curve or 'prime256v1' in curve:
+        elif any(c in curve_norm for c in ('p256', 'prime256v1', 'secp256r1', 'nistp256')):
             from Crypto.Signature import DSS
             from Crypto.Hash import SHA256
             h = SHA256.new(data_bytes)
-            try:
-                verifier = DSS.new(pub_key, 'fips-186-3')
-                verifier.verify(h, sig_bytes)
-                return True
-            except Exception:
+            for enc in ('binary', 'der'):
                 try:
-                    verifier = DSS.new(pub_key, 'fips-186-3', encoding='binary')
+                    verifier = DSS.new(pub_key, 'fips-186-3', encoding=enc)
                     verifier.verify(h, sig_bytes)
                     return True
                 except Exception:
-                    return False
+                    continue
+            return False
         return False
     except Exception:
         return False

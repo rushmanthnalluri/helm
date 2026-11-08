@@ -204,10 +204,20 @@ def get_allowed_tools_map() -> Dict[str, str]:
     return {t["name"]: t.get("capabilityTier", "WRITE_EXEC") for t in homie_mcp.MCP_TOOLS}
 
 
+_ACTIVE_SUPERVISOR = None
+
+def get_active_supervisor() -> Optional['PolicySupervisor']:
+    """Returns the globally active PolicySupervisor instance if running."""
+    global _ACTIVE_SUPERVISOR
+    return _ACTIVE_SUPERVISOR
+
+
 class PolicySupervisor:
     """High-Integrity Out-of-Process Policy Supervisor & Actuator Dispatcher."""
 
     def __init__(self, authorized_worker_pid: Optional[int] = None, state_db_path: Optional[str] = None):
+        global _ACTIVE_SUPERVISOR
+        _ACTIVE_SUPERVISOR = self
         self.authorized_worker_pid = authorized_worker_pid
         self.session_epoch = int(time.time())
         self.state = STATE_INIT
@@ -225,6 +235,8 @@ class PolicySupervisor:
         self._supervisor_secret = crypto_vault.derive_subkey("actuator", length=32)
         self._consumed_intent_tokens = set()
         self._intent_lock = threading.Lock()
+        self._approved_actions: Dict[Tuple[str, str, int], float] = {}
+        self._approved_lock = threading.Lock()
         self.actuator = SupervisorActuator(self)
         self.envelope = None
         
@@ -387,6 +399,25 @@ class PolicySupervisor:
     def verify_intent_token(self, token: Optional[str], tool: str, caller_id: str, seq: int) -> bool:
         """Legacy helper for backwards compatibility."""
         return False
+
+    def record_approved_action(self, tool: str, args_hash: str, taint_epoch: int, ttl: float = 120.0):
+        """Directive 14: Stores direct challenge approval inside supervisor private memory."""
+        with self._approved_lock:
+            self._approved_actions[(tool, args_hash.lower(), int(taint_epoch))] = time.time() + ttl
+
+    def consume_approved_action(self, tool: str, args_hash: str, taint_epoch: int) -> bool:
+        """Directive 14: Atomically checks and consumes a direct approved action without worker bearer token."""
+        with self._approved_lock:
+            key = (tool, args_hash.lower(), int(taint_epoch))
+            exp = self._approved_actions.pop(key, None)
+            now = time.time()
+            # Prune expired
+            to_del = [k for k, v in self._approved_actions.items() if now > v]
+            for k in to_del:
+                self._approved_actions.pop(k, None)
+            if exp and now <= exp:
+                return True
+            return False
 
     def clear_taint_and_reboot_worker(self, human_auth_token: str) -> Tuple[bool, str]:
         """Supervisor-side taint clearing: Clears workstation taint, bumps session epoch,
@@ -659,17 +690,28 @@ class PolicySupervisor:
                 })
 
         # 5.1. Policy Envelope domain scoping, step budget & prohibited environments
+        # Resolve real active foreground process & domain via supervisor inspection
+        fg_info = windows_tools.get_foreground_window()
+        supervisor_proc = (fg_info.get("proc_name") or "") if fg_info else ""
+        current_proc = supervisor_proc or args.get("target_process") or args.get("app_name")
+        current_domain = args.get("domain") or args.get("url") or args.get("target")
+        if current_domain and ("http://" in str(current_domain) or "https://" in str(current_domain)):
+            import urllib.parse
+            try:
+                current_domain = urllib.parse.urlparse(current_domain).hostname or current_domain
+            except Exception:
+                pass
+        if not current_domain and fg_info and supervisor_proc in policy_envelope.BROWSER_IMAGES:
+            title = fg_info.get("title", "")
+            for part in title.split(" - "):
+                if "." in part and " " not in part.strip():
+                    current_domain = part.strip()
+                    break
+
+        ks_to_commit = 0
         if getattr(self, "envelope", None) and getattr(self.envelope, "is_active", False):
-            current_proc = args.get("target_process") or args.get("app_name")
-            current_domain = args.get("domain") or args.get("url") or args.get("target")
-            if current_domain and ("http://" in str(current_domain) or "https://" in str(current_domain)):
-                import urllib.parse
-                try:
-                    current_domain = urllib.parse.urlparse(current_domain).hostname or current_domain
-                except Exception:
-                    pass
             current_epoch = taint_tracker.get_taint_epoch()
-            env_ok, env_msg = self.envelope.check_and_consume(
+            env_ok, env_msg, ks_to_commit = self.envelope.check_boundary(
                 tool, args, current_proc, current_epoch, current_domain
             )
             if not env_ok:
@@ -686,7 +728,10 @@ class PolicySupervisor:
         )
         if not allowed:
             if requires_step_up:
-                if step_up_token:
+                current_epoch = taint_tracker.get_taint_epoch()
+                if self.consume_approved_action(tool, args_hash, current_epoch):
+                    logger.info("Supervisor authorized action '%s' via internal direct approval for caller '%s'", tool, caller_id)
+                elif step_up_token:
                     valid_step_up, step_up_msg = taint_tracker.verify_and_consume_step_up_token(
                         step_up_token, tool, args
                     )
@@ -724,6 +769,10 @@ class PolicySupervisor:
                 "result": f"[SHADOW_SIMULATION] {tool} evaluated with parameters {args}"
             })
 
+        # Commit policy envelope step budget now that authorization has succeeded
+        if getattr(self, "envelope", None) and getattr(self.envelope, "is_active", False):
+            self.envelope.commit_step(ks_to_commit)
+
         # 11. TWO-PHASE ACTION EXECUTION:
         # Phase 1: Supervisor mints unforgeable cryptographic INTENT token & records in audit ledger
         intent_token = self.mint_intent_token(tool, args, caller_id, frame_seq)
@@ -733,6 +782,7 @@ class PolicySupervisor:
 
         # Phase 2: Privileged Supervisor Actuator executes effect WITH verified intent token
         execution_success = False
+        exception_occurred = False
         result = ""
         try:
             try:
@@ -746,16 +796,25 @@ class PolicySupervisor:
                 self._transition_to_locked(f"Complete mediation violation: {cme}")
             except Exception as e:
                 execution_success = False
+                exception_occurred = True
                 result = f"Error executing tool in supervisor: {e}"
         finally:
             # Phase 3: Record OUTCOME in HMAC-SHA256 audit ledger in finally block to guarantee ledger audit invariant
-            outcome_status = "SUCCESS" if execution_success else "FAILED"
+            if execution_success:
+                outcome_status = "SUCCESS"
+            elif exception_occurred:
+                outcome_status = "UNKNOWN"
+            else:
+                outcome_status = "FAILED"
+
             try:
                 agent_audit_ledger.record_agent_action(
                     caller_id, tool, tier, args, decision=f"OUTCOME:{req_id}:{outcome_status}"
                 )
-            except Exception:
-                pass
+            except Exception as ledger_err:
+                logger.critical("Audit ledger write failure during outcome recording: %s", ledger_err)
+                self._transition_to_locked(f"Audit ledger failure: {ledger_err}")
+
             self.active_request_id = None
 
         return self._encode_reply(MSG_DECISION, {
