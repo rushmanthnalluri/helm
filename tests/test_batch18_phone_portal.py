@@ -145,9 +145,12 @@ class TestBatch18PhonePortal(unittest.TestCase):
         code = phone_approval_portal.get_session_pairing_code_for_testing(sess_id)
         self.assertEqual(len(code), 6)
 
-        # 2. Complete pairing with asymmetric public key (rejects private key)
+        # 2. Complete pairing with asymmetric public key (approved by primary device)
         new_phone_priv, new_phone_pub_pem = generate_test_phone_keypair()
-        ok, msg = complete_device_enrollment(sess_id, code, "secure_phone_01", new_phone_pub_pem)
+        from Crypto.Signature import eddsa
+        enroll_msg = f"ENROLL_DEVICE_V1|secure_phone_01|{new_phone_pub_pem.strip()}".encode('utf-8')
+        primary_sig = eddsa.new(self.phone_priv, 'rfc8032').sign(enroll_msg).hex()
+        ok, msg = complete_device_enrollment(sess_id, code, "secure_phone_01", new_phone_pub_pem, primary_approval_sig=primary_sig)
         self.assertTrue(ok)
         self.assertIn("successfully paired", msg)
 
@@ -176,7 +179,7 @@ class TestBatch18PhonePortal(unittest.TestCase):
         sig2 = sign_test_challenge(new_phone_priv, ch2["challenge_hash"])
         ok2, msg2, _ = verify_device_approval("step_test_007", sig2, device_id="secure_phone_01", counter=1)
         self.assertFalse(ok2)
-        self.assertIn("Replay detected", msg2)
+        self.assertTrue("COUNTER_MISMATCH" in msg2 or "Replay detected" in msg2)
 
         # 5. Revocation test
         revoked = revoke_device_key("secure_phone_01")

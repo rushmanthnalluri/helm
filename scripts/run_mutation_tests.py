@@ -18,6 +18,13 @@ Applies real code mutations across the critical defense layers to verify that:
 15. Supervisor Tier Allowlist is enforcing complete mediation on every non-READ_ONLY tier.
 16. Macro Fresh-Session Taint Dodge is strictly prevented by workstation-wide taint enforcement.
 17. Action Approval Taint Epoch Gate is rejecting approvals from stale epochs.
+18. Monotonic Counter Gate is strictly enforcing positive monotonic counters on device approvals.
+19. Max Action Approval TTL Cap is rejecting forged approvals with excessive TTLs.
+20. Unknown Tool Registry Gate is rejecting execution of unallowlisted tools in actuator.
+21. Atomic Nonce Lock is preventing concurrent race replay conditions.
+22. Second-Device Multi-Sig Gate is requiring primary device signature before enrolling additional devices.
+23. Actuator Mandatory Sequence Number is strictly requiring positive sequence numbers.
+24. Pending Challenges Authentication Gate is denying unauthenticated challenge listing.
 
 If any test suite stays green under a mutation, this script flags a CRITICAL FAILURE.
 All mutations MUST be detected and killed (100% Mutation Kill Rate).
@@ -194,8 +201,8 @@ MUTATIONS = [
         "id": "MUTATION_19_DEVICE_RE_ENROLLMENT_OVERWRITE_BYPASS",
         "name": "Bypass Device Anti-Overwrite Gate in complete_device_enrollment",
         "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
-        "target": "if device_id in registry:\n        del _LOCAL_ENROLLMENT_SESSIONS[session_id]\n        return False, f\"DEVICE_EXISTS: Device '{device_id}' is already enrolled. Overwrites are forbidden.\"",
-        "replacement": "if False: pass # MUTATION BYPASS: anti-overwrite check disabled",
+        "target": "        if device_id in registry:\n            del _LOCAL_ENROLLMENT_SESSIONS[session_id]\n            return False, f\"DEVICE_EXISTS: Device '{device_id}' is already enrolled. Overwrites are forbidden.\"",
+        "replacement": "        if False: pass # MUTATION BYPASS: anti-overwrite check disabled",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch18_phone_portal.py::TestBatch18PhonePortal::test_enrollment_anti_overwrite_rejection"]
     },
     {
@@ -221,13 +228,68 @@ MUTATIONS = [
         "target": "if tool not in allowed_tools:",
         "replacement": "if False: # MUTATION BYPASS: unknown tool check disabled",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch20_complete_mediation.py::TestBatch20CompleteMediationAndRedTeam::test_supervisor_actuator_rejects_unknown_tool"]
+    },
+    {
+        "id": "MUTATION_23_ATOMIC_NONCE_LOCK_BYPASS",
+        "name": "Bypass Atomic Nonce Check in check_and_record_consumed_nonce",
+        "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
+        "target": "with _NONCE_LOCK:\n        nonces = _load_consumed_nonces()\n        if nonce in nonces:\n            return False",
+        "replacement": "if False: # MUTATION BYPASS: atomic nonce check disabled\n            pass",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch29_security_hardening.py::TestBatch29SecurityHardening::test_4_concurrent_nonce_replay_race_condition"]
+    },
+    {
+        "id": "MUTATION_24_SECOND_DEVICE_MULTISIG_BYPASS",
+        "name": "Bypass Second Device Multi-Sig Gate in complete_device_enrollment",
+        "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
+        "target": "if len(registry) > 0:\n            primary_entry = registry.get(\"primary_phone\")",
+        "replacement": "if False: # MUTATION BYPASS: multisig check disabled\n            primary_entry = registry.get(\"primary_phone\")",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch29_security_hardening.py::TestBatch29SecurityHardening::test_6_second_device_requires_primary_approval"]
+    },
+    {
+        "id": "MUTATION_25_ACTUATOR_SEQ_REQUIRED_BYPASS",
+        "name": "Bypass Mandatory Sequence Check in SupervisorActuator.execute_actuator",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": 'if seq is None or not isinstance(seq, int) or seq <= 0:\n            raise ValueError("Sequence number seq is strictly required and must be a positive integer!")',
+        "replacement": 'if False: # MUTATION BYPASS: seq check disabled\n            pass',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch29_security_hardening.py::TestBatch29SecurityHardening::test_8_mandatory_sequence_number_rejection_of_fallback"]
+    },
+    {
+        "id": "MUTATION_26_PENDING_CHALLENGES_AUTH_BYPASS",
+        "name": "Bypass Authentication Gate in _handle_get_pending_challenges",
+        "file": os.path.join(BASE_DIR, "phone_gateway.py"),
+        "target": 'if not is_device_token_valid(token):\n            self._send_response(401, "application/json", json.dumps({"error": "Unauthorized: Valid paired device token required"}))\n            return',
+        "replacement": 'if False: # MUTATION BYPASS: auth check disabled\n            pass',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch29_security_hardening.py::TestBatch29SecurityHardening::test_3_unauthenticated_listing_and_challenge_cancellation_denied"]
     }
 ]
 
 
+def _safe_write(path: str, content: str, retries: int = 5):
+    for i in range(retries):
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+            return
+        except Exception:
+            if i == retries - 1:
+                raise
+            time.sleep(0.15)
+
+
+def _safe_copy(src: str, dst: str, retries: int = 5):
+    for i in range(retries):
+        try:
+            shutil.copy2(src, dst)
+            return
+        except Exception:
+            if i == retries - 1:
+                raise
+            time.sleep(0.15)
+
+
 def run_mutation_tests() -> bool:
     print("=" * 75)
-    print("=== BATCH 28 EXPANDED AUTOMATED CI MUTATION TEST HARNESS ===")
+    print("=== BATCH 29 EXPANDED AUTOMATED CI MUTATION TEST HARNESS ===")
     print("=" * 75)
     print(f"Total Security Mutations to Evaluate: {len(MUTATIONS)}\n")
 
@@ -261,12 +323,11 @@ def run_mutation_tests() -> bool:
             continue
 
         backup_path = file_path + ".mut_bak"
-        shutil.copy2(file_path, backup_path)
+        _safe_copy(file_path, backup_path)
 
         try:
             mutated_content = original_content.replace(target, replacement, 1)
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(mutated_content)
+            _safe_write(file_path, mutated_content)
 
             proc = subprocess.run(
                 test_cmd,
@@ -297,7 +358,7 @@ def run_mutation_tests() -> bool:
         finally:
             if os.path.exists(backup_path):
                 try:
-                    shutil.copy2(backup_path, file_path)
+                    _safe_copy(backup_path, file_path)
                 except Exception:
                     pass
                 for _ in range(5):

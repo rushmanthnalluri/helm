@@ -43,7 +43,14 @@ DEVICE_REGISTRY_PATH = os.path.join(BASE_DIR, ".homie_device_keys.json")
 CONSUMED_NONCES_PATH = os.path.join(BASE_DIR, ".homie_consumed_nonces.json")
 
 _REGISTRY_LOCK = threading.Lock()
+_NONCE_LOCK = threading.Lock()
+_DISPLAY_DRIVER = None
 MAX_ACTION_APPROVAL_TTL = 300.0  # 5 minutes maximum validity cap for action approvals
+
+def set_display_driver(driver_fn):
+    """Allows test harness to inject a capture-excluded display driver without environment sniffing."""
+    global _DISPLAY_DRIVER
+    _DISPLAY_DRIVER = driver_fn
 
 _ACTIVE_CHALLENGES: Dict[str, Dict[str, Any]] = {}  # step_up_id -> challenge_metadata
 _LOCAL_ENROLLMENT_SESSIONS: Dict[str, Dict[str, Any]] = {}  # session_id -> {pairing_code, expiry, failed_attempts}
@@ -87,15 +94,29 @@ def _save_consumed_nonces(nonces: Dict[str, int]):
 
 def is_nonce_consumed(nonce: str) -> bool:
     """Checks whether a nonce has already been consumed and is still within validity window."""
-    nonces = _load_consumed_nonces()
-    return nonce in nonces
+    with _NONCE_LOCK:
+        nonces = _load_consumed_nonces()
+        return nonce in nonces
 
 
 def record_consumed_nonce(nonce: str, expiry: int):
-    """Marks a nonce as consumed in persistent storage."""
-    nonces = _load_consumed_nonces()
-    nonces[nonce] = int(expiry)
-    _save_consumed_nonces(nonces)
+    """Marks a nonce as consumed in persistent storage under _NONCE_LOCK."""
+    with _NONCE_LOCK:
+        nonces = _load_consumed_nonces()
+        nonces[nonce] = int(expiry)
+        _save_consumed_nonces(nonces)
+
+
+def check_and_record_consumed_nonce(nonce: str, expiry: int) -> bool:
+    """Atomically checks if nonce is consumed, and if not, records it under _NONCE_LOCK.
+    Returns True if nonce was fresh and recorded successfully, False if already consumed (replay)."""
+    with _NONCE_LOCK:
+        nonces = _load_consumed_nonces()
+        if nonce in nonces:
+            return False
+        nonces[nonce] = int(expiry)
+        _save_consumed_nonces(nonces)
+        return True
 
 
 # ==============================================================================
@@ -128,18 +149,19 @@ def _save_device_registry(registry: Dict[str, Any]):
 
 
 def revoke_device_key(device_id: str) -> bool:
-    """Revokes a paired device key, immediately blocking all further approvals from it."""
-    registry = _load_device_registry()
-    if device_id in registry:
-        registry[device_id]["revoked"] = True
-        _save_device_registry(registry)
-        # Clear any active challenges targeting this device
-        to_del = [sid for sid, ch in _ACTIVE_CHALLENGES.items() if ch.get("device_id") == device_id]
-        for sid in to_del:
-            del _ACTIVE_CHALLENGES[sid]
-        logger.warning("Revoked device key %s", device_id)
-        return True
-    return False
+    """Revokes a paired device key under _REGISTRY_LOCK, immediately blocking all further approvals."""
+    with _REGISTRY_LOCK:
+        registry = _load_device_registry()
+        if device_id in registry:
+            registry[device_id]["revoked"] = True
+            _save_device_registry(registry)
+            # Clear any active challenges targeting this device
+            to_del = [sid for sid, ch in _ACTIVE_CHALLENGES.items() if ch.get("device_id") == device_id]
+            for sid in to_del:
+                del _ACTIVE_CHALLENGES[sid]
+            logger.warning("Revoked device key %s", device_id)
+            return True
+        return False
 
 
 # ==============================================================================
@@ -148,6 +170,8 @@ def revoke_device_key(device_id: str) -> bool:
 
 def display_secure_pairing_code(code: str) -> bool:
     """Displays pairing code on a window excluded from screen capture (WDA_EXCLUDEFROMCAPTURE)."""
+    if _DISPLAY_DRIVER is not None:
+        return _DISPLAY_DRIVER(code)
     try:
         import homie_hud
         hud = homie_hud.HomieHardwareHUD()
@@ -172,7 +196,7 @@ def start_local_enrollment(ttl_seconds: float = 120.0) -> str:
 
     # Display code strictly on capture-excluded HUD
     hud_shown = display_secure_pairing_code(pairing_code)
-    if not hud_shown and not os.environ.get("HOMIE_TEST_ENV"):
+    if not hud_shown:
         logger.error("Capture-excluded HUD display failed. Aborting pairing ceremony for physical security.")
         return ""
 
@@ -196,13 +220,23 @@ def complete_device_enrollment(
     pairing_code: str,
     device_id: str,
     public_key_pem: str,
-    authenticator_type: str = "device_resident_ed25519"
+    authenticator_type: str = "device_resident_ed25519",
+    primary_approval_sig: Optional[str] = None
 ) -> Tuple[bool, str]:
     """Completes phone pairing by verifying the physical presence one-time code.
     Enforces that public_key_pem is strictly an asymmetric public key on the Ed25519 curve.
     Locks out and destroys session after 3 failed attempts.
     Rejects re-enrollment of already enrolled devices to prevent unauthorized overwrites.
+    Enforces that enrolling a second device requires cryptographic approval from the primary device.
+    All state operations are fully atomic under _REGISTRY_LOCK.
     """
+    import re
+    if not isinstance(device_id, str) or not re.match(r"^[a-zA-Z0-9_\-]{3,32}$", device_id):
+        return False, f"INVALID_DEVICE_ID: Device ID '{device_id}' must match ^[a-zA-Z0-9_\\-]{{3,32}}$"
+
+    if not isinstance(public_key_pem, str) or len(public_key_pem) > 1024 or len(public_key_pem) < 64:
+        return False, "INVALID_KEY_LENGTH: Public key PEM must be between 64 and 1024 characters."
+
     sess = _LOCAL_ENROLLMENT_SESSIONS.get(session_id)
     if not sess:
         return False, "Enrollment session not found, expired, or locked out"
@@ -221,12 +255,6 @@ def complete_device_enrollment(
             return False, "Enrollment locked out: too many failed attempts. Session destroyed."
         return False, f"Invalid pairing code (attempt {sess['failed_attempts']}/{MAX_FAILED_ENROLLMENT_ATTEMPTS})"
 
-    # Anti-overwrite invariant: Reject re-enrollment of already enrolled devices
-    registry = _load_device_registry()
-    if device_id in registry:
-        del _LOCAL_ENROLLMENT_SESSIONS[session_id]
-        return False, f"DEVICE_EXISTS: Device '{device_id}' is already enrolled. Overwrites are forbidden."
-
     # Validate asymmetric public key format and curve
     try:
         imported_key = ECC.import_key(public_key_pem.strip())
@@ -239,10 +267,28 @@ def complete_device_enrollment(
     except Exception as e:
         return False, f"Invalid public key format: {e}"
 
-    # Consume the enrollment session
-    del _LOCAL_ENROLLMENT_SESSIONS[session_id]
-
     with _REGISTRY_LOCK:
+        registry = _load_device_registry()
+        # Anti-overwrite invariant: Reject re-enrollment of already enrolled devices
+        if device_id in registry:
+            del _LOCAL_ENROLLMENT_SESSIONS[session_id]
+            return False, f"DEVICE_EXISTS: Device '{device_id}' is already enrolled. Overwrites are forbidden."
+
+        # Second-device enrollment multi-sig gate: Adding a new device requires primary device approval
+        if len(registry) > 0:
+            primary_entry = registry.get("primary_phone") or next((v for v in registry.values() if not v.get("revoked", False)), None)
+            if primary_entry and not primary_entry.get("revoked", False):
+                if not primary_approval_sig:
+                    del _LOCAL_ENROLLMENT_SESSIONS[session_id]
+                    return False, "PRIMARY_APPROVAL_REQUIRED: Adding a second device requires cryptographic approval from the primary device."
+                enroll_msg = f"ENROLL_DEVICE_V1|{device_id}|{public_key_pem.strip()}".encode('utf-8')
+                if not verify_asymmetric_signature(primary_entry["public_key"], enroll_msg, primary_approval_sig):
+                    del _LOCAL_ENROLLMENT_SESSIONS[session_id]
+                    return False, "PRIMARY_APPROVAL_INVALID: Signature from primary device is invalid."
+
+        # Consume the enrollment session
+        del _LOCAL_ENROLLMENT_SESSIONS[session_id]
+
         registry[device_id] = {
             "public_key": public_key_pem.strip(),
             "authenticator_type": authenticator_type,
@@ -285,10 +331,16 @@ def generate_approval_challenge(
     device_id: str = "primary_phone",
     ttl_seconds: float = 120.0
 ) -> Dict[str, Any]:
-    """Binds approval challenge to SHA-256(CHALLENGE_V2 | device_id | tool | args_hash | nonce | expiry | taint_epoch | seq)."""
+    """Binds approval challenge to SHA-256(CHALLENGE_V2 | device_id | tool | args_hash | nonce | expiry | taint_epoch | seq).
+    Also derives server expected counter and stores canonical_args string for safe UI rendering.
+    """
     global _SUPERVISOR_CHALLENGE_SEQ
     _SUPERVISOR_CHALLENGE_SEQ += 1
     challenge_seq = _SUPERVISOR_CHALLENGE_SEQ
+
+    registry = _load_device_registry()
+    dev_entry = registry.get(device_id, {})
+    expected_counter = dev_entry.get("counter", 0) + 1
 
     clean_args = json.dumps(arguments, sort_keys=True, separators=(',', ':')) if isinstance(arguments, dict) else str(arguments)
     args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
@@ -311,11 +363,13 @@ def generate_approval_challenge(
         "device_id": device_id,
         "tool_name": tool_name,
         "arguments": arguments,
+        "canonical_args": clean_args,
         "args_hash": args_hash,
         "nonce": nonce,
         "expiry": expiry,
         "taint_epoch": taint_epoch,
         "challenge_seq": challenge_seq,
+        "expected_counter": expected_counter,
         "challenge_hash": challenge_hash,
         "canonical_prompt": canonical_prompt,
         "session_id": session_id,
@@ -342,13 +396,14 @@ def verify_device_approval(
     step_up_id: str,
     signature: str,
     device_id: str = "primary_phone",
-    counter: Optional[int] = None
+    counter: Optional[int] = None,
+    is_authenticated_caller: bool = True
 ) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
     """Verifies a phone-signed cryptographic approval with verification-first ordering.
     1. Looks up enrolled device public key (fail closed on unknown device).
     2. Verifies Ed25519 signature FIRST before updating counter or consuming challenge.
-    3. On failure, rate-limits failed attempts without deleting challenge immediately.
-    4. On success, verifies monotonic counter, updates counter, and consumes challenge.
+    3. On failure, unauthenticated callers CANNOT cancel challenges (anti-DoS).
+    4. On success, verifies monotonic counter matches server expected counter (anti-poisoning), updates counter, and consumes challenge.
     """
     item = _ACTIVE_CHALLENGES.get(step_up_id)
     if not item:
@@ -361,6 +416,11 @@ def verify_device_approval(
     # Mandatory monotonic counter check
     if counter is None:
         return False, "COUNTER_REQUIRED: Monotonic signature counter is mandatory for replay protection", None
+
+    # Anti-counter-poisoning gate: Counter must match server expected counter
+    expected_counter = item.get("expected_counter")
+    if expected_counter is not None and counter != expected_counter:
+        return False, f"COUNTER_MISMATCH: Submitted counter {counter} does not match expected counter {expected_counter}", None
 
     now = int(time.time())
     if now > int(item["expiry"]):
@@ -381,12 +441,13 @@ def verify_device_approval(
     sig_ok = verify_asymmetric_signature(dev_entry["public_key"], raw_challenge_bytes, signature)
 
     if not sig_ok:
-        item["failed_attempts"] = item.get("failed_attempts", 0) + 1
-        if item["failed_attempts"] >= 3:
-            del _ACTIVE_CHALLENGES[step_up_id]
-            logger.warning("Challenge %s canceled after 3 failed signature attempts", step_up_id)
-            return False, "Challenge canceled: too many failed verification attempts", None
-        return False, f"Cryptographic signature verification failed (attempt {item['failed_attempts']}/3)", None
+        if is_authenticated_caller:
+            item["failed_attempts"] = item.get("failed_attempts", 0) + 1
+            if item["failed_attempts"] >= 3:
+                del _ACTIVE_CHALLENGES[step_up_id]
+                logger.warning("Challenge %s canceled after 3 failed signature attempts", step_up_id)
+                return False, "Challenge canceled: too many failed verification attempts", None
+        return False, f"Cryptographic signature verification failed (attempt {item.get('failed_attempts', 0)}/3)", None
 
     # Step 2: Signature is authentic -> check anti-replay counter under registry lock
     with _REGISTRY_LOCK:
@@ -472,13 +533,10 @@ def verify_action_approval(
     if approval_epoch != current_epoch:
         return False, f"TAINT_EPOCH_MISMATCH: Approval signed under taint epoch {approval_epoch}, current epoch is {current_epoch}"
 
-    # Persistent single-use anti-replay nonce check
+    # Persistent single-use anti-replay nonce check format
     nonce = str(approval["nonce"]).strip()
     if not nonce or len(nonce) < 16:
         return False, "MALFORMED_NONCE: Nonce must be at least 16 characters"
-
-    if is_nonce_consumed(nonce):
-        return False, "REPLAY_REJECTED: Approval nonce has already been consumed"
 
     # Device enrollment check (FAIL CLOSED on unknown device)
     device_id = str(approval["device_id"]).strip()
@@ -496,11 +554,13 @@ def verify_action_approval(
         f"{str(approval['payload_hash']).lower()}|{nonce}|{expiry}|{approval_epoch}"
     )
 
-    # Asymmetric Ed25519 signature verification
+    # Step 1: Asymmetric Ed25519 signature verification FIRST (prevents unauthenticated nonce-burning DoS)
     sig_ok = verify_asymmetric_signature(dev_entry["public_key"], raw_msg.encode('utf-8'), str(approval["signature"]))
     if not sig_ok:
         return False, "SIGNATURE_INVALID: Asymmetric Ed25519 signature failed verification"
 
-    # Consume nonce persistently
-    record_consumed_nonce(nonce, expiry)
+    # Step 2: Atomic check-and-record under _NONCE_LOCK (prevents concurrent race replays)
+    if not check_and_record_consumed_nonce(nonce, expiry):
+        return False, "REPLAY_REJECTED: Approval nonce has already been consumed"
+
     return True, "Approval signature and action binding verified"

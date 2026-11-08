@@ -463,6 +463,7 @@ def _get_signing_portal_html() -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; connect-src 'self'; style-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'self'">
 <title>Homie Hardware Approval Portal</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
@@ -551,43 +552,85 @@ function renderChallenges(challenges) {
     card.id = 'ch-' + ch.step_up_id;
 
     const remainingSecs = Math.max(0, ch.expiry - Math.floor(Date.now() / 1000));
-    const argsStr = JSON.stringify(ch.arguments, null, 2);
+    const canonicalText = ch.canonical_args || JSON.stringify(ch.arguments, null, 2);
 
-    card.innerHTML = `
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-        <span class="badge badge-warn">⚠️ Step-Up Authorization</span>
-        <span style="font-size:12px; color:#f85149;">Expires in ${remainingSecs}s</span>
-      </div>
-      <div class="field">
-        <label>Action / Tool</label>
-        <div class="val" style="color:#58a6ff; font-weight:700;">${ch.tool_name}</div>
-      </div>
-      <div class="field">
-        <label>Target Arguments (What You See Is What You Sign)</label>
-        <pre class="args">${argsStr}</pre>
-      </div>
-      <div class="field">
-        <label>Session & Seq Binding</label>
-        <div class="val" style="font-size:12px; color:#8b949e;">Session: ${ch.session_id} | Seq: ${ch.challenge_seq} | Epoch: ${ch.taint_epoch}</div>
-      </div>
-      <div class="field">
-        <label>Cryptographic Challenge Hash</label>
-        <div class="hash-preview">${ch.challenge_hash}</div>
-      </div>
-      <div class="btn-group">
-        <button class="btn-deny" onclick="denyChallenge('${ch.step_up_id}')">Deny</button>
-        <button class="btn-approve" onclick="signAndApprove('${ch.step_up_id}', '${ch.challenge_hash}')">Approve & Sign</button>
-      </div>
-    `;
+    const headerDiv = document.createElement('div');
+    headerDiv.style.cssText = 'display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;';
+    headerDiv.innerHTML = '<span class="badge badge-warn">⚠️ Step-Up Authorization</span><span style="font-size:12px; color:#f85149;">Expires in ' + remainingSecs + 's</span>';
+    card.appendChild(headerDiv);
+
+    const toolField = document.createElement('div');
+    toolField.className = 'field';
+    toolField.innerHTML = '<label>Action / Tool</label>';
+    const toolVal = document.createElement('div');
+    toolVal.className = 'val';
+    toolVal.style.cssText = 'color:#58a6ff; font-weight:700;';
+    toolVal.textContent = ch.tool_name;
+    toolField.appendChild(toolVal);
+    card.appendChild(toolField);
+
+    const argsField = document.createElement('div');
+    argsField.className = 'field';
+    argsField.innerHTML = '<label>Target Arguments (What You See Is What You Sign)</label>';
+    const pre = document.createElement('pre');
+    pre.className = 'args';
+    pre.textContent = canonicalText; // STRICT TEXTCONTENT RENDERING PREVENTS HTML/XSS INJECTION
+    argsField.appendChild(pre);
+
+    const sizeNotice = document.createElement('div');
+    sizeNotice.style.cssText = 'font-size:10px; color:#8b949e; margin-top:2px;';
+    sizeNotice.textContent = 'Payload Size: ' + canonicalText.length + ' bytes | Hash Verified';
+    argsField.appendChild(sizeNotice);
+    card.appendChild(argsField);
+
+    const metaField = document.createElement('div');
+    metaField.className = 'field';
+    metaField.innerHTML = '<label>Session & Seq Binding</label>';
+    const metaVal = document.createElement('div');
+    metaVal.className = 'val';
+    metaVal.style.cssText = 'font-size:12px; color:#8b949e;';
+    metaVal.textContent = 'Session: ' + ch.session_id + ' | Seq: ' + ch.challenge_seq + ' | Epoch: ' + ch.taint_epoch;
+    metaField.appendChild(metaVal);
+    card.appendChild(metaField);
+
+    const hashField = document.createElement('div');
+    hashField.className = 'field';
+    hashField.innerHTML = '<label>Cryptographic Challenge Hash</label>';
+    const hashVal = document.createElement('div');
+    hashVal.className = 'hash-preview';
+    hashVal.textContent = ch.challenge_hash;
+    hashField.appendChild(hashVal);
+    card.appendChild(hashField);
+
+    const btnGroup = document.createElement('div');
+    btnGroup.className = 'btn-group';
+
+    const denyBtn = document.createElement('button');
+    denyBtn.className = 'btn-deny';
+    denyBtn.textContent = 'Deny';
+    denyBtn.onclick = () => denyChallenge(ch.step_up_id);
+    btnGroup.appendChild(denyBtn);
+
+    const approveBtn = document.createElement('button');
+    approveBtn.className = 'btn-approve';
+    approveBtn.textContent = 'Approve & Sign';
+    approveBtn.onclick = () => signAndApprove(ch.step_up_id, ch.challenge_hash, canonicalText.length, ch.expected_counter);
+    btnGroup.appendChild(approveBtn);
+
+    card.appendChild(btnGroup);
     container.appendChild(card);
   });
 }
 
-async function signAndApprove(stepUpId, challengeHash) {
+async function signAndApprove(stepUpId, challengeHash, payloadSize, expectedCounter) {
+  if (payloadSize > 65536) {
+    alert("❌ Security Gate: Action argument payload exceeds maximum 64KB size limit. Signing aborted.");
+    return;
+  }
   const devId = getDeviceId();
-  const counter = clientCounter++;
-  localStorage.setItem('homie_signing_counter', clientCounter.toString());
-  document.getElementById('counter-val').textContent = clientCounter;
+  const counter = expectedCounter || clientCounter++;
+  localStorage.setItem('homie_signing_counter', (counter + 1).toString());
+  document.getElementById('counter-val').textContent = counter + 1;
 
   const sigPayload = {
     step_up_id: stepUpId,
@@ -711,10 +754,25 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
 
     def _serve_phone_signing_portal(self):
         html = _get_signing_portal_html()
-        self._send_response(200, "text/html; charset=utf-8", html)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(html.encode("utf-8"))))
+        self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'self' 'unsafe-inline'; connect-src 'self'; style-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'self'")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.end_headers()
+        self.wfile.write(html.encode("utf-8"))
 
     def _handle_get_pending_challenges(self, parsed):
         import phone_approval_portal
+        # Authenticate caller device
+        headers = getattr(self, "headers", None) or {}
+        token = headers.get("X-Homie-Token", "") or headers.get("Authorization", "").replace("Bearer ", "")
+        if not is_device_token_valid(token):
+            self._send_response(401, "application/json", json.dumps({"error": "Unauthorized: Valid paired device token required"}))
+            return
+
         query = urllib.parse.parse_qs(parsed.query)
         device_id = query.get("device_id", ["primary_phone"])[0]
         now = time.time()
@@ -727,11 +785,13 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
                     "device_id": ch["device_id"],
                     "tool_name": ch["tool_name"],
                     "arguments": ch["arguments"],
+                    "canonical_args": ch.get("canonical_args", json.dumps(ch["arguments"], sort_keys=True, separators=(',', ':'))),
                     "args_hash": ch["args_hash"],
                     "nonce": ch["nonce"],
                     "expiry": ch["expiry"],
                     "taint_epoch": ch["taint_epoch"],
                     "challenge_seq": ch["challenge_seq"],
+                    "expected_counter": ch.get("expected_counter", 1),
                     "challenge_hash": ch["challenge_hash"],
                     "canonical_prompt": ch["canonical_prompt"],
                     "session_id": ch["session_id"]
@@ -748,8 +808,11 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
         code = data.get("pairing_code", "")
         dev_id = data.get("device_id", "primary_phone")
         pub_pem = data.get("public_key_pem", "")
+        primary_approval_sig = data.get("primary_approval_sig")
 
-        ok, msg = phone_approval_portal.complete_device_enrollment(sess_id, code, dev_id, pub_pem)
+        ok, msg = phone_approval_portal.complete_device_enrollment(
+            sess_id, code, dev_id, pub_pem, primary_approval_sig=primary_approval_sig
+        )
         status = 200 if ok else 400
         self._send_response(status, "application/json", json.dumps({"success": ok, "message": msg}))
 
@@ -769,8 +832,12 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
             except (ValueError, TypeError):
                 counter = None
 
+        headers = getattr(self, "headers", None) or {}
+        token = headers.get("X-Homie-Token", "") or headers.get("Authorization", "").replace("Bearer ", "")
+        is_auth = is_device_token_valid(token)
+
         ok, msg, item = phone_approval_portal.verify_device_approval(
-            step_up_id, sig, device_id=dev_id, counter=counter
+            step_up_id, sig, device_id=dev_id, counter=counter, is_authenticated_caller=is_auth
         )
         status = 200 if ok else 400
         self._send_response(status, "application/json", json.dumps({

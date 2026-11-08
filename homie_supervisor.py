@@ -131,7 +131,10 @@ class SupervisorActuator:
             )
         tier = allowed_tools.get(tool, "WRITE_EXEC")
 
-        req_seq = seq if seq is not None else self.supervisor.last_client_seq
+        if seq is None or not isinstance(seq, int) or seq <= 0:
+            raise ValueError("Sequence number seq is strictly required and must be a positive integer!")
+        req_seq = seq
+
         if tier != "READ_ONLY":
             if not self.supervisor.verify_and_consume_intent_token(
                 intent_token, tool, args, caller_id, req_seq
@@ -533,14 +536,24 @@ class PolicySupervisor:
         return self._encode_reply(MSG_SHUTDOWN, {"status": "SHUTDOWN_CLEAN", "reason": reason})
 
     def _handle_propose(self, payload: Dict[str, Any], seq: int = 0) -> bytes:
+        if seq is None or not isinstance(seq, int) or seq <= 0:
+            return self._encode_reply(MSG_ERROR, {
+                "error": "Sequence number seq is strictly required and must be a positive integer",
+                "reason_code": REASON_MALFORMED_FRAME
+            })
+
         req_id = payload.get("req_id", f"req_{int(time.time()*1000)}")
         tool = payload.get("tool", "")
         args = payload.get("args", {})
-        args_hash = payload.get("args_hash", "")
-        caller_id = payload.get("caller_id", "worker")
+        # Supervisor derives caller_id from connection identity, ignoring worker spoofing
+        caller_id = getattr(self, "authorized_worker_name", "worker") or "worker"
+        # Supervisor derives args_hash internally, ignoring worker spoofing
+        clean_args = json.dumps(args, sort_keys=True, separators=(',', ':')) if isinstance(args, dict) else str(args)
+        args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
+
         client_token = payload.get("client_token")
         step_up_token = payload.get("step_up_token")
-        frame_seq = seq if seq > 0 else self.last_client_seq
+        frame_seq = seq
 
         self.active_request_id = req_id
 

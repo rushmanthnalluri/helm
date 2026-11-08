@@ -149,14 +149,14 @@ class TestBatch20CompleteMediationAndRedTeam(unittest.TestCase):
         with self.assertRaises(homie_supervisor.CompleteMediationBreachError):
             actuator.execute_actuator(
                 "homie_snap_window", args,
-                caller_id="worker", intent_token=None
+                caller_id="worker", intent_token=None, seq=seq
             )
 
         # 2. Invocation with forged intent token -> raises CompleteMediationBreachError
         with self.assertRaises(homie_supervisor.CompleteMediationBreachError):
             actuator.execute_actuator(
                 "homie_snap_window", args,
-                caller_id="worker", intent_token="INTENT_V2:1:1:1700000000:homie_snap_window:badhash:worker:badsig"
+                caller_id="worker", intent_token="INTENT_V2:1:1:1700000000:homie_snap_window:badhash:worker:badsig", seq=seq
             )
 
         # 3. Invocation with valid supervisor-minted token -> succeeds
@@ -164,7 +164,7 @@ class TestBatch20CompleteMediationAndRedTeam(unittest.TestCase):
         supervisor.last_client_seq = seq
         res = actuator.execute_actuator(
             "homie_snap_window", args,
-            caller_id="worker", intent_token=valid_token
+            caller_id="worker", intent_token=valid_token, seq=seq
         )
         self.assertIn("Success:", res)
 
@@ -172,7 +172,7 @@ class TestBatch20CompleteMediationAndRedTeam(unittest.TestCase):
         with self.assertRaises(homie_supervisor.CompleteMediationBreachError):
             actuator.execute_actuator(
                 "homie_snap_window", args,
-                caller_id="worker", intent_token=valid_token
+                caller_id="worker", intent_token=valid_token, seq=seq
             )
 
         # 5. Batch 22: Parameter tampering attack (minted for notepad, submitted for calc)
@@ -180,7 +180,7 @@ class TestBatch20CompleteMediationAndRedTeam(unittest.TestCase):
         with self.assertRaises(homie_supervisor.CompleteMediationBreachError):
             actuator.execute_actuator(
                 "homie_snap_window", {"app_name": "calc"},
-                caller_id="worker", intent_token=token_tamper
+                caller_id="worker", intent_token=token_tamper, seq=seq
             )
 
         # 5b. Direct args hash check assertion
@@ -193,7 +193,7 @@ class TestBatch20CompleteMediationAndRedTeam(unittest.TestCase):
         with self.assertRaises(homie_supervisor.CompleteMediationBreachError):
             actuator.execute_actuator(
                 "homie_snap_window", args,
-                caller_id="worker", intent_token=token_seq_mismatch
+                caller_id="worker", intent_token=token_seq_mismatch, seq=99
             )
         supervisor.last_client_seq = seq
 
@@ -201,12 +201,12 @@ class TestBatch20CompleteMediationAndRedTeam(unittest.TestCase):
         with self.assertRaises(homie_supervisor.CompleteMediationBreachError):
             actuator.execute_actuator(
                 "homie_launch_app", {"app_name": "notepad"},
-                caller_id="worker", intent_token=None
+                caller_id="worker", intent_token=None, seq=seq
             )
         with self.assertRaises(homie_supervisor.CompleteMediationBreachError):
             actuator.execute_actuator(
                 "unlisted_future_tool", {},
-                caller_id="worker", intent_token=None
+                caller_id="worker", intent_token=None, seq=seq
             )
 
         supervisor.clean_shutdown()
@@ -290,7 +290,7 @@ class TestBatch20CompleteMediationAndRedTeam(unittest.TestCase):
         supervisor = homie_supervisor.PolicySupervisor()
         supervisor.state = homie_supervisor.STATE_ARMED
         with self.assertRaises(homie_supervisor.CompleteMediationBreachError) as cm:
-            supervisor.actuator.execute_actuator("completely_fake_unregistered_tool", {}, "worker")
+            supervisor.actuator.execute_actuator("completely_fake_unregistered_tool", {}, "worker", seq=1)
         self.assertIn("unknown and not in allowed tools registry", str(cm.exception))
         supervisor.clean_shutdown()
 

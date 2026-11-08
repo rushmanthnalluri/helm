@@ -196,7 +196,7 @@ class ActionBroker:
         # Phase 2: Privileged SupervisorActuator verifies INTENT V2 token & single-use consumption
         try:
             output = self.supervisor.actuator.execute_actuator(
-                canonical_tool, args, caller_id=caller_id, client_token=client_token, intent_token=intent_token
+                canonical_tool, args, caller_id=caller_id, client_token=client_token, intent_token=intent_token, seq=seq
             )
             success = not str(output).startswith(("Error:", "Security Gate:", "Blocked:"))
             return success, str(output), output

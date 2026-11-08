@@ -344,13 +344,16 @@ class TestHardenedPhoneGateway(unittest.TestCase):
             def __init__(self):
                 self.sent_code = None
                 self.sent_body = None
+                self.headers = {"Authorization": "Bearer valid_gw_token"}
             def _send_response(self, code, content_type, body):
                 self.sent_code = code
                 self.sent_body = body
 
         handler = MockHandler()
         parsed = urllib.parse.urlparse("/api/pending-challenges?device_id=gw_test_phone")
-        handler._handle_get_pending_challenges(parsed)
+        import unittest.mock as mock
+        with mock.patch("phone_gateway.is_device_token_valid", return_value=True):
+            handler._handle_get_pending_challenges(parsed)
 
         self.assertEqual(handler.sent_code, 200)
         data = json.loads(handler.sent_body)
