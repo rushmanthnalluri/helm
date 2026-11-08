@@ -676,6 +676,19 @@ def try_fast_command(text):
         rep = agent_audit_ledger.format_audit_report(limit=8)
         return True, rep
 
+    # 28. Taint Tracking & Session Security
+    if re.search(r'\b(taint\s+status|security\s+taint|taint\s+gate)\b', t):
+        import taint_tracker
+        st = taint_tracker.get_taint_status()
+        taint_label = "🔴 TAINTED (Step-up approval active)" if st["is_tainted"] else "🟢 CLEAN"
+        return True, f"🛡️ **Taint Security Gate**: {taint_label}\n• Source: `{st.get('source', 'None')}`\n• Pending Step-Up Approvals: {st['pending_step_ups']}"
+
+    # 29. Desktop Agent Controls & Emergency Stop
+    if re.search(r'^(?:emergency\s+stop|abort\s+agent|kill\s+agent)$', t):
+        import desktop_agent
+        desktop_agent.request_abort()
+        return True, "🛑 Desktop Agent emergency abort signal triggered."
+
     return False, ""
 
 # ----------------- Web Search & Read -----------------

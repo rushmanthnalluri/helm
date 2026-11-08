@@ -158,6 +158,18 @@ def execute_mcp_tool(name, arguments, caller_id="mcp_client"):
     tier_map = {t["name"]: t.get("capabilityTier", "WRITE_EXEC") for t in MCP_TOOLS}
     tier = tier_map.get(name, "WRITE_EXEC")
 
+    # Taint Tracking Gate: Blocks write tools if caller session has ingested untrusted content
+    import taint_tracker
+    allowed, requires_step_up, reason = taint_tracker.check_action_privilege(caller_id, tier, name, arguments)
+    if not allowed and requires_step_up:
+        decision = "DENY_TAINT_STEP_UP_REQUIRED"
+        output = f"Security Gate: {reason}"
+        try:
+            agent_audit_ledger.record_agent_action(caller_id, name, tier, arguments, decision=decision)
+        except Exception:
+            pass
+        return output
+
     decision = "ALLOW"
     output = ""
 
