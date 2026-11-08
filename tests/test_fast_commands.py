@@ -22,6 +22,28 @@ class TestFastCommands(unittest.TestCase):
         self.assertTrue(handled)
         self.assertIn("Triggered media key", msg)
 
+    def test_youtube_commands(self):
+        # 1. "open youtube and play the loose songs"
+        handled, msg = homie.try_fast_command("open youtube and play the loose songs")
+        self.assertTrue(handled)
+        self.assertIn("Opened YouTube search", msg)
+        self.assertIn("the loose songs", msg)
+
+        # 2. "Isaid open yt and play songs" (with prefix)
+        handled, msg = homie.try_fast_command("Isaid open yt and play songs")
+        self.assertTrue(handled)
+        self.assertIn("Opened YouTube search", msg)
+
+        # 3. "open youtube"
+        handled, msg = homie.try_fast_command("open youtube")
+        self.assertTrue(handled)
+        self.assertIn("Opened YouTube", msg)
+
+        # 4. "play loose songs on youtube"
+        handled, msg = homie.try_fast_command("play loose songs on youtube")
+        self.assertTrue(handled)
+        self.assertIn("Opened YouTube search", msg)
+
     def test_non_fast_command_delegates_to_ai(self):
         handled, msg = homie.try_fast_command("explain quantum computing in detail")
         self.assertFalse(handled)

@@ -20,12 +20,17 @@ class TestTelegramBridge(unittest.TestCase):
         self.assertFalse(bridge.is_user_authorized(9999, 9999))
 
     def test_auto_pairing_first_user(self):
-        bridge = TelegramBridge(token="test", allowed_users=[])
-        # First user is automatically paired as owner
-        self.assertTrue(bridge.is_user_authorized(5555, 5555))
-        self.assertIn("5555", bridge.allowed_users)
-        # Second user is blocked
-        self.assertFalse(bridge.is_user_authorized(7777, 7777))
+        import homie
+        orig_users = homie.get_prefs().get('telegramAllowedUsers', [])
+        try:
+            bridge = TelegramBridge(token="test", allowed_users=[])
+            # First user is automatically paired as owner
+            self.assertTrue(bridge.is_user_authorized(5555, 5555))
+            self.assertIn("5555", bridge.allowed_users)
+            # Second user is blocked
+            self.assertFalse(bridge.is_user_authorized(7777, 7777))
+        finally:
+            homie.save_pref('telegramAllowedUsers', orig_users)
 
 if __name__ == '__main__':
     unittest.main()

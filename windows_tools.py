@@ -301,7 +301,7 @@ def launch_app(name_or_query):
         except Exception:
             pass
 
-    # 2. Known Windows app map
+    # 2. Known Windows app and website map
     app_map = {
         'notepad': 'notepad.exe',
         'calc': 'calc.exe',
@@ -320,19 +320,38 @@ def launch_app(name_or_query):
         'vscode': 'code',
         'settings': 'ms-settings:',
         'task manager': 'taskmgr.exe',
-        'paint': 'mspaint.exe'
+        'paint': 'mspaint.exe',
+        'youtube': 'https://www.youtube.com',
+        'google': 'https://www.google.com',
+        'gmail': 'https://mail.google.com',
+        'github': 'https://github.com',
+        'reddit': 'https://reddit.com',
+        'twitter': 'https://x.com',
+        'netflix': 'https://www.netflix.com',
+        'chatgpt': 'https://chatgpt.com'
     }
 
     for key, cmd in app_map.items():
         if key in q:
             try:
-                if cmd.endswith(':'):
+                if cmd.startswith(('http://', 'https://')):
+                    import webbrowser
+                    webbrowser.open(cmd)
+                    return True, f"Opened {key} in browser"
+                elif cmd.endswith(':'):
                     os.startfile(cmd)
                 else:
                     subprocess.Popen(cmd, shell=True)
                 return True, f"Launched {key}"
             except Exception as e:
                 return False, f"Failed to launch {key}: {e}"
+
+    # 3. URL or generic target
+    if q.startswith(('http://', 'https://', 'www.')):
+        import webbrowser
+        url = q if q.startswith('http') else f"https://{q}"
+        webbrowser.open(url)
+        return True, f"Opened {url}"
 
     # 3. Generic try via os.startfile or shell
     try:

@@ -24,6 +24,7 @@ import time
 import shutil
 import urllib.parse
 import urllib.request
+import webbrowser
 import subprocess
 from pathlib import Path
 
@@ -128,11 +129,19 @@ def try_fast_command(text):
     Attempts to execute simple commands locally without invoking AI.
     Returns (handled, output_string).
     """
-    t = text.lower().strip()
-    
-    # 1. Media Control
+    # 1. Clean punctuation and conversational filler
+    raw = text.strip()
+    t = re.sub(r'^[,\.\s!?\'"]+|[,\.\s!?\'"]+$', '', raw.lower()).strip()
+    t = re.sub(r'^(?:hey\s+homie|homie|please|i\s*said|can\s+you|could\s+you)\s*[,:]?\s*', '', t).strip()
+    t = re.sub(r'^[,\.\s!?\'"]+|[,\.\s!?\'"]+$', '', t).strip()
+
+    if not t:
+        return False, ""
+
+    # 2. Media Hardware Controls (play/pause, next, prev, volume)
     media_patterns = {
-        r'^(pause|play|resume)(\s+music|\s+song)?$': 'play_pause',
+        r'^(pause|resume)(\s+music|\s+song|\s+track)?$': 'play_pause',
+        r'^play(\s+music|\s+song|\s+track)?$': 'play_pause',
         r'^(next|skip)(\s+song|\s+track)?$': 'next',
         r'^(prev|previous)(\s+song|\s+track)?$': 'prev',
         r'^(mute|unmute)$': 'mute',
@@ -144,7 +153,62 @@ def try_fast_command(text):
             ok, msg = windows_tools.control_media(action)
             return True, msg
 
-    # 2. Window Placement (e.g. "put this on left", "window right", "maximize")
+    # 3. YouTube Search & Playback (e.g. "open youtube and play the loose songs", "open yt and play songs")
+    yt_matched = False
+    yt_query = None
+
+    # "open youtube/yt and play <query>" or "open youtube/yt to play <query>"
+    m1 = re.match(r'^(?:open\s+)?(?:youtube|yt)\s+(?:and\s+|to\s+)?(?:play|search(?:\s+for)?)\s*(.*)$', t)
+    if m1:
+        yt_matched = True
+        yt_query = m1.group(1).strip()
+
+    # "play <query> on youtube/yt"
+    if not yt_matched:
+        m2 = re.match(r'^play\s+(.*?)\s+(?:on|in)\s+(?:youtube|yt)$', t)
+        if m2:
+            yt_matched = True
+            yt_query = m2.group(1).strip()
+
+    # "search/find <query> on youtube/yt" or "search youtube for <query>"
+    if not yt_matched:
+        m3 = re.match(r'^(?:search|find)\s+(?:on\s+)?(?:youtube|yt)\s+(?:for\s+)?(.*)$', t)
+        if m3:
+            yt_matched = True
+            yt_query = m3.group(1).strip()
+
+    # Just "open youtube" or "open yt" or "youtube"
+    if not yt_matched:
+        if re.match(r'^(?:open\s+)?(?:youtube|yt)$', t):
+            yt_matched = True
+            yt_query = ""
+
+    # "youtube <query>" or "yt <query>"
+    if not yt_matched:
+        m5 = re.match(r'^(?:youtube|yt)\s+(.*)$', t)
+        if m5:
+            yt_matched = True
+            yt_query = m5.group(1).strip()
+
+    if yt_matched:
+        if yt_query:
+            url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(yt_query)}"
+            webbrowser.open(url)
+            return True, f"Opened YouTube search for '{yt_query}' in your browser."
+        else:
+            webbrowser.open("https://www.youtube.com")
+            return True, "Opened YouTube in your browser."
+
+    # 4. Generic Song Playback (e.g. "play bohemian rhapsody", "play loose songs")
+    play_match = re.match(r'^play\s+(.+)$', t)
+    if play_match:
+        target_song = play_match.group(1).strip()
+        if target_song not in ('music', 'song', 'audio', 'sound', 'track', 'media', 'it'):
+            url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(target_song)}"
+            webbrowser.open(url)
+            return True, f"Opened YouTube and playing '{target_song}'"
+
+    # 5. Window Placement (e.g. "put this on left", "window right", "maximize")
     place_patterns = [
         (r'\b(left|left half|left side)\b', 'left'),
         (r'\b(right|right half|right side)\b', 'right'),
@@ -155,7 +219,6 @@ def try_fast_command(text):
     if any(k in t for k in ('window', 'put this', 'snap', 'move this', 'place', 'screen')):
         for pat, where in place_patterns:
             if re.search(pat, t):
-                # Check if an app is specified (e.g. "put chrome on left")
                 app = ""
                 for candidate in ('chrome', 'edge', 'notepad', 'spotify', 'code', 'terminal', 'explorer', 'slack'):
                     if candidate in t:
@@ -164,33 +227,24 @@ def try_fast_command(text):
                 ok, msg = windows_tools.place_window(app_or_title=app, where=where)
                 return True, msg
 
-    # 3. Quick App Launch (e.g. "open notepad", "launch chrome")
-    m = re.match(r'^(open|launch|start|run)\s+([a-zA-Z0-9\s._-]+)$', t)
+    # 6. Quick App / Website Launch (e.g. "open notepad", "launch chrome", "open spotify", "open github")
+    m = re.match(r'^(?:open|launch|start|run)\s+([a-zA-Z0-9\s._-]+)$', t)
     if m:
-        target = m.group(2).strip()
-        # Avoid web search queries like "open google and search..."
-        if not any(w in target for w in ('http', 'and', 'for', 'about', 'how')):
+        target = m.group(1).strip()
+        if target not in ('the', 'a', 'this', 'that', 'it'):
             ok, msg = windows_tools.launch_app(target)
             if ok:
                 return True, msg
 
-    # 4. Web Search query (e.g. "google <x>", "search for <x>")
-    search_match = re.match(r'^(google|search\s+for|search|bing)\s+(.+)$', t)
+    # 7. Web Search query (e.g. "google <x>", "search for <x>")
+    search_match = re.match(r'^(?:google|search\s+for|search|bing)\s+(.+)$', t)
     if search_match:
-        query = search_match.group(2).strip()
+        query = search_match.group(1).strip()
         url = f"https://www.google.com/search?q={urllib.parse.quote(query)}"
-        windows_tools.launch_app(url)
+        webbrowser.open(url)
         return True, f"Searching the web for '{query}'"
 
-    # 5. YouTube Search (e.g. "youtube lofi beats")
-    yt_match = re.match(r'^(youtube|play\s+on\s+youtube)\s+(.+)$', t)
-    if yt_match:
-        query = yt_match.group(2).strip()
-        url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
-        windows_tools.launch_app(url)
-        return True, f"Searching YouTube for '{query}'"
-
-    # 6. Time and Date
+    # 8. Time and Date
     if re.search(r'\b(what\s+time\s+is\s+it|current\s+time|the\s+time)\b', t):
         current_time = time.strftime("%I:%M %p").lstrip('0')
         return True, f"The time is {current_time}."
@@ -198,8 +252,8 @@ def try_fast_command(text):
         current_date = time.strftime("%A, %B %d, %Y")
         return True, f"Today is {current_date}."
 
-    # 7. Quick System Actions
-    if re.search(r'\b(lock\s+computer|lock\s+screen|lock\s+pc)\b', t):
+    # 9. Quick System Actions (lock PC)
+    if re.search(r'\b(lock\s+computer|lock\s+screen|lock\s+pc|lock\s+my\s+pc)\b', t):
         import ctypes
         ctypes.windll.user32.LockWorkStation()
         return True, "Workstation locked."

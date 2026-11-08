@@ -52,7 +52,7 @@ class TelegramBridge:
     def __init__(self, token=None, allowed_users=None):
         self.prefs = homie.get_prefs()
         self.token = token or os.environ.get('TELEGRAM_BOT_TOKEN') or self.prefs.get('telegramToken', '')
-        self.allowed_users = allowed_users or self.prefs.get('telegramAllowedUsers', [])
+        self.allowed_users = allowed_users if allowed_users is not None else self.prefs.get('telegramAllowedUsers', [])
         # Ensure allowed_users are integers/strings
         self.allowed_users = [str(u) for u in self.allowed_users if u]
         self.offset = 0
@@ -120,9 +120,7 @@ class TelegramBridge:
     def is_user_authorized(self, user_id, chat_id):
         """Verifies if the sender is authorized to control this PC."""
         uid_str = str(user_id)
-        # If empty or only test IDs, pair this user as the owner
-        clean_users = [u for u in self.allowed_users if u not in ('5555', 'test', '999')]
-        if not clean_users:
+        if not self.allowed_users:
             self.allowed_users = [uid_str]
             self.prefs['telegramAllowedUsers'] = self.allowed_users
             homie.save_pref('telegramAllowedUsers', self.allowed_users)
