@@ -202,6 +202,28 @@ class TelegramBridge:
             self.send_message(chat_id, f"🚀 {msg}")
             return
 
+        if cmd == '/close':
+            target = " ".join(args)
+            if not target:
+                self.send_message(chat_id, "Usage: `/close <app_name>`")
+                return
+            ok, msg = windows_tools.close_app(target)
+            self.send_message(chat_id, f"🛑 {msg}")
+            return
+
+        if cmd in ('/status', '/pc'):
+            v = windows_tools.get_system_vitals()
+            msg = (
+                f"💻 **PC Health Snapshot**:\n\n"
+                f"• 🧠 **RAM**: {v['ram_pct']}% used ({v['ram_avail_gb']} GB free / {v['ram_total_gb']} GB)\n"
+                f"• 💽 **Disk (C:)**: {v['disk_free_gb']} GB free / {v['disk_total_gb']} GB\n"
+                f"• 🔋 **Power**: {v['battery']}\n"
+                f"• ⏱️ **Uptime**: {v['uptime_hours']} hours\n"
+                f"• 🪟 **Active**: `{v['active_window']}`"
+            )
+            self.send_message(chat_id, msg)
+            return
+
         # Regular prompt -> Run through Homie
         self.process_homie_task(chat_id, text)
 

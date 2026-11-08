@@ -227,7 +227,52 @@ def try_fast_command(text):
                 ok, msg = windows_tools.place_window(app_or_title=app, where=where)
                 return True, msg
 
-    # 6. Quick App / Website Launch (e.g. "open notepad", "launch chrome", "open spotify", "open github")
+    # 6. Messaging: WhatsApp & Telegram ("open whatsapp and say hi to Rusman", "open telegram and say hi")
+    # A. "open <app> and say/send <text> to <recipient>"
+    msg_m1 = re.search(r'^(?:open\s+)?(whatsapp|telegram)\s+and\s+(?:say|send|text|message)\s+(.+?)\s+to\s+(.+)$', raw, re.I)
+    if msg_m1:
+        ok, res = windows_tools.send_chat_message(msg_m1.group(1), recipient=msg_m1.group(3).strip(), message=msg_m1.group(2).strip())
+        return True, res
+
+    # B. "open <app> and say/send [to] <recipient> <text>"
+    msg_m2 = re.search(r'^(?:open\s+)?(whatsapp|telegram)\s+and\s+(?:say|send|text|message)\s+(?:to\s+)?([a-zA-Z0-9_\u0080-\uffff]+)\s+(.+)$', raw, re.I)
+    if msg_m2:
+        ok, res = windows_tools.send_chat_message(msg_m2.group(1), recipient=msg_m2.group(2).strip(), message=msg_m2.group(3).strip())
+        return True, res
+
+    # C. "say/send <text> to <recipient> on <app>"
+    msg_m3 = re.search(r'^(?:say|send|text|message)\s+(.+?)\s+to\s+(.+?)\s+(?:on|via|in)\s+(whatsapp|telegram)$', raw, re.I)
+    if msg_m3:
+        ok, res = windows_tools.send_chat_message(msg_m3.group(3), recipient=msg_m3.group(2).strip(), message=msg_m3.group(1).strip())
+        return True, res
+
+    # D. "open <app> and say/type/send <text>" (active chat)
+    msg_m4 = re.search(r'^(?:open\s+)?(whatsapp|telegram)\s+and\s+(?:say|type|send)\s+(.+)$', raw, re.I)
+    if msg_m4:
+        ok, res = windows_tools.send_chat_message(msg_m4.group(1), recipient="", message=msg_m4.group(2).strip())
+        return True, res
+
+    # 7. Close App ("close whatsapp", "close notepad", "exit chrome")
+    close_m = re.match(r'^(?:close|quit|kill|exit)\s+([a-zA-Z0-9\s._-]+)$', t)
+    if close_m:
+        target = close_m.group(1).strip()
+        ok, msg = windows_tools.close_app(target)
+        return True, msg
+
+    # 8. PC Vitals ("pc status", "system status", "vitals", "how is my pc")
+    if re.search(r'\b(pc\s+status|system\s+status|pc\s+vitals|system\s+health|how\s+is\s+my\s+pc)\b', t):
+        v = windows_tools.get_system_vitals()
+        msg = (
+            f"💻 **PC Health Snapshot**:\n"
+            f"• 🧠 RAM: {v['ram_pct']}% used ({v['ram_avail_gb']} GB free / {v['ram_total_gb']} GB)\n"
+            f"• 💽 Disk (C:): {v['disk_free_gb']} GB free / {v['disk_total_gb']} GB\n"
+            f"• 🔋 Power: {v['battery']}\n"
+            f"• ⏱️ Uptime: {v['uptime_hours']} hours\n"
+            f"• 🪟 Active: {v['active_window']}"
+        )
+        return True, msg
+
+    # 9. Quick App / Website Launch (e.g. "open notepad", "launch chrome", "open spotify", "open github")
     m = re.match(r'^(?:open|launch|start|run)\s+([a-zA-Z0-9\s._-]+)$', t)
     if m:
         target = m.group(1).strip()

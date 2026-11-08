@@ -437,3 +437,157 @@ def read_window_text(app_query=""):
         pass
 
     return "\n".join(texts[:50])
+
+def close_app(app_name):
+    """Gracefully closes a running application by name or window title."""
+    wins = find_windows(app_name)
+    if wins:
+        closed = 0
+        for w in wins:
+            try:
+                win32gui.PostMessage(w['hwnd'], win32con.WM_CLOSE, 0, 0)
+                closed += 1
+            except Exception:
+                pass
+        if closed:
+            return True, f"Closed {app_name} window ({closed} instance(s))."
+
+    # Fallback to taskkill
+    clean_name = app_name.lower().replace(".exe", "").strip()
+    try:
+        res = subprocess.run(f"taskkill /IM {clean_name}.exe /T", shell=True, capture_output=True, text=True)
+        if res.returncode == 0:
+            return True, f"Terminated {clean_name}."
+    except Exception:
+        pass
+    return False, f"Could not find running window or process for '{app_name}'."
+
+def send_chat_message(app_name, recipient="", message=""):
+    """Automates sending a chat message to a contact in WhatsApp or Telegram on Windows."""
+    import pyautogui
+    import pyperclip
+    pyautogui.FAILSAFE = False
+
+    app_lower = app_name.lower().strip()
+    ok, msg = launch_app(app_lower)
+    if not ok:
+        return False, f"Could not open {app_name}: {msg}"
+
+    time.sleep(1.0)  # Wait for app window to focus
+
+    try:
+        if 'whatsapp' in app_lower:
+            pyautogui.hotkey('ctrl', 'f')
+            time.sleep(0.3)
+            pyautogui.hotkey('ctrl', 'a')
+            pyautogui.press('backspace')
+            time.sleep(0.2)
+
+            if recipient:
+                pyperclip.copy(recipient)
+                pyautogui.hotkey('ctrl', 'v')
+                time.sleep(0.8)
+                pyautogui.press('enter')
+                time.sleep(0.5)
+
+            if message:
+                pyperclip.copy(message)
+                pyautogui.hotkey('ctrl', 'v')
+                time.sleep(0.3)
+                pyautogui.press('enter')
+
+            target_desc = f" to {recipient}" if recipient else ""
+            return True, f"Sent '{message}'{target_desc} on WhatsApp."
+
+        elif 'telegram' in app_lower:
+            pyautogui.press('esc')
+            time.sleep(0.2)
+            pyautogui.hotkey('ctrl', 'f')
+            time.sleep(0.3)
+
+            if recipient:
+                pyperclip.copy(recipient)
+                pyautogui.hotkey('ctrl', 'v')
+                time.sleep(0.8)
+                pyautogui.press('enter')
+                time.sleep(0.5)
+
+            if message:
+                pyperclip.copy(message)
+                pyautogui.hotkey('ctrl', 'v')
+                time.sleep(0.3)
+                pyautogui.press('enter')
+
+            target_desc = f" to {recipient}" if recipient else ""
+            return True, f"Sent '{message}'{target_desc} on Telegram."
+
+        return False, f"Unsupported messaging app: {app_name}"
+    except Exception as e:
+        return False, f"Failed to send message in {app_name}: {e}"
+
+def get_system_vitals():
+    """Gathers real-time Windows PC health vitals using standard kernel32 & ctypes."""
+    import ctypes
+    import shutil
+
+    class MEMORYSTATUSEX(ctypes.Structure):
+        _fields_ = [
+            ('dwLength', ctypes.c_uint32),
+            ('dwMemoryLoad', ctypes.c_uint32),
+            ('ullTotalPhys', ctypes.c_uint64),
+            ('ullAvailPhys', ctypes.c_uint64),
+            ('ullTotalPageFile', ctypes.c_uint64),
+            ('ullAvailPageFile', ctypes.c_uint64),
+            ('ullTotalVirtual', ctypes.c_uint64),
+            ('ullAvailVirtual', ctypes.c_uint64),
+            ('ullAvailExtendedVirtual', ctypes.c_uint64),
+        ]
+
+    class SYSTEM_POWER_STATUS(ctypes.Structure):
+        _fields_ = [
+            ('ACLineStatus', ctypes.c_byte),
+            ('BatteryFlag', ctypes.c_byte),
+            ('BatteryLifePercent', ctypes.c_byte),
+            ('SystemStatusFlag', ctypes.c_byte),
+            ('BatteryLifeTime', ctypes.c_uint32),
+            ('BatteryFullLifeTime', ctypes.c_uint32),
+        ]
+
+    # Memory
+    stat = MEMORYSTATUSEX()
+    stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+    ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
+    ram_pct = stat.dwMemoryLoad
+    ram_avail_gb = stat.ullAvailPhys / (1024 ** 3)
+    ram_total_gb = stat.ullTotalPhys / (1024 ** 3)
+
+    # Disk
+    disk = shutil.disk_usage("C:\\")
+    disk_free_gb = disk.free / (1024 ** 3)
+    disk_total_gb = disk.total / (1024 ** 3)
+
+    # Battery
+    sps = SYSTEM_POWER_STATUS()
+    bat_str = "Desktop (AC)"
+    if ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(sps)):
+        if sps.BatteryLifePercent != 255:
+            plugged = "🔌 Plugged in" if sps.ACLineStatus == 1 else "🔋 On battery"
+            bat_str = f"{sps.BatteryLifePercent}% ({plugged})"
+
+    # Uptime
+    uptime_hours = (ctypes.windll.kernel32.GetTickCount64() / 1000.0) / 3600.0
+
+    # Active window
+    fg = get_foreground_window()
+    fg_title = fg['title'][:40] if fg else "Desktop"
+
+    return {
+        'ram_pct': ram_pct,
+        'ram_avail_gb': round(ram_avail_gb, 1),
+        'ram_total_gb': round(ram_total_gb, 1),
+        'disk_free_gb': round(disk_free_gb, 1),
+        'disk_total_gb': round(disk_total_gb, 1),
+        'battery': bat_str,
+        'uptime_hours': round(uptime_hours, 1),
+        'active_window': fg_title
+    }

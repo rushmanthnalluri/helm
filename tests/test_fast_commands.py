@@ -44,6 +44,18 @@ class TestFastCommands(unittest.TestCase):
         self.assertTrue(handled)
         self.assertIn("Opened YouTube search", msg)
 
+    def test_pc_vitals_command(self):
+        handled, msg = homie.try_fast_command("pc status")
+        self.assertTrue(handled)
+        self.assertIn("PC Health Snapshot", msg)
+        self.assertIn("RAM:", msg)
+
+    def test_messaging_command_handling(self):
+        # Verify messaging commands are caught by fast parser
+        handled, msg = homie.try_fast_command("open whatsapp and say hello to Rusman")
+        self.assertTrue(handled)
+        self.assertIn("WhatsApp", msg)
+
     def test_non_fast_command_delegates_to_ai(self):
         handled, msg = homie.try_fast_command("explain quantum computing in detail")
         self.assertFalse(handled)

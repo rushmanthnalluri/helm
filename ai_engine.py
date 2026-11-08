@@ -21,7 +21,7 @@ PROVIDER_CONFIGS = {
     'gemini': {
         'name': 'Google AI Studio (Gemini)',
         'base_url': 'https://generativelanguage.googleapis.com',
-        'default_model': 'gemini-3.5-flash',
+        'default_model': 'gemini-flash-lite-latest',
         'env_key': 'GEMINI_API_KEY',
         'doc_url': 'https://aistudio.google.com/app/apikey'
     },
@@ -48,9 +48,40 @@ PROVIDER_CONFIGS = {
     }
 }
 
+GEMINI_MODELS_POOL = [
+    'gemini-flash-lite-latest',
+    'gemini-3.5-flash-lite',
+    'gemini-flash-latest',
+    'gemini-2.5-flash',
+    'gemini-3.5-flash'
+]
+
 GEMINI_TOOLS = [
     {
         "functionDeclarations": [
+            {
+                "name": "send_chat_message",
+                "description": "Sends a message or greeting to a contact in WhatsApp or Telegram on Windows.",
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "app_name": {
+                            "type": "STRING",
+                            "enum": ["whatsapp", "telegram"],
+                            "description": "The messaging application (whatsapp or telegram)"
+                        },
+                        "recipient": {
+                            "type": "STRING",
+                            "description": "The contact or person name, e.g. 'Rusman', 'Amma'"
+                        },
+                        "message": {
+                            "type": "STRING",
+                            "description": "The message text to send, e.g. 'hi', 'how are you?'"
+                        }
+                    },
+                    "required": ["app_name", "message"]
+                }
+            },
             {
                 "name": "play_youtube",
                 "description": "Opens YouTube in the default browser and plays or searches for a song, music, video, or playlist.",
@@ -196,6 +227,13 @@ def execute_tool(name, args):
             import homie
             return homie.web_search(args.get('query', ''))
 
+        elif name == "send_chat_message":
+            app = args.get('app_name', 'whatsapp')
+            rec = args.get('recipient', '')
+            msg = args.get('message', 'hi')
+            ok, output = windows_tools.send_chat_message(app, rec, msg)
+            return output
+
         elif name == "lock_pc":
             import ctypes
             ctypes.windll.user32.LockWorkStation()
@@ -226,7 +264,23 @@ def check_and_execute_fallback(prompt_text, reply_text):
             execute_tool("play_youtube", {"query": q})
             return f"✓ Opened YouTube for '{q}'.\n{reply_text}"
 
-    # 2. App Launch
+    # 2. Chat messaging (WhatsApp / Telegram)
+    for chat_app in ('whatsapp', 'telegram'):
+        if chat_app in low_p and any(w in low_p for w in ('say', 'send', 'message', 'text', 'tell')):
+            m1 = re.search(rf'^(?:open\s+)?{chat_app}\s+and\s+(?:say|send|text|message)\s+(.+?)\s+to\s+(.+)$', prompt_text, re.I)
+            if m1:
+                res = execute_tool("send_chat_message", {"app_name": chat_app, "recipient": m1.group(2).strip(), "message": m1.group(1).strip()})
+                return f"✓ {res}\n{reply_text}"
+            m2 = re.search(rf'^(?:open\s+)?{chat_app}\s+and\s+(?:say|send|text|message)\s+(?:to\s+)?([a-zA-Z0-9_\u0080-\uffff]+)\s+(.+)$', prompt_text, re.I)
+            if m2:
+                res = execute_tool("send_chat_message", {"app_name": chat_app, "recipient": m2.group(1).strip(), "message": m2.group(2).strip()})
+                return f"✓ {res}\n{reply_text}"
+            m3 = re.search(rf'^(?:open\s+)?{chat_app}\s+and\s+(?:say|type|send)\s+(.+)$', prompt_text, re.I)
+            if m3:
+                res = execute_tool("send_chat_message", {"app_name": chat_app, "recipient": "", "message": m3.group(1).strip()})
+                return f"✓ {res}\n{reply_text}"
+
+    # 3. App Launch
     for app in ('whatsapp', 'telegram', 'notepad', 'spotify', 'chrome', 'edge', 'calc', 'calculator', 'terminal', 'cmd', 'explorer', 'code', 'discord', 'slack', 'teams', 'zoom', 'word', 'excel'):
         if (f"open {app}" in low_p or f"launch {app}" in low_p) or (f"opening {app}" in low_r or f"launched {app}" in low_r):
             res = execute_tool("open_app_or_url", {"target": app})
@@ -241,11 +295,8 @@ def check_and_execute_fallback(prompt_text, reply_text):
 
 # ----------------- Google Gemini Implementation with Native Tool Calling -----------------
 
-def run_gemini(prompt_text, api_key, model='gemini-3.5-flash', step_callback=None):
-    """Direct Google AI Studio API call with tool execution loop and multimodal image support."""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-    headers = {'Content-Type': 'application/json'}
-
+def run_gemini(prompt_text, api_key, model='gemini-flash-lite-latest', step_callback=None):
+    """Direct Google AI Studio API call with multi-model failover, tool execution loop, and vision support."""
     fg = windows_tools.get_foreground_window()
     fg_title = fg['title'] if fg else "Desktop"
     monitors = windows_tools.get_monitors()
@@ -255,7 +306,7 @@ def run_gemini(prompt_text, api_key, model='gemini-3.5-flash', step_callback=Non
         "You are Homie, a fast, proactive Windows desktop AI assistant. "
         "The user interacts with you via voice and Telegram from their phone. "
         "CRITICAL INSTRUCTION: You have real tools to perform actions on Windows. "
-        "When the user asks you to open YouTube, play music, open apps, move windows, lock PC, or search, "
+        "When the user asks you to send a message on WhatsApp or Telegram, open YouTube, play music, open apps, move windows, lock PC, or search, "
         "YOU MUST CALL THE APPROPRIATE TOOL. Never claim you performed an action without calling its tool. "
         "Keep answers concise (1-2 sentences). "
         f"Active Windows foreground: '{fg_title}'. Connected Monitors: {mon_desc}."
@@ -293,70 +344,89 @@ def run_gemini(prompt_text, api_key, model='gemini-3.5-flash', step_callback=Non
         }
     }
 
-    try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=25)
-        if resp.status_code != 200:
-            return f"Gemini Error ({resp.status_code}): {resp.text}"
+    # Automatic multi-model failover pool
+    models_to_try = [model] + [m for m in GEMINI_MODELS_POOL if m != model]
+    last_error = ""
 
-        data = resp.json()
-        candidates = data.get('candidates', [])
-        if not candidates:
-            return "No response generated."
+    for cur_model in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{cur_model}:generateContent?key={api_key}"
+        headers = {'Content-Type': 'application/json'}
 
-        content = candidates[0].get('content', {})
-        res_parts = content.get('parts', [])
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=20)
+            if resp.status_code == 429:
+                last_error = f"Model {cur_model} rate-limited (429)"
+                if step_callback:
+                    step_callback(f"· {cur_model} hit free quota, switching model...")
+                continue
+            if resp.status_code in (404, 503):
+                last_error = f"Model {cur_model} unavailable ({resp.status_code})"
+                continue
+            if resp.status_code != 200:
+                last_error = f"Gemini Error ({resp.status_code}): {resp.text}"
+                continue
 
-        # Check for Tool / Function Calls
-        fc_part = next((p for p in res_parts if 'functionCall' in p), None)
-        if fc_part:
-            fc = fc_part['functionCall']
-            func_name = fc.get('name')
-            func_args = fc.get('args', {})
+            data = resp.json()
+            candidates = data.get('candidates', [])
+            if not candidates:
+                return "No response generated."
 
-            if step_callback:
-                step_callback(f"▸ Executing {func_name}: {func_args}")
+            content = candidates[0].get('content', {})
+            res_parts = content.get('parts', [])
 
-            # ACTUALLY EXECUTE THE ACTION ON WINDOWS
-            tool_output = execute_tool(func_name, func_args)
+            # Check for Tool / Function Calls
+            fc_part = next((p for p in res_parts if 'functionCall' in p), None)
+            if fc_part:
+                fc = fc_part['functionCall']
+                func_name = fc.get('name')
+                func_args = fc.get('args', {})
 
-            # Feed tool execution result back to Gemini for final confirmed answer
-            contents.append(content)
-            contents.append({
-                "role": "user",
-                "parts": [{
-                    "functionResponse": {
-                        "name": func_name,
-                        "response": {"content": str(tool_output)}
-                    }
-                }]
-            })
+                if step_callback:
+                    step_callback(f"▸ Executing {func_name}: {func_args}")
 
-            followup_payload = {
-                "contents": contents,
-                "tools": GEMINI_TOOLS,
-                "systemInstruction": {"parts": [{"text": system_instruction}]},
-                "generationConfig": {"temperature": 0.2, "maxOutputTokens": 512}
-            }
-            resp2 = requests.post(url, headers=headers, json=followup_payload, timeout=20)
-            if resp2.status_code == 200:
-                followup_candidates = resp2.json().get('candidates', [])
-                if followup_candidates:
-                    fparts = followup_candidates[0].get('content', {}).get('parts', [])
-                    text_parts = [p.get('text', '') for p in fparts if 'text' in p]
-                    if text_parts:
-                        return "".join(text_parts).strip()
+                tool_output = execute_tool(func_name, func_args)
 
-            return f"✓ {tool_output}"
+                contents.append(content)
+                contents.append({
+                    "role": "user",
+                    "parts": [{
+                        "functionResponse": {
+                            "name": func_name,
+                            "response": {"content": str(tool_output)}
+                        }
+                    }]
+                })
 
-        # Regular text response
-        text_parts = [p.get('text', '') for p in res_parts if 'text' in p]
-        if text_parts:
-            raw_reply = "".join(text_parts).strip()
-            return check_and_execute_fallback(prompt_text, raw_reply)
-        return "Task processed."
+                followup_payload = {
+                    "contents": contents,
+                    "tools": GEMINI_TOOLS,
+                    "systemInstruction": {"parts": [{"text": system_instruction}]},
+                    "generationConfig": {"temperature": 0.2, "maxOutputTokens": 512}
+                }
+                resp2 = requests.post(url, headers=headers, json=followup_payload, timeout=20)
+                if resp2.status_code == 200:
+                    followup_candidates = resp2.json().get('candidates', [])
+                    if followup_candidates:
+                        fparts = followup_candidates[0].get('content', {}).get('parts', [])
+                        text_parts = [p.get('text', '') for p in fparts if 'text' in p]
+                        if text_parts:
+                            return "".join(text_parts).strip()
 
-    except Exception as e:
-        return f"Gemini request failed: {e}"
+                return f"✓ {tool_output}"
+
+            # Regular text response
+            text_parts = [p.get('text', '') for p in res_parts if 'text' in p]
+            if text_parts:
+                raw_reply = "".join(text_parts).strip()
+                return check_and_execute_fallback(prompt_text, raw_reply)
+
+            return "Task processed."
+
+        except Exception as e:
+            last_error = f"Gemini request failed: {e}"
+            continue
+
+    return f"Gemini temporarily unavailable ({last_error})."
 
 # ----------------- OpenAI-Compatible Implementation (NVIDIA NIM / Groq / Ollama) -----------------
 
@@ -414,6 +484,12 @@ def run_query(prompt_text, prefs, step_callback=None):
         step_callback(f"· Connecting to {prov['name']} ({prov['model']})...")
 
     if prov['provider'] == 'gemini':
-        return run_gemini(prompt_text, prov['api_key'], model=prov['model'], step_callback=step_callback)
+        res = run_gemini(prompt_text, prov['api_key'], model=prov['model'], step_callback=step_callback)
+        if "temporarily unavailable" in res and (prefs.get('nvidiaKey') or os.environ.get('NVIDIA_API_KEY')):
+            if step_callback:
+                step_callback("· All Gemini models rate-limited, failing over to NVIDIA NIM...")
+            nv_prov = get_active_provider({**prefs, 'provider': 'nvidia'})
+            return run_openai_compat(prompt_text, nv_prov, step_callback=step_callback)
+        return res
     else:
         return run_openai_compat(prompt_text, prov, step_callback=step_callback)
