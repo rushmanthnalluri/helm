@@ -19,7 +19,15 @@ if BASE_DIR not in sys.path:
 import homie
 import windows_tools
 
-TELEGRAM_API_BASE = "https://api.telegram.org"
+_SHARED_WHISPER = None
+
+def get_whisper_model():
+    global _SHARED_WHISPER
+    if _SHARED_WHISPER is None:
+        from faster_whisper import WhisperModel
+        whisper_dir = os.path.join(homie.CONFIG_DIR, 'whisper')
+        _SHARED_WHISPER = WhisperModel("tiny", device="cpu", compute_type="int8", download_root=whisper_dir)
+    return _SHARED_WHISPER
 
 class TelegramBridge:
     def __init__(self, token=None, allowed_users=None):
@@ -93,16 +101,18 @@ class TelegramBridge:
     def is_user_authorized(self, user_id, chat_id):
         """Verifies if the sender is authorized to control this PC."""
         uid_str = str(user_id)
-        if not self.allowed_users:
-            # First user to interact becomes the authorized owner
-            self.allowed_users.append(uid_str)
+        # If empty or only test IDs, pair this user as the owner
+        clean_users = [u for u in self.allowed_users if u not in ('5555', 'test', '999')]
+        if not clean_users:
+            self.allowed_users = [uid_str]
             self.prefs['telegramAllowedUsers'] = self.allowed_users
             homie.save_pref('telegramAllowedUsers', self.allowed_users)
+            print(f"[Telegram] Automatically paired owner user ID: {uid_str}", flush=True)
             self.send_message(
                 chat_id,
-                f"🛡️ **Security Pairing Complete**\n"
-                f"User ID `{uid_str}` has been registered as the sole owner of this PC.\n"
-                f"Other users cannot control your PC."
+                f"🛡️ **Security Pairing Complete!**\n"
+                f"You ({uid_str}) are now the authorized owner of this PC.\n"
+                f"You can now send voice notes, /screen, /lock, /media, or any text command!"
             )
             return True
         return uid_str in self.allowed_users
@@ -205,9 +215,7 @@ class TelegramBridge:
 
         try:
             # Transcribe via faster-whisper (PyAV handles OGG/Opus automatically)
-            from faster_whisper import WhisperModel
-            whisper_dir = os.path.join(homie.CONFIG_DIR, 'whisper')
-            model = WhisperModel("tiny", device="cpu", compute_type="int8", download_root=whisper_dir)
+            model = get_whisper_model()
             segments, _ = model.transcribe(audio_path, beam_size=1)
             transcript = " ".join(s.text.strip() for s in segments).strip()
 
@@ -228,7 +236,7 @@ class TelegramBridge:
 
     def poll_updates(self):
         """Long-polling update loop for Telegram Bot API."""
-        print("[Telegram] Bridge started. Listening for remote messages from your phone...")
+        print("[Telegram] Bridge started. Listening for remote messages from your phone...", flush=True)
         while self.running:
             try:
                 data = {'offset': self.offset, 'timeout': 20}
