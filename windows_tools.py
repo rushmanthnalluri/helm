@@ -44,8 +44,8 @@ def ensure_desktop_attached():
     except Exception:
         pass
 
-# Ensure desktop attachment and DPI awareness at load time
-ensure_desktop_attached()
+# Ensure DPI awareness at load time
+enable_dpi_awareness()
 
 def force_foreground_window(hwnd):
     """Guarantees bringing a window to the true foreground on Windows 10/11,

@@ -41,7 +41,10 @@ def find_claude_window():
                 t = win32gui.GetWindowText(h)
                 if "claude" in t.lower() and "chrome" in t.lower():
                     results.append({"hwnd": h, "title": t, "rect": win32gui.GetWindowRect(h)})
-        win32gui.EnumWindows(cb, None)
+        try:
+            win32gui.EnumWindows(cb, None)
+        except Exception:
+            pass
         if results:
             return results[0]
         return None

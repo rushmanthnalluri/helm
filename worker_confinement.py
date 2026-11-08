@@ -32,7 +32,6 @@ if BASE_DIR not in sys.path:
 
 import canary_monitor
 import kill_switch
-import windows_tools
 
 logger = logging.getLogger("homie.confinement")
 
@@ -172,6 +171,7 @@ class PreInjectionTOCTOUGuard:
         Returns (True, "OK") if safe, or (False, reason) if foreground focus shifted or targets prohibited image.
         """
         # 1. Check prohibited process
+        import windows_tools
         is_prohibited, proc_reason = windows_tools.is_prohibited_target_process()
         if is_prohibited:
             return False, f"TOCTOU Guard: Aborting input injection. Foreground process is prohibited ({proc_reason})"
