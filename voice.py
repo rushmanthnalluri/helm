@@ -78,6 +78,9 @@ class VoiceEngine:
         self.recording = True
         self.level_callback = level_callback
 
+        # Barge-in: immediately silence any active TTS speech
+        stop_speaking()
+
         try:
             self.stream = sd.InputStream(
                 samplerate=self.sample_rate,
@@ -155,6 +158,45 @@ class VoiceEngine:
             print(f"[Voice] Fallback recognition error: {e}")
 
         return ""
+
+_sapi_voice = None
+_sapi_lock = threading.Lock()
+
+def get_sapi_voice():
+    global _sapi_voice
+    with _sapi_lock:
+        if _sapi_voice is None:
+            try:
+                import win32com.client
+                _sapi_voice = win32com.client.Dispatch("SAPI.SpVoice")
+            except Exception as e:
+                print(f"[Voice] Could not initialize SAPI.SpVoice: {e}")
+        return _sapi_voice
+
+def speak_text_async(text_to_speak):
+    """Speaks text asynchronously so user can interrupt (barge-in) anytime."""
+    voice = get_sapi_voice()
+    if not voice:
+        return False
+    try:
+        # SVSFlagsAsync = 1, SVSFPurgeBeforeSpeak = 2 -> 1 | 2 = 3 (Purge prior & Speak async)
+        voice.Speak(str(text_to_speak), 3)
+        return True
+    except Exception as e:
+        print(f"[Voice] Async speak error: {e}")
+        return False
+
+def stop_speaking():
+    """Barge-in: Instantly cancels and purges any active speech output."""
+    voice = get_sapi_voice()
+    if not voice:
+        return False
+    try:
+        # SVSFPurgeBeforeSpeak = 2
+        voice.Speak("", 2)
+        return True
+    except Exception:
+        return False
 
 def synthesize_speech_to_wav(text_to_speak, output_wav_path):
     """Synthesizes text to a WAV audio file using Windows native SAPI SpVoice.

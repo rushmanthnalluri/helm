@@ -649,6 +649,27 @@ def try_fast_command(text):
             return True, f"🤖 **Claude AI Chrome**: Detected! Title: `{win['title']}`, HWND: {win['hwnd']}"
         return True, "🤖 **Claude AI Chrome**: No active Claude AI window detected in Chrome."
 
+    # 24. Pipeline Latency Telemetry & Observability
+    if re.search(r'\b(latency\s+status|telemetry\s+report|pipeline\s+telemetry|speed\s+report)\b', t):
+        import pipeline_telemetry
+        rep = pipeline_telemetry.format_telemetry_report()
+        return True, rep
+
+    # 25. MCP Server Tools ("mcp status", "list mcp tools")
+    if re.search(r'\b(mcp\s+status|list\s+mcp\s+tools|mcp\s+tools)\b', t):
+        import homie_mcp
+        tools = homie_mcp.MCP_TOOLS
+        lines = [f"🔌 **Homie Workstation MCP Server** ({len(tools)} tools exposed):"]
+        for tool in tools:
+            lines.append(f"• `{tool['name']}`: {tool['description'][:65]}...")
+        return True, "\n".join(lines)
+
+    # 26. Voice Barge-in / Silence
+    if re.search(r'^(?:shut\s+up|stop\s+talking|be\s+quiet|shh|silence)$', t):
+        import voice
+        voice.stop_speaking()
+        return True, "Silenced."
+
     return False, ""
 
 # ----------------- Web Search & Read -----------------

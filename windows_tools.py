@@ -886,18 +886,19 @@ def execute_safe_command(command, timeout=20):
         r'\bformat\s+[a-zA-Z]:',
         r'\b(diskpart|bcdedit)\b',
         r'\breg\s+delete\b',
-        r'\bshutdown\s+/[sS]\b',
+        r'\bshutdown\s+[-/][a-zA-Z]',
         r'\b(takeown|icacls)\b.*(/[gG]|grant)',
         # PowerShell evasion & execution bypasses
-        r'-(?:e|enc|encodedcommand)\s+[a-zA-Z0-9+/=]{8,}',
+        r'-(?:e|enc|encodedcommand)\b',
         r'\b(invoke-expression|iex)\b',
         r'\b(downloadstring|downloadfile)\b',
         r'\bi(?:wr|rm)\s+.*\|\s*iex\b',
         r'\bcertutil\b.*-(?:decode|urlcache)',
         r'\bbitsadmin\b.*transfer',
         r'-executionpolicy\s+bypass',
-        # Chained shell executions
-        r'\|\s*(?:powershell|cmd|sh|bash)\b'
+        # Chained shell executions and metacharacters
+        r'\|\s*(?:powershell|cmd|sh|bash)\b',
+        r'[;&|`$]|\r|\n|\x00'
     ]
     import re
     for pattern in blocked_patterns:
