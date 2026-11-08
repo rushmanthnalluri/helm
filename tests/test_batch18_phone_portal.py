@@ -36,9 +36,15 @@ class TestBatch18PhonePortal(unittest.TestCase):
     def setUp(self):
         clear_active_challenges()
         taint_tracker.clear_all_taints()
+        phone_approval_portal.reset_pairing_lockout(is_console_presence=True)
         if os.path.exists(phone_approval_portal.DEVICE_REGISTRY_PATH):
             try:
                 os.remove(phone_approval_portal.DEVICE_REGISTRY_PATH)
+            except Exception:
+                pass
+        if os.path.exists(phone_approval_portal.ENROLLMENT_LOCKOUT_PATH):
+            try:
+                os.remove(phone_approval_portal.ENROLLMENT_LOCKOUT_PATH)
             except Exception:
                 pass
         self.phone_priv, self.phone_pub_pem = enroll_test_device("primary_phone")
@@ -46,9 +52,15 @@ class TestBatch18PhonePortal(unittest.TestCase):
     def tearDown(self):
         clear_active_challenges()
         taint_tracker.clear_all_taints()
+        phone_approval_portal.reset_pairing_lockout(is_console_presence=True)
         if os.path.exists(phone_approval_portal.DEVICE_REGISTRY_PATH):
             try:
                 os.remove(phone_approval_portal.DEVICE_REGISTRY_PATH)
+            except Exception:
+                pass
+        if os.path.exists(phone_approval_portal.ENROLLMENT_LOCKOUT_PATH):
+            try:
+                os.remove(phone_approval_portal.ENROLLMENT_LOCKOUT_PATH)
             except Exception:
                 pass
 

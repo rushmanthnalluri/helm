@@ -68,6 +68,8 @@ REASON_SYSTEM_LOCKED = "DENY_SYSTEM_LOCKED"
 REASON_LEASE_EXPIRED = "DENY_LEASE_EXPIRED"
 REASON_UNAUTHORIZED_TOKEN = "DENY_UNAUTHORIZED_TOKEN"
 REASON_TAINTED_STEPUP = "NEEDS_HUMAN_STEPUP"
+REASON_TAINTED_EXECUTION = "DENY_TAINTED_EXECUTION"
+REASON_ENVELOPE_BREACH = "DENY_ENVELOPE_BREACH"
 REASON_PROHIBITED_PROCESS = "DENY_PROHIBITED_PROCESS"
 REASON_CANARY_DETECTED = "DENY_CANARY_DETECTED"
 REASON_RATE_LIMIT = "DENY_RATE_LIMIT_EXCEEDED"
@@ -224,6 +226,7 @@ class PolicySupervisor:
         self._consumed_intent_tokens = set()
         self._intent_lock = threading.Lock()
         self.actuator = SupervisorActuator(self)
+        self.envelope = None
         
         # Check dirty bit from previous run
         self._check_dirty_bit_on_startup()
@@ -544,11 +547,17 @@ class PolicySupervisor:
 
         req_id = payload.get("req_id", f"req_{int(time.time()*1000)}")
         tool = payload.get("tool", "")
-        args = payload.get("args", {})
+        args = payload.get("args")
+        if not isinstance(args, dict):
+            return self._encode_reply(MSG_ERROR, {
+                "error": "Malformed proposal: args must be a JSON object dictionary",
+                "reason_code": REASON_MALFORMED_FRAME
+            })
+
         # Supervisor derives caller_id from connection identity, ignoring worker spoofing
         caller_id = getattr(self, "authorized_worker_name", "worker") or "worker"
         # Supervisor derives args_hash internally, ignoring worker spoofing
-        clean_args = json.dumps(args, sort_keys=True, separators=(',', ':')) if isinstance(args, dict) else str(args)
+        clean_args = json.dumps(args, sort_keys=True, separators=(',', ':'))
         args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
 
         client_token = payload.get("client_token")
@@ -649,28 +658,58 @@ class PolicySupervisor:
                     "reason": toctou_reason
                 })
 
-        # 9. Taint & Out-of-band Step-up Verification
+        # 5.1. Policy Envelope domain scoping, step budget & prohibited environments
+        if getattr(self, "envelope", None) and getattr(self.envelope, "is_active", False):
+            current_proc = args.get("target_process") or args.get("app_name")
+            current_domain = args.get("domain") or args.get("url") or args.get("target")
+            if current_domain and ("http://" in str(current_domain) or "https://" in str(current_domain)):
+                import urllib.parse
+                try:
+                    current_domain = urllib.parse.urlparse(current_domain).hostname or current_domain
+                except Exception:
+                    pass
+            current_epoch = taint_tracker.get_taint_epoch()
+            env_ok, env_msg = self.envelope.check_and_consume(
+                tool, args, current_proc, current_epoch, current_domain
+            )
+            if not env_ok:
+                return self._encode_reply(MSG_DECISION, {
+                    "req_id": req_id,
+                    "status": "DENY",
+                    "reason_code": REASON_ENVELOPE_BREACH,
+                    "reason": f"Policy Envelope Gate: {env_msg}"
+                })
+
+        # 9. Taint & Out-of-band Step-up Verification (Fail-Closed)
         allowed, requires_step_up, taint_reason = taint_tracker.check_action_privilege(
             caller_id, tier, tool, args
         )
-        if not allowed and requires_step_up:
-            if step_up_token:
-                valid_step_up, step_up_msg = taint_tracker.verify_and_consume_step_up_token(
-                    step_up_token, tool, args
-                )
-                if not valid_step_up:
+        if not allowed:
+            if requires_step_up:
+                if step_up_token:
+                    valid_step_up, step_up_msg = taint_tracker.verify_and_consume_step_up_token(
+                        step_up_token, tool, args
+                    )
+                    if not valid_step_up:
+                        return self._encode_reply(MSG_DECISION, {
+                            "req_id": req_id,
+                            "status": "DENY",
+                            "reason_code": REASON_UNAUTHORIZED_TOKEN,
+                            "reason": f"Step-up token rejected: {step_up_msg}"
+                        })
+                    logger.info("Supervisor authorized action '%s' via consumed step-up token for caller '%s'", tool, caller_id)
+                else:
                     return self._encode_reply(MSG_DECISION, {
                         "req_id": req_id,
-                        "status": "DENY",
-                        "reason_code": REASON_UNAUTHORIZED_TOKEN,
-                        "reason": f"Step-up token rejected: {step_up_msg}"
+                        "status": "NEEDS_HUMAN",
+                        "reason_code": REASON_TAINTED_STEPUP,
+                        "reason": taint_reason
                     })
-                logger.info("Supervisor authorized action '%s' via consumed step-up token for caller '%s'", tool, caller_id)
             else:
                 return self._encode_reply(MSG_DECISION, {
                     "req_id": req_id,
-                    "status": "NEEDS_HUMAN",
-                    "reason_code": REASON_TAINTED_STEPUP,
+                    "status": "DENY",
+                    "reason_code": REASON_TAINTED_EXECUTION,
                     "reason": taint_reason
                 })
 
@@ -693,26 +732,31 @@ class PolicySupervisor:
         )
 
         # Phase 2: Privileged Supervisor Actuator executes effect WITH verified intent token
-        execution_success = True
+        execution_success = False
+        result = ""
         try:
-            result = self.actuator.execute_actuator(
-                tool, args, caller_id=caller_id, client_token=client_token, intent_token=intent_token, seq=frame_seq
-            )
-        except CompleteMediationBreachError as cme:
-            execution_success = False
-            result = f"Security Gate: {cme}"
-            self._transition_to_locked(f"Complete mediation violation: {cme}")
-        except Exception as e:
-            execution_success = False
-            result = f"Error executing tool in supervisor: {e}"
-
-        # Phase 3: Record OUTCOME in HMAC-SHA256 audit ledger
-        outcome_status = "SUCCESS" if execution_success else "FAILED"
-        agent_audit_ledger.record_agent_action(
-            caller_id, tool, tier, args, decision=f"OUTCOME:{req_id}:{outcome_status}"
-        )
-
-        self.active_request_id = None
+            try:
+                result = self.actuator.execute_actuator(
+                    tool, args, caller_id=caller_id, client_token=client_token, intent_token=intent_token, seq=frame_seq
+                )
+                execution_success = True
+            except CompleteMediationBreachError as cme:
+                execution_success = False
+                result = f"Security Gate: {cme}"
+                self._transition_to_locked(f"Complete mediation violation: {cme}")
+            except Exception as e:
+                execution_success = False
+                result = f"Error executing tool in supervisor: {e}"
+        finally:
+            # Phase 3: Record OUTCOME in HMAC-SHA256 audit ledger in finally block to guarantee ledger audit invariant
+            outcome_status = "SUCCESS" if execution_success else "FAILED"
+            try:
+                agent_audit_ledger.record_agent_action(
+                    caller_id, tool, tier, args, decision=f"OUTCOME:{req_id}:{outcome_status}"
+                )
+            except Exception:
+                pass
+            self.active_request_id = None
 
         return self._encode_reply(MSG_DECISION, {
             "req_id": req_id,

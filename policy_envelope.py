@@ -204,7 +204,7 @@ class PolicyEnvelope:
                 return False, f"DENY: Target process '{proc_clean}' not in envelope allowed list: {self.allowed_process_images}"
 
         # Browser Domain Scoping Check
-        if proc_clean in BROWSER_IMAGES and self.allowed_domains:
+        if (proc_clean in BROWSER_IMAGES or current_domain) and self.allowed_domains:
             if not current_domain or not any(current_domain.lower().endswith(d) for d in self.allowed_domains):
                 return False, f"DENY: Browser domain '{current_domain}' outside envelope domain scope: {self.allowed_domains}"
 

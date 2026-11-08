@@ -613,8 +613,8 @@ function renderChallenges(challenges) {
 
     const approveBtn = document.createElement('button');
     approveBtn.className = 'btn-approve';
-    approveBtn.textContent = 'Approve & Sign';
-    approveBtn.onclick = () => signAndApprove(ch.step_up_id, ch.challenge_hash, canonicalText.length, ch.expected_counter);
+    approveBtn.textContent = 'Approve & Sign (WebCrypto P-256)';
+    approveBtn.onclick = () => signAndApprove(ch, canonicalText.length);
     btnGroup.appendChild(approveBtn);
 
     card.appendChild(btnGroup);
@@ -622,21 +622,67 @@ function renderChallenges(challenges) {
   });
 }
 
-async function signAndApprove(stepUpId, challengeHash, payloadSize, expectedCounter) {
+// -------------------------------------------------------------
+// WebCrypto Device-Resident Key Storage & P-256 Signing
+// -------------------------------------------------------------
+let _deviceCryptoKey = null;
+
+async function getOrCreateDeviceKey() {
+  if (_deviceCryptoKey) return _deviceCryptoKey;
+  try {
+    const keyPair = await window.crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" },
+      false, // non-extractable private key
+      ["sign", "verify"]
+    );
+    _deviceCryptoKey = keyPair;
+    return keyPair;
+  } catch(e) {
+    console.warn("WebCrypto generateKey fallback:", e);
+    return null;
+  }
+}
+
+async function signAndApprove(ch, payloadSize) {
   if (payloadSize > 65536) {
     alert("❌ Security Gate: Action argument payload exceeds maximum 64KB size limit. Signing aborted.");
     return;
   }
   const devId = getDeviceId();
-  const counter = expectedCounter || clientCounter++;
-  localStorage.setItem('homie_signing_counter', (counter + 1).toString());
-  document.getElementById('counter-val').textContent = counter + 1;
+
+  // 1. Locally recompute challenge hash from displayed fields ("What You See Is What You Sign")
+  const rawChallenge = "CHALLENGE_V2|" + ch.device_id + "|" + ch.tool_name + "|" + ch.args_hash + "|" + ch.nonce + "|" + ch.expiry + "|" + ch.taint_epoch + "|" + ch.challenge_seq;
+  const rawBytes = new TextEncoder().encode(rawChallenge);
+  const digestBuffer = await window.crypto.subtle.digest("SHA-256", rawBytes);
+  const localHashHex = Array.from(new Uint8Array(digestBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+
+  if (localHashHex.toLowerCase() !== ch.challenge_hash.toLowerCase()) {
+    alert("❌ Security Violation: Locally recomputed challenge hash does not match server challenge! Signing aborted.");
+    return;
+  }
+
+  // 2. Perform asymmetric cryptographic signature
+  let signatureHex = "";
+  try {
+    const keyPair = await getOrCreateDeviceKey();
+    if (keyPair && keyPair.privateKey) {
+      const challengeBytes = new TextEncoder().encode(ch.challenge_hash);
+      const sigBuffer = await window.crypto.subtle['sign'](
+        { name: "ECDSA", hash: { name: "SHA-256" } },
+        keyPair.privateKey,
+        challengeBytes
+      );
+      signatureHex = Array.from(new Uint8Array(sigBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+  } catch(err) {
+    console.warn("Signing failed:", err);
+  }
 
   const sigPayload = {
-    step_up_id: stepUpId,
+    step_up_id: ch.step_up_id,
     device_id: devId,
-    counter: counter,
-    signature: challengeHash
+    counter: ch.expected_counter || 1,
+    signature: signatureHex
   };
 
   try {
@@ -649,7 +695,7 @@ async function signAndApprove(stepUpId, challengeHash, payloadSize, expectedCoun
     if (result.success) {
       alert("✅ Action approved and verified by PC supervisor!");
     } else {
-      alert("❌ Approval failed: " + result.message);
+      alert("❌ Approval rejected: " + result.message);
     }
     refreshChallenges();
   } catch(e) {
@@ -657,7 +703,17 @@ async function signAndApprove(stepUpId, challengeHash, payloadSize, expectedCoun
   }
 }
 
-function denyChallenge(stepUpId) {
+async function denyChallenge(stepUpId) {
+  const devId = getDeviceId();
+  try {
+    await fetch('/api/deny-challenge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ step_up_id: stepUpId, device_id: devId })
+    });
+  } catch(e) {
+    console.warn("Deny challenge error:", e);
+  }
   const el = document.getElementById('ch-' + stepUpId);
   if (el) el.remove();
   const container = document.getElementById('challenges-container');
@@ -673,6 +729,34 @@ refreshChallenges();
 </html>
 """
 
+def is_request_host_allowed(host_header: Optional[str]) -> bool:
+    if not host_header:
+        return False
+    h = host_header.split(":")[0].strip().lower()
+    allowed = {"localhost", "127.0.0.1", "::1"}
+    conf = load_phone_config()
+    cfg_host = (conf.get("host") or "").split(":")[0].strip().lower()
+    if cfg_host and cfg_host != "0.0.0.0":
+        allowed.add(cfg_host)
+    return h in allowed
+
+
+def is_request_origin_allowed(origin_header: Optional[str]) -> bool:
+    if not origin_header:
+        return True  # Direct browser navigation or non-browser client
+    try:
+        parsed = urllib.parse.urlparse(origin_header)
+        h = (parsed.hostname or "").lower()
+        allowed = {"localhost", "127.0.0.1", "::1"}
+        conf = load_phone_config()
+        cfg_host = (conf.get("host") or "").split(":")[0].strip().lower()
+        if cfg_host and cfg_host != "0.0.0.0":
+            allowed.add(cfg_host)
+        return h in allowed
+    except Exception:
+        return False
+
+
 class PhoneGatewayHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         # Suppress noisy standard HTTP logs
@@ -682,9 +766,13 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        # Only reflect Origin if valid local origin; NEVER send wildcard '*'
+        headers = getattr(self, "headers", None) or {}
+        origin = headers.get("Origin")
+        if origin and is_request_origin_allowed(origin):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Homie-Token")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.end_headers()
         if isinstance(body, str):
             body = body.encode("utf-8")
@@ -694,6 +782,17 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
         self._send_response(200, "text/plain", "")
 
     def do_GET(self):
+        headers = getattr(self, "headers", None) or {}
+        host = headers.get("Host")
+        if host and not is_request_host_allowed(host):
+            self._send_response(403, "application/json", json.dumps({"error": "Forbidden: Invalid Host header (DNS rebinding protection)"}))
+            return
+
+        origin = headers.get("Origin")
+        if origin and not is_request_origin_allowed(origin):
+            self._send_response(403, "application/json", json.dumps({"error": "Forbidden: Untrusted cross-origin request rejected"}))
+            return
+
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
 
@@ -722,6 +821,17 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
             self._send_response(404, "text/plain", "Not Found")
 
     def do_POST(self):
+        headers = getattr(self, "headers", None) or {}
+        host = headers.get("Host")
+        if host and not is_request_host_allowed(host):
+            self._send_response(403, "application/json", json.dumps({"error": "Forbidden: Invalid Host header (DNS rebinding protection)"}))
+            return
+
+        origin = headers.get("Origin")
+        if origin and not is_request_origin_allowed(origin):
+            self._send_response(403, "application/json", json.dumps({"error": "Forbidden: Untrusted cross-origin request rejected"}))
+            return
+
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
 
@@ -747,6 +857,8 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
             self._handle_complete_enrollment(body)
         elif path == "/api/submit-approval":
             self._handle_submit_approval(body)
+        elif path == "/api/deny-challenge":
+            self._handle_deny_challenge(body)
         elif path == "/api/remote-action":
             self._handle_remote_action(body)
         else:
@@ -758,11 +870,24 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(html.encode("utf-8"))))
         self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'self' 'unsafe-inline'; connect-src 'self'; style-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'self'")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        headers = getattr(self, "headers", None) or {}
+        origin = headers.get("Origin")
+        if origin and is_request_origin_allowed(origin):
+            self.send_header("Access-Control-Allow-Origin", origin)
         self.end_headers()
         self.wfile.write(html.encode("utf-8"))
+
+    def _handle_deny_challenge(self, body):
+        import phone_approval_portal
+        try:
+            data = json.loads(body) if body else {}
+        except Exception:
+            data = {}
+        step_up_id = data.get("step_up_id", "")
+        dev_id = data.get("device_id", "primary_phone")
+        ok, msg = phone_approval_portal.deny_approval_challenge(step_up_id, device_id=dev_id)
+        status = 200 if ok else 404
+        self._send_response(status, "application/json", json.dumps({"success": ok, "message": msg}))
 
     def _handle_get_pending_challenges(self, parsed):
         import phone_approval_portal

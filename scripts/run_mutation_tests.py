@@ -25,6 +25,12 @@ Applies real code mutations across the critical defense layers to verify that:
 22. Second-Device Multi-Sig Gate is requiring primary device signature before enrolling additional devices.
 23. Actuator Mandatory Sequence Number is strictly requiring positive sequence numbers.
 24. Pending Challenges Authentication Gate is denying unauthenticated challenge listing.
+25. Supervisor Fail-Open Gate is enforcing hard DENY when action privilege returns non-stepup deny.
+26. Supervisor Dict Arguments Gate is rejecting non-dict arguments up front.
+27. Supervisor Policy Envelope Gate is enforcing domain scoping & step limits inside _handle_propose.
+28. Enrollment Active Device Multi-Sig Gate is preventing revoked primary phone bypass.
+29. Enrollment Session-Bound V2 Multi-Sig Gate is preventing replay across sessions.
+30. Global Persistent Enrollment Lockout Gate is blocking brute-force pairing attempts.
 
 If any test suite stays green under a mutation, this script flags a CRITICAL FAILURE.
 All mutations MUST be detected and killed (100% Mutation Kill Rate).
@@ -241,8 +247,8 @@ MUTATIONS = [
         "id": "MUTATION_24_SECOND_DEVICE_MULTISIG_BYPASS",
         "name": "Bypass Second Device Multi-Sig Gate in complete_device_enrollment",
         "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
-        "target": "if len(registry) > 0:\n            primary_entry = registry.get(\"primary_phone\")",
-        "replacement": "if False: # MUTATION BYPASS: multisig check disabled\n            primary_entry = registry.get(\"primary_phone\")",
+        "target": "        active_devices = [v for k, v in registry.items() if not v.get(\"revoked\", False)]\n        if active_devices:\n            primary_entry = next((v for v in active_devices if v.get(\"device_id\") == \"primary_phone\"), active_devices[0])\n            if not primary_approval_sig:",
+        "replacement": "        active_devices = [v for k, v in registry.items() if not v.get(\"revoked\", False)]\n        if active_devices:\n            primary_entry = next((v for v in active_devices if v.get(\"device_id\") == \"primary_phone\"), active_devices[0])\n            if False: # MUTATION BYPASS: approval check bypassed",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch29_security_hardening.py::TestBatch29SecurityHardening::test_6_second_device_requires_primary_approval"]
     },
     {
@@ -260,6 +266,54 @@ MUTATIONS = [
         "target": 'if not is_device_token_valid(token):\n            self._send_response(401, "application/json", json.dumps({"error": "Unauthorized: Valid paired device token required"}))\n            return',
         "replacement": 'if False: # MUTATION BYPASS: auth check disabled\n            pass',
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch29_security_hardening.py::TestBatch29SecurityHardening::test_3_unauthenticated_listing_and_challenge_cancellation_denied"]
+    },
+    {
+        "id": "MUTATION_27_SUPERVISOR_FAIL_OPEN_BYPASS",
+        "name": "Bypass Fail-Closed Gate on Non-StepUp Deny in _handle_propose",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": "        if not allowed:\n            if requires_step_up:",
+        "replacement": "        if False: # MUTATION BYPASS: taint fail-closed gate disabled\n            if requires_step_up:",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch30_security_hardening.py::TestBatch30SecurityHardening::test_1_supervisor_fail_open_prevented_on_non_stepup_deny"]
+    },
+    {
+        "id": "MUTATION_28_SUPERVISOR_NON_DICT_ARGS_BYPASS",
+        "name": "Bypass Strict Dict Argument Validation in _handle_propose",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": "        if not isinstance(args, dict):\n            return self._encode_reply(MSG_ERROR, {",
+        "replacement": "        if False: # MUTATION BYPASS: non-dict args check disabled\n            return self._encode_reply(MSG_ERROR, {",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch30_security_hardening.py::TestBatch30SecurityHardening::test_2_supervisor_rejects_non_dict_arguments"]
+    },
+    {
+        "id": "MUTATION_29_SUPERVISOR_ENVELOPE_BYPASS",
+        "name": "Bypass Policy Envelope Check in PolicySupervisor._handle_propose",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": "        # 5.1. Policy Envelope domain scoping, step budget & prohibited environments\n        if getattr(self, \"envelope\", None) and getattr(self.envelope, \"is_active\", False):",
+        "replacement": "        # 5.1. Policy Envelope domain scoping, step budget & prohibited environments\n        if False: # MUTATION BYPASS: envelope check disabled",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch30_security_hardening.py::TestBatch30SecurityHardening::test_3_supervisor_envelope_enforcement_in_handle_propose"]
+    },
+    {
+        "id": "MUTATION_30_REVOKED_PRIMARY_BYPASS",
+        "name": "Bypass Active Device Multi-Sig Gate in complete_device_enrollment",
+        "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
+        "target": "        # Second-device enrollment multi-sig gate: Adding a new device requires active device approval\n        active_devices = [v for k, v in registry.items() if not v.get(\"revoked\", False)]\n        if active_devices:",
+        "replacement": "        # Second-device enrollment multi-sig gate: Adding a new device requires active device approval\n        active_devices = [v for k, v in registry.items() if not v.get(\"revoked\", False)]\n        if False: # MUTATION BYPASS: active device check disabled",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch30_security_hardening.py::TestBatch30SecurityHardening::test_5_enrollment_multi_sig_prevents_revoked_primary_bypass"]
+    },
+    {
+        "id": "MUTATION_31_SESSION_BOUND_MULTISIG_BYPASS",
+        "name": "Bypass Session-Bound V2 Multi-Sig Verification in complete_device_enrollment",
+        "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
+        "target": "            now = int(time.time())\n            v2_verified = False",
+        "replacement": "            now = int(time.time())\n            v2_verified = True # MUTATION BYPASS: session binding check bypassed",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch30_security_hardening.py::TestBatch30SecurityHardening::test_6_enrollment_multi_sig_binds_session_and_expiry"]
+    },
+    {
+        "id": "MUTATION_32_GLOBAL_LOCKOUT_BYPASS",
+        "name": "Bypass Global Persistent Lockout in start_local_enrollment",
+        "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
+        "target": "    if is_enrollment_locked_out():\n        logger.warning(\"Enrollment blocked: Global pairing attempt lockout is active.\")\n        return \"\"",
+        "replacement": "    if False: # MUTATION BYPASS: global lockout check disabled\n        pass",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch30_security_hardening.py::TestBatch30SecurityHardening::test_7_global_persistent_enrollment_lockout"]
     }
 ]
 
@@ -289,7 +343,7 @@ def _safe_copy(src: str, dst: str, retries: int = 5):
 
 def run_mutation_tests() -> bool:
     print("=" * 75)
-    print("=== BATCH 29 EXPANDED AUTOMATED CI MUTATION TEST HARNESS ===")
+    print("=== BATCH 30 EXPANDED AUTOMATED CI MUTATION TEST HARNESS ===")
     print("=" * 75)
     print(f"Total Security Mutations to Evaluate: {len(MUTATIONS)}\n")
 

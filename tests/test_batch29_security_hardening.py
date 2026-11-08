@@ -41,17 +41,25 @@ class TestBatch29SecurityHardening(unittest.TestCase):
     def setUp(self):
         phone_approval_portal.clear_active_challenges()
         taint_tracker.clear_all_taints()
+        phone_approval_portal.reset_pairing_lockout(is_console_presence=True)
         if os.path.exists(phone_approval_portal.DEVICE_REGISTRY_PATH):
             try: os.remove(phone_approval_portal.DEVICE_REGISTRY_PATH)
             except Exception: pass
         if os.path.exists(phone_approval_portal.CONSUMED_NONCES_PATH):
             try: os.remove(phone_approval_portal.CONSUMED_NONCES_PATH)
             except Exception: pass
+        if os.path.exists(phone_approval_portal.ENROLLMENT_LOCKOUT_PATH):
+            try: os.remove(phone_approval_portal.ENROLLMENT_LOCKOUT_PATH)
+            except Exception: pass
         self.phone_priv, self.phone_pub_pem = enroll_test_device("primary_phone")
 
     def tearDown(self):
         phone_approval_portal.clear_active_challenges()
         taint_tracker.clear_all_taints()
+        phone_approval_portal.reset_pairing_lockout(is_console_presence=True)
+        if os.path.exists(phone_approval_portal.ENROLLMENT_LOCKOUT_PATH):
+            try: os.remove(phone_approval_portal.ENROLLMENT_LOCKOUT_PATH)
+            except Exception: pass
 
     def test_1_html_injection_neutralization_in_arguments(self):
         """Vector 1: XSS / HTML Injection payload in tool arguments must be safely isolated in canonical text."""
@@ -180,7 +188,7 @@ class TestBatch29SecurityHardening(unittest.TestCase):
             sess_id, code, "secondary_phone", pub, primary_approval_sig=None
         )
         self.assertFalse(ok, "Second device enrollment must require primary device approval signature!")
-        self.assertIn("PRIMARY_APPROVAL_REQUIRED", msg)
+        self.assertIn("APPROVAL_REQUIRED", msg)
 
     def test_7_supervisor_derives_identity_and_computes_args_hash(self):
         """Vector 7: Supervisor ignores worker-supplied args_hash and caller_id spoofing."""

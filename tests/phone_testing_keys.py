@@ -93,3 +93,23 @@ def sign_test_challenge(phone_private_key: ECC.EccKey, challenge_hash: str) -> s
     """Signs a challenge hash using the phone's Ed25519 private key."""
     signer = eddsa.new(phone_private_key, 'rfc8032')
     return signer.sign(challenge_hash.encode('utf-8')).hex()
+
+
+def sign_enrollment_approval(
+    signing_priv_key: ECC.EccKey,
+    session_id: str,
+    device_id: str,
+    public_key_pem: str,
+    expiry: int
+) -> str:
+    """Signs an enrollment authorization payload binding session_id, device_id, pem, and expiry."""
+    msg = f"ENROLL_DEVICE_V2|{session_id}|{device_id}|{public_key_pem.strip()}|{expiry}".encode('utf-8')
+    if getattr(signing_priv_key, 'curve', '').lower() == 'ed25519':
+        signer = eddsa.new(signing_priv_key, 'rfc8032')
+        return signer.sign(msg).hex()
+    else:
+        from Crypto.Signature import DSS
+        from Crypto.Hash import SHA256
+        h = SHA256.new(msg)
+        signer = DSS.new(signing_priv_key, 'fips-186-3')
+        return signer.sign(h).hex()
