@@ -13,6 +13,69 @@ import win32api
 import win32process
 from PIL import ImageGrab, Image, ImageDraw, ImageFont
 
+def ensure_desktop_attached():
+    """Ensures the current thread and process are attached to the interactive user desktop (WinSta0\\Default).
+    Crucial for Windows services, background terminal tasks, and child processes to interact with desktop windows.
+    """
+    try:
+        import ctypes
+        u = ctypes.windll.user32
+        h_winsta = u.OpenWindowStationW('WinSta0', False, 0x10000000)
+        if h_winsta:
+            u.SetProcessWindowStation(h_winsta)
+        h_desk = u.OpenDesktopW('Default', 0, False, 0x10000000)
+        if h_desk:
+            u.SetThreadDesktop(h_desk)
+    except Exception:
+        pass
+
+# Ensure desktop attachment at load time
+ensure_desktop_attached()
+
+def force_foreground_window(hwnd):
+    """Guarantees bringing a window to the true foreground on Windows 10/11,
+    bypassing foreground lock timeouts even from background threads or daemons.
+    """
+    if not hwnd or not win32gui.IsWindow(hwnd):
+        return False
+    try:
+        import ctypes
+        u = ctypes.windll.user32
+        ensure_desktop_attached()
+
+        # Restore window if minimized
+        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+
+        # Attach thread input to overcome LockSetForegroundWindow restrictions
+        cur_fg = win32gui.GetForegroundWindow()
+        cur_tid = 0
+        if cur_fg and win32gui.IsWindow(cur_fg):
+            cur_tid, _ = win32process.GetWindowThreadProcessId(cur_fg)
+        our_tid = win32api.GetCurrentThreadId()
+
+        attached = False
+        if cur_tid and cur_tid != our_tid:
+            attached = bool(u.AttachThreadInput(cur_tid, our_tid, True))
+
+        # Alt key tap trick clears Windows OS foreground lock timer
+        u.keybd_event(win32con.VK_MENU, 0, 0, 0)
+        u.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
+
+        u.BringWindowToTop(hwnd)
+        u.SetForegroundWindow(hwnd)
+
+        if attached:
+            u.AttachThreadInput(cur_tid, our_tid, False)
+
+        return True
+    except Exception:
+        try:
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+            win32gui.SetForegroundWindow(hwnd)
+            return True
+        except Exception:
+            return False
+
 def get_monitors():
     """Returns a list of connected monitors with screen and work area dimensions."""
     monitors = []
@@ -80,48 +143,57 @@ def get_foreground_window():
 
 def find_windows(query=""):
     """Finds all visible top-level windows matching an app name or title query."""
+    ensure_desktop_attached()
     results = []
     q = query.lower().strip()
 
     def enum_cb(hwnd, _):
-        if not win32gui.IsWindowVisible(hwnd):
-            return True
-        title = win32gui.GetWindowText(hwnd).strip()
-        if not title:
-            return True
-        # Ignore tooltips, cloaked windows, or tiny helper windows
-        style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
-        ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
-        if ex_style & win32con.WS_EX_TOOLWINDOW:
-            return True
-
-        rect = win32gui.GetWindowRect(hwnd)
-        w, h = rect[2] - rect[0], rect[3] - rect[1]
-        if w < 100 or h < 100:
-            return True
-
-        _, pid = win32process.GetWindowThreadProcessId(hwnd)
-        proc_name = ""
         try:
-            import psutil
-            proc_name = psutil.Process(pid).name()
+            if not win32gui.IsWindowVisible(hwnd):
+                return True
+            title = ""
+            try:
+                title = win32gui.GetWindowText(hwnd).strip()
+            except Exception:
+                pass
+            if not title:
+                return True
+
+            # Ignore tooltips, cloaked windows, or tiny helper windows
+            style = win32gui.GetWindowLong(hwnd, win32con.GWL_STYLE)
+            ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+            if ex_style & win32con.WS_EX_TOOLWINDOW:
+                return True
+
+            rect = win32gui.GetWindowRect(hwnd)
+            w, h = rect[2] - rect[0], rect[3] - rect[1]
+            if w < 100 or h < 100:
+                return True
+
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+            proc_name = ""
+            try:
+                import psutil
+                proc_name = psutil.Process(pid).name()
+            except Exception:
+                pass
+
+            match = False
+            if not q:
+                match = True
+            elif q in title.lower() or (proc_name and q in proc_name.lower()):
+                match = True
+
+            if match:
+                results.append({
+                    'hwnd': hwnd,
+                    'title': title,
+                    'proc_name': proc_name,
+                    'pid': pid,
+                    'rect': rect
+                })
         except Exception:
             pass
-
-        match = False
-        if not q:
-            match = True
-        elif q in title.lower() or (proc_name and q in proc_name.lower()):
-            match = True
-
-        if match:
-            results.append({
-                'hwnd': hwnd,
-                'title': title,
-                'proc_name': proc_name,
-                'pid': pid,
-                'rect': rect
-            })
         return True
 
     try:
@@ -462,33 +534,130 @@ def close_app(app_name):
         pass
     return False, f"Could not find running window or process for '{app_name}'."
 
+def play_youtube(query=""):
+    """Opens YouTube and starts playback of the requested song, video, or playlist.
+    Extracts the top video ID via YouTube search and launches Chrome/Edge with &autoplay=1,
+    bringing the browser directly to the foreground.
+    """
+    import urllib.parse
+    import urllib.request
+    import re
+
+    q = (query or "").strip()
+    target_url = "https://www.youtube.com"
+
+    if q:
+        try:
+            search_url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(q)}"
+            req = urllib.request.Request(search_url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+            with urllib.request.urlopen(req, timeout=3.5) as resp:
+                html = resp.read().decode('utf-8', errors='ignore')
+            ids = re.findall(r'/watch\?v=([a-zA-Z0-9_-]{11})', html)
+            if ids:
+                target_url = f"https://www.youtube.com/watch?v={ids[0]}&autoplay=1"
+            else:
+                target_url = search_url
+        except Exception:
+            target_url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(q)}"
+
+    # Search for Chrome or Edge browser executable
+    browser_paths = [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    ]
+    browser_bin = None
+    for p in browser_paths:
+        if os.path.exists(p):
+            browser_bin = p
+            break
+
+    try:
+        if browser_bin:
+            subprocess.Popen([browser_bin, target_url], shell=False)
+        else:
+            import webbrowser
+            webbrowser.open(target_url)
+
+        # Give browser time to launch, then bring to foreground
+        time.sleep(1.2)
+        b_wins = find_windows("chrome") or find_windows("edge") or find_windows("youtube")
+        if b_wins:
+            force_foreground_window(b_wins[0]['hwnd'])
+
+        action_desc = f"Playing '{q}'" if q else "Opened YouTube"
+        return True, f"{action_desc} on YouTube: {target_url}"
+    except Exception as e:
+        return False, f"Failed to open YouTube: {e}"
+
 def send_chat_message(app_name, recipient="", message=""):
     """Automates sending a chat message to a contact in WhatsApp or Telegram on Windows."""
     import pyautogui
     import pyperclip
+    import urllib.parse
+    import re
+
     pyautogui.FAILSAFE = False
+    ensure_desktop_attached()
 
     app_lower = app_name.lower().strip()
-    ok, msg = launch_app(app_lower)
-    if not ok:
-        return False, f"Could not open {app_name}: {msg}"
+    recipient = (recipient or "").strip()
+    message = (message or "").strip()
 
-    time.sleep(1.0)  # Wait for app window to focus
+    # Launch or switch to application
+    launch_app(app_lower)
+
+    # Poll for window handle up to 3 seconds
+    target_hwnd = None
+    for _ in range(10):
+        wins = find_windows(app_lower)
+        if wins:
+            target_hwnd = wins[0]['hwnd']
+            break
+        time.sleep(0.3)
+
+    if target_hwnd:
+        force_foreground_window(target_hwnd)
+    time.sleep(0.8)
 
     try:
         if 'whatsapp' in app_lower:
-            pyautogui.hotkey('ctrl', 'f')
-            time.sleep(0.3)
-            pyautogui.hotkey('ctrl', 'a')
-            pyautogui.press('backspace')
+            # If recipient is a direct phone number, use whatsapp protocol
+            clean_phone = re.sub(r'[^\d+]', '', recipient)
+            if clean_phone and len(clean_phone) >= 7 and message:
+                try:
+                    url = f"whatsapp://send?phone={clean_phone}&text={urllib.parse.quote(message)}"
+                    os.startfile(url)
+                    time.sleep(1.5)
+                    if target_hwnd:
+                        force_foreground_window(target_hwnd)
+                    pyautogui.press('enter')
+                    return True, f"Sent '{message}' to phone {clean_phone} on WhatsApp."
+                except Exception:
+                    pass
+
+            # Focus and clear current selection
+            pyautogui.press('esc')
+            time.sleep(0.2)
+            pyautogui.press('esc')
             time.sleep(0.2)
 
             if recipient:
+                # Ctrl+N is "New Chat" in modern WhatsApp Desktop
+                pyautogui.hotkey('ctrl', 'n')
+                time.sleep(0.5)
+
                 pyperclip.copy(recipient)
                 pyautogui.hotkey('ctrl', 'v')
-                time.sleep(0.8)
+                time.sleep(1.2)  # Wait for contact search results to load
+
+                # Down arrow to first match, then Enter to open conversation
+                pyautogui.press('down')
+                time.sleep(0.2)
                 pyautogui.press('enter')
-                time.sleep(0.5)
+                time.sleep(0.8)
 
             if message:
                 pyperclip.copy(message)
@@ -502,15 +671,20 @@ def send_chat_message(app_name, recipient="", message=""):
         elif 'telegram' in app_lower:
             pyautogui.press('esc')
             time.sleep(0.2)
-            pyautogui.hotkey('ctrl', 'f')
-            time.sleep(0.3)
+            pyautogui.press('esc')
+            time.sleep(0.2)
 
             if recipient:
+                # Ctrl+K is universal Telegram contact / chat search
+                pyautogui.hotkey('ctrl', 'k')
+                time.sleep(0.4)
                 pyperclip.copy(recipient)
                 pyautogui.hotkey('ctrl', 'v')
                 time.sleep(0.8)
+                pyautogui.press('down')
+                time.sleep(0.2)
                 pyautogui.press('enter')
-                time.sleep(0.5)
+                time.sleep(0.6)
 
             if message:
                 pyperclip.copy(message)

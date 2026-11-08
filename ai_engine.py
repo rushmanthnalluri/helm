@@ -200,9 +200,8 @@ def execute_tool(name, args):
     try:
         if name == "play_youtube":
             query = args.get('query', '').strip()
-            url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(query)}"
-            webbrowser.open(url)
-            return f"Opened YouTube search for '{query}' in the default browser."
+            ok, msg = windows_tools.play_youtube(query)
+            return msg
 
         elif name == "open_app_or_url":
             target = args.get('target', '').strip()
@@ -261,30 +260,31 @@ def check_and_execute_fallback(prompt_text, reply_text):
             if not q or q in ('music', 'song', 'songs', 'video', 'playlist'):
                 m2 = re.search(r'(?:playing|opening|searched\s+for)\s+["\']?([^"\'.\n,]+)', low_r)
                 q = m2.group(1).strip() if m2 else "music"
-            execute_tool("play_youtube", {"query": q})
-            return f"✓ Opened YouTube for '{q}'.\n{reply_text}"
+            res = execute_tool("play_youtube", {"query": q})
+            return f"✓ {res}\n\n{reply_text}"
 
     # 2. Chat messaging (WhatsApp / Telegram)
     for chat_app in ('whatsapp', 'telegram'):
         if chat_app in low_p and any(w in low_p for w in ('say', 'send', 'message', 'text', 'tell')):
-            m1 = re.search(rf'^(?:open\s+)?{chat_app}\s+and\s+(?:say|send|text|message)\s+(.+?)\s+to\s+(.+)$', prompt_text, re.I)
+            m1 = re.search(rf'^(?:open\s+)?{chat_app}\s+(?:and\s+|to\s+)?(?:say|send|text|message)\s+(.+?)\s+to\s+(.+)$', prompt_text, re.I)
             if m1:
                 res = execute_tool("send_chat_message", {"app_name": chat_app, "recipient": m1.group(2).strip(), "message": m1.group(1).strip()})
-                return f"✓ {res}\n{reply_text}"
-            m2 = re.search(rf'^(?:open\s+)?{chat_app}\s+and\s+(?:say|send|text|message)\s+(?:to\s+)?([a-zA-Z0-9_\u0080-\uffff]+)\s+(.+)$', prompt_text, re.I)
+                return f"✓ {res}\n\n{reply_text}"
+            m2 = re.search(rf'^(?:open\s+)?{chat_app}\s+(?:and\s+|to\s+)?(?:say|send|text|message)\s+(?:to\s+)?([a-zA-Z0-9_\u0080-\uffff]+)\s+(.+)$', prompt_text, re.I)
             if m2:
                 res = execute_tool("send_chat_message", {"app_name": chat_app, "recipient": m2.group(1).strip(), "message": m2.group(2).strip()})
-                return f"✓ {res}\n{reply_text}"
-            m3 = re.search(rf'^(?:open\s+)?{chat_app}\s+and\s+(?:say|type|send)\s+(.+)$', prompt_text, re.I)
+                return f"✓ {res}\n\n{reply_text}"
+            m3 = re.search(rf'^(?:open\s+)?{chat_app}\s+(?:and\s+|to\s+)?(?:say|type|send)\s+(.+)$', prompt_text, re.I)
             if m3:
                 res = execute_tool("send_chat_message", {"app_name": chat_app, "recipient": "", "message": m3.group(1).strip()})
-                return f"✓ {res}\n{reply_text}"
+                return f"✓ {res}\n\n{reply_text}"
 
-    # 3. App Launch
-    for app in ('whatsapp', 'telegram', 'notepad', 'spotify', 'chrome', 'edge', 'calc', 'calculator', 'terminal', 'cmd', 'explorer', 'code', 'discord', 'slack', 'teams', 'zoom', 'word', 'excel'):
-        if (f"open {app}" in low_p or f"launch {app}" in low_p) or (f"opening {app}" in low_r or f"launched {app}" in low_r):
-            res = execute_tool("open_app_or_url", {"target": app})
-            return f"✓ {res}\n{reply_text}"
+    # 3. App Launch (ensure messaging commands aren't hijacked by simple app launch)
+    if not any(w in low_p for w in ('say', 'send', 'message', 'text', 'tell')):
+        for app in ('whatsapp', 'telegram', 'notepad', 'spotify', 'chrome', 'edge', 'calc', 'calculator', 'terminal', 'cmd', 'explorer', 'code', 'discord', 'slack', 'teams', 'zoom', 'word', 'excel'):
+            if (f"open {app}" in low_p or f"launch {app}" in low_p) or (f"opening {app}" in low_r or f"launched {app}" in low_r):
+                res = execute_tool("open_app_or_url", {"target": app})
+                return f"✓ {res}\n\n{reply_text}"
 
     # 3. Lock PC
     if 'lock' in low_p and any(w in low_p for w in ('pc', 'computer', 'screen')):

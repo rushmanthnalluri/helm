@@ -26,23 +26,23 @@ class TestFastCommands(unittest.TestCase):
         # 1. "open youtube and play the loose songs"
         handled, msg = homie.try_fast_command("open youtube and play the loose songs")
         self.assertTrue(handled)
-        self.assertIn("Opened YouTube search", msg)
+        self.assertIn("YouTube", msg)
         self.assertIn("the loose songs", msg)
 
         # 2. "Isaid open yt and play songs" (with prefix)
         handled, msg = homie.try_fast_command("Isaid open yt and play songs")
         self.assertTrue(handled)
-        self.assertIn("Opened YouTube search", msg)
+        self.assertIn("YouTube", msg)
 
         # 3. "open youtube"
         handled, msg = homie.try_fast_command("open youtube")
         self.assertTrue(handled)
-        self.assertIn("Opened YouTube", msg)
+        self.assertIn("YouTube", msg)
 
         # 4. "play loose songs on youtube"
         handled, msg = homie.try_fast_command("play loose songs on youtube")
         self.assertTrue(handled)
-        self.assertIn("Opened YouTube search", msg)
+        self.assertIn("YouTube", msg)
 
     def test_pc_vitals_command(self):
         handled, msg = homie.try_fast_command("pc status")

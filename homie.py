@@ -153,7 +153,7 @@ def try_fast_command(text):
             ok, msg = windows_tools.control_media(action)
             return True, msg
 
-    # 3. YouTube Search & Playback (e.g. "open youtube and play the loose songs", "open yt and play songs")
+    # 3. YouTube Search & Playback (e.g. "open youtube and play the loose songs", "open yt and play telugu music")
     yt_matched = False
     yt_query = None
 
@@ -191,22 +191,16 @@ def try_fast_command(text):
             yt_query = m5.group(1).strip()
 
     if yt_matched:
-        if yt_query:
-            url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(yt_query)}"
-            webbrowser.open(url)
-            return True, f"Opened YouTube search for '{yt_query}' in your browser."
-        else:
-            webbrowser.open("https://www.youtube.com")
-            return True, "Opened YouTube in your browser."
+        ok, msg = windows_tools.play_youtube(yt_query)
+        return True, msg
 
-    # 4. Generic Song Playback (e.g. "play bohemian rhapsody", "play loose songs")
+    # 4. Generic Song Playback (e.g. "play bohemian rhapsody", "play loose songs", "play telugu songs")
     play_match = re.match(r'^play\s+(.+)$', t)
     if play_match:
         target_song = play_match.group(1).strip()
         if target_song not in ('music', 'song', 'audio', 'sound', 'track', 'media', 'it'):
-            url = f"https://www.youtube.com/results?search_query={urllib.parse.quote(target_song)}"
-            webbrowser.open(url)
-            return True, f"Opened YouTube and playing '{target_song}'"
+            ok, msg = windows_tools.play_youtube(target_song)
+            return True, msg
 
     # 5. Window Placement (e.g. "put this on left", "window right", "maximize")
     place_patterns = [
@@ -227,27 +221,29 @@ def try_fast_command(text):
                 ok, msg = windows_tools.place_window(app_or_title=app, where=where)
                 return True, msg
 
-    # 6. Messaging: WhatsApp & Telegram ("open whatsapp and say hi to Rusman", "open telegram and say hi")
+    # 6. Messaging: WhatsApp & Telegram ("open whatsapp and say hi to Rusman", "open whatsapp and say hi to amma❤️")
+    clean_msg_text = re.sub(r'^[,\.\s!?\'"]+|[,\.\s!?\'"]+$', '', raw).strip()
+
     # A. "open <app> and say/send <text> to <recipient>"
-    msg_m1 = re.search(r'^(?:open\s+)?(whatsapp|telegram)\s+and\s+(?:say|send|text|message)\s+(.+?)\s+to\s+(.+)$', raw, re.I)
+    msg_m1 = re.search(r'^(?:open\s+)?(whatsapp|telegram)\s+(?:and\s+|to\s+)?(?:say|send|text|message)\s+(.+?)\s+to\s+(.+)$', clean_msg_text, re.I)
     if msg_m1:
         ok, res = windows_tools.send_chat_message(msg_m1.group(1), recipient=msg_m1.group(3).strip(), message=msg_m1.group(2).strip())
         return True, res
 
     # B. "open <app> and say/send [to] <recipient> <text>"
-    msg_m2 = re.search(r'^(?:open\s+)?(whatsapp|telegram)\s+and\s+(?:say|send|text|message)\s+(?:to\s+)?([a-zA-Z0-9_\u0080-\uffff]+)\s+(.+)$', raw, re.I)
+    msg_m2 = re.search(r'^(?:open\s+)?(whatsapp|telegram)\s+(?:and\s+|to\s+)?(?:say|send|text|message)\s+(?:to\s+)?([a-zA-Z0-9_\u0080-\uffff]+)\s+(.+)$', clean_msg_text, re.I)
     if msg_m2:
         ok, res = windows_tools.send_chat_message(msg_m2.group(1), recipient=msg_m2.group(2).strip(), message=msg_m2.group(3).strip())
         return True, res
 
     # C. "say/send <text> to <recipient> on <app>"
-    msg_m3 = re.search(r'^(?:say|send|text|message)\s+(.+?)\s+to\s+(.+?)\s+(?:on|via|in)\s+(whatsapp|telegram)$', raw, re.I)
+    msg_m3 = re.search(r'^(?:say|send|text|message)\s+(.+?)\s+to\s+(.+?)\s+(?:on|via|in)\s+(whatsapp|telegram)$', clean_msg_text, re.I)
     if msg_m3:
         ok, res = windows_tools.send_chat_message(msg_m3.group(3), recipient=msg_m3.group(2).strip(), message=msg_m3.group(1).strip())
         return True, res
 
     # D. "open <app> and say/type/send <text>" (active chat)
-    msg_m4 = re.search(r'^(?:open\s+)?(whatsapp|telegram)\s+and\s+(?:say|type|send)\s+(.+)$', raw, re.I)
+    msg_m4 = re.search(r'^(?:open\s+)?(whatsapp|telegram)\s+(?:and\s+|to\s+)?(?:say|type|send)\s+(.+)$', clean_msg_text, re.I)
     if msg_m4:
         ok, res = windows_tools.send_chat_message(msg_m4.group(1), recipient="", message=msg_m4.group(2).strip())
         return True, res
@@ -259,8 +255,8 @@ def try_fast_command(text):
         ok, msg = windows_tools.close_app(target)
         return True, msg
 
-    # 8. PC Vitals ("pc status", "system status", "vitals", "how is my pc")
-    if re.search(r'\b(pc\s+status|system\s+status|pc\s+vitals|system\s+health|how\s+is\s+my\s+pc)\b', t):
+    # 8. PC Vitals ("pc status", "system status", "vitals", "how is my pc", "is my pc ok")
+    if re.search(r'\b(pc\s+status|system\s+status|pc\s+vitals|system\s+health|how\s+is\s+my\s+pc|how\s+is\s+my\s+computer|is\s+my\s+pc\s+ok(?:ay)?|is\s+my\s+computer\s+ok(?:ay)?|^vitals$|^diagnose$|health\s+check)\b', t):
         v = windows_tools.get_system_vitals()
         msg = (
             f"💻 **PC Health Snapshot**:\n"
@@ -300,7 +296,7 @@ def try_fast_command(text):
         return True, f"Today is {current_date}."
 
     # 9. Quick System Actions (lock PC)
-    if re.search(r'\b(lock\s+computer|lock\s+screen|lock\s+pc|lock\s+my\s+pc)\b', t):
+    if re.search(r'\b(lock\s+computer|lock\s+screen|lock\s+pc|lock\s+my\s+pc|^lock$)\b', t):
         import ctypes
         ctypes.windll.user32.LockWorkStation()
         return True, "Workstation locked."

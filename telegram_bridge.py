@@ -154,13 +154,25 @@ class TelegramBridge:
                 "You can talk to me like a walkie-talkie or send commands from anywhere:\n\n"
                 "🎙️ **Voice Messages**: Hold Telegram mic button, speak, and release!\n"
                 "📸 `/screen` - Take a live screenshot of your PC\n"
+                "💻 `/status` - Check PC RAM, Disk, Battery, and Uptime\n"
+                "▶️ `/play <song>` - Instantly play music/video on YouTube\n"
                 "🔒 `/lock` - Lock your Windows PC\n"
+                "🛑 `/close <app>` - Close an app (e.g. `/close whatsapp`)\n"
                 "🪟 `/snap <left|right|full|center>` - Arrange windows\n"
                 "🎵 `/media <pause|play|next|mute>` - Control music\n"
-                "🚀 `/open <app>` - Launch an app (e.g. `/open notepad`)\n"
+                "🚀 `/open <app>` - Launch an app (e.g. `/open spotify`)\n"
                 "💬 Or just type anything you want me to do or answer!"
             )
             self.send_message(chat_id, msg)
+            return
+
+        if cmd in ('/play', '/yt', '/youtube'):
+            target = " ".join(args)
+            if not target:
+                self.send_message(chat_id, "Usage: `/play <song or video name>` (e.g. `/play telugu music`)")
+                return
+            ok, msg = windows_tools.play_youtube(target)
+            self.send_message(chat_id, f"▶️ {msg}")
             return
 
         if cmd == '/screen':
