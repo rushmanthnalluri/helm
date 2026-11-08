@@ -122,16 +122,16 @@ class SupervisorActuator:
         client_token: Optional[str] = None,
         intent_token: Optional[str] = None
     ) -> str:
-        # Enforce Complete Mediation Invariant
+        # Enforce Complete Mediation Invariant via allowlist: Any tier other than READ_ONLY requires valid INTENT token
         allowed_tools = get_allowed_tools_map()
         tier = allowed_tools.get(tool, "WRITE_EXEC")
 
-        if tier in ("WRITE_EXEC", "ELEVATED_CONFIRM"):
+        if tier != "READ_ONLY":
             if not self.supervisor.verify_and_consume_intent_token(
                 intent_token, tool, args, caller_id, self.supervisor.last_client_seq
             ):
                 raise CompleteMediationBreachError(
-                    f"Complete mediation invariant breach: tool '{tool}' actuator invoked without valid supervisor INTENT token!"
+                    f"Complete mediation invariant breach: tool '{tool}' (tier: {tier}) actuator invoked without valid supervisor INTENT token!"
                 )
 
         # Execute effect inside supervisor
@@ -295,10 +295,13 @@ class PolicySupervisor:
         return True, "Supervisor successfully unlocked by human confirmation."
 
     def mint_intent_token(self, tool: str, args: Dict[str, Any], caller_id: str, seq: int) -> str:
-        """Mints an unforgeable HMAC-SHA256 INTENT token inside supervisor private memory."""
+        """Mints an unforgeable HMAC-SHA256 INTENT token inside supervisor private memory.
+        Enforces dictionary arguments and full 64-character SHA-256 arguments binding."""
         now = time.time()
-        clean_args = json.dumps(args, sort_keys=True) if isinstance(args, dict) else str(args)
-        args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()[:16]
+        if not isinstance(args, dict):
+            raise ValueError(f"mint_intent_token strictly requires a dictionary, got {type(args).__name__}")
+        clean_args = json.dumps(args, sort_keys=True, separators=(',', ':'))
+        args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
         raw = f"INTENT_V2:{self.session_epoch}:{seq}:{int(now)}:{tool}:{args_hash}:{caller_id}"
         sig = hmac.new(self._supervisor_secret, raw.encode("utf-8"), hashlib.sha256).hexdigest()
         return f"{raw}:{sig}"
@@ -306,13 +309,16 @@ class PolicySupervisor:
     def verify_and_consume_intent_token(
         self, token: Optional[str], tool: str, args: Dict[str, Any], caller_id: str, seq: int
     ) -> bool:
-        """Verifies supervisor INTENT token integrity, arguments binding (args_hash),
-        freshness (<=15s), and enforces single-use replay protection."""
+        """Verifies supervisor INTENT token integrity, arguments binding (full 64-char args_hash),
+        sequence binding (token_seq == seq), freshness (<=15s), and enforces single-use replay protection."""
         if not token or not isinstance(token, str) or not token.startswith("INTENT_V2:"):
             return False
 
         # Replay prevention: check if token was already consumed
-        if token in self._consumed_intent_tokens:
+        if isinstance(self._consumed_intent_tokens, dict):
+            if token in self._consumed_intent_tokens:
+                return False
+        elif token in self._consumed_intent_tokens:
             return False
 
         if ":" not in token:
@@ -335,12 +341,16 @@ class PolicySupervisor:
             return False
         if abs(time.time() - ts) > 15.0:  # 15-second TTL
             return False
+        if token_seq != seq:  # Strictly bind sequence number!
+            return False
         if tok_tool != tool or tok_caller != caller_id:
             return False
 
-        # Verify arguments hash
-        clean_args = json.dumps(args, sort_keys=True) if isinstance(args, dict) else str(args)
-        expected_args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()[:16]
+        # Verify arguments hash (reject non-dict args)
+        if not isinstance(args, dict):
+            return False
+        clean_args = json.dumps(args, sort_keys=True, separators=(',', ':'))
+        expected_args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
         if not hmac.compare_digest(tok_args_hash, expected_args_hash):
             return False
 
@@ -348,8 +358,15 @@ class PolicySupervisor:
         if not hmac.compare_digest(sig, expected_sig):
             return False
 
-        # Consume token to enforce single-use replay protection
-        self._consumed_intent_tokens.add(token)
+        # Consume token to enforce single-use replay protection and prune expired tokens (>30s)
+        now = time.time()
+        if not isinstance(self._consumed_intent_tokens, dict):
+            self._consumed_intent_tokens = {}
+        self._consumed_intent_tokens[token] = now
+        # Prune expired tokens
+        to_prune = [t for t, exp in self._consumed_intent_tokens.items() if now - exp > 30.0]
+        for t in to_prune:
+            del self._consumed_intent_tokens[t]
         return True
 
     def verify_intent_token(self, token: Optional[str], tool: str, caller_id: str, seq: int) -> bool:

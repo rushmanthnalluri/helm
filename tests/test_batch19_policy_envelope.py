@@ -25,7 +25,10 @@ import phone_approval_portal
 class TestBatch19PolicyEnvelope(unittest.TestCase):
 
     def setUp(self):
-        self.device_key = "device_key_policy_envelope_test"
+        from tests.phone_testing_keys import enroll_test_device, sign_test_challenge
+        self.sign_test_challenge = sign_test_challenge
+        self.phone_priv, self.phone_pub = enroll_test_device("primary_phone")
+        enroll_test_device("phone_01", self.phone_pub)
         self.epoch = 1700000000
         self.env = PolicyEnvelope(
             envelope_id="env_unit_test_01",
@@ -44,16 +47,16 @@ class TestBatch19PolicyEnvelope(unittest.TestCase):
         self.assertIn("notepad.exe", ch["canonical_prompt"])
 
         # Sign using phone device key
-        sig = phone_approval_portal.compute_device_signature(ch["canonical_hash"], self.device_key)
-        ok, msg = self.env.activate_with_signature(sig, device_key_override=self.device_key)
+        sig = self.sign_test_challenge(self.phone_priv, ch["canonical_hash"])
+        ok, msg = self.env.activate_with_signature(sig)
         self.assertTrue(ok)
         self.assertTrue(self.env.is_active)
 
     def test_step_budget_consumption_and_hard_deny(self):
         """Verifies allowed actions succeed within budget and are strictly hard-denied once exhausted."""
         ch = self.env.generate_phone_challenge()
-        sig = phone_approval_portal.compute_device_signature(ch["canonical_hash"], self.device_key)
-        self.env.activate_with_signature(sig, device_key_override=self.device_key)
+        sig = self.sign_test_challenge(self.phone_priv, ch["canonical_hash"])
+        self.env.activate_with_signature(sig)
 
         # Step 1: OK
         ok1, res1 = self.env.check_and_consume("homie_click_coords", {"x": 50, "y": 50}, "notepad.exe", self.epoch)
@@ -78,8 +81,8 @@ class TestBatch19PolicyEnvelope(unittest.TestCase):
     def test_keystroke_cap_enforcement(self):
         """Verifies cumulative keystrokes are tracked and exceeding cap is hard-denied."""
         ch = self.env.generate_phone_challenge()
-        sig = phone_approval_portal.compute_device_signature(ch["canonical_hash"], self.device_key)
-        self.env.activate_with_signature(sig, device_key_override=self.device_key)
+        sig = self.sign_test_challenge(self.phone_priv, ch["canonical_hash"])
+        self.env.activate_with_signature(sig)
 
         # Type 30 chars (under 50 cap): OK
         ok1, _ = self.env.check_and_consume("homie_type_text", {"text": "A" * 30}, "notepad.exe", self.epoch)
@@ -94,8 +97,8 @@ class TestBatch19PolicyEnvelope(unittest.TestCase):
     def test_unauthorized_process_image_hard_denial(self):
         """Verifies targeting an unapproved process (e.g. cmd.exe or powershell) is hard-denied."""
         ch = self.env.generate_phone_challenge()
-        sig = phone_approval_portal.compute_device_signature(ch["canonical_hash"], self.device_key)
-        self.env.activate_with_signature(sig, device_key_override=self.device_key)
+        sig = self.sign_test_challenge(self.phone_priv, ch["canonical_hash"])
+        self.env.activate_with_signature(sig)
 
         # Attempt to target powershell.exe: DENY
         ok, res = self.env.check_and_consume("homie_click_coords", {"x": 10, "y": 10}, "powershell.exe", self.epoch)
@@ -115,8 +118,8 @@ class TestBatch19PolicyEnvelope(unittest.TestCase):
             taint_epoch=self.epoch
         )
         ch = env_with_del.generate_phone_challenge()
-        sig = phone_approval_portal.compute_device_signature(ch["canonical_hash"], self.device_key)
-        env_with_del.activate_with_signature(sig, device_key_override=self.device_key)
+        sig = self.sign_test_challenge(self.phone_priv, ch["canonical_hash"])
+        env_with_del.activate_with_signature(sig)
 
         # homie_delete_file must be denied by envelope policy because it requires explicit step-up!
         ok, res = env_with_del.check_and_consume("homie_delete_file", {"path": "test.txt"}, "notepad.exe", self.epoch)
@@ -126,8 +129,8 @@ class TestBatch19PolicyEnvelope(unittest.TestCase):
     def test_taint_epoch_invalidation(self):
         """Verifies envelope is invalidated if worker taint epoch changes."""
         ch = self.env.generate_phone_challenge()
-        sig = phone_approval_portal.compute_device_signature(ch["canonical_hash"], self.device_key)
-        self.env.activate_with_signature(sig, device_key_override=self.device_key)
+        sig = self.sign_test_challenge(self.phone_priv, ch["canonical_hash"])
+        self.env.activate_with_signature(sig)
 
         # Mismatched taint epoch
         ok, res = self.env.check_and_consume("homie_click_coords", {"x": 10, "y": 10}, "notepad.exe", self.epoch + 1)
@@ -162,8 +165,8 @@ class TestBatch19PolicyEnvelope(unittest.TestCase):
             allowed_domains=["docs.python.org"]
         )
         ch = browser_env.generate_phone_challenge()
-        sig = phone_approval_portal.compute_device_signature(ch["canonical_hash"], self.device_key)
-        browser_env.activate_with_signature(sig, device_key_override=self.device_key)
+        sig = self.sign_test_challenge(self.phone_priv, ch["canonical_hash"])
+        browser_env.activate_with_signature(sig)
 
         # 1. Allowed domain navigation: OK
         ok1, _ = browser_env.check_and_consume(
@@ -181,8 +184,8 @@ class TestBatch19PolicyEnvelope(unittest.TestCase):
     def test_semantic_high_risk_disguised_controls_and_enter_submit(self):
         """Batch 21 Directive: Disguised high-risk controls ('Continue', 'Next') and Enter submits require step-up."""
         ch = self.env.generate_phone_challenge()
-        sig = phone_approval_portal.compute_device_signature(ch["canonical_hash"], self.device_key)
-        self.env.activate_with_signature(sig, device_key_override=self.device_key)
+        sig = self.sign_test_challenge(self.phone_priv, ch["canonical_hash"])
+        self.env.activate_with_signature(sig)
 
         # 1. Button labeled "Continue" or "Agree" (disguised checkout/submission): DENY
         ok1, res1 = self.env.check_and_consume(

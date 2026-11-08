@@ -637,13 +637,9 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
         speech = data.get("speech", "")
         pin = data.get("pin", "")
         token = data.get("token", "") or self.headers.get("Authorization", "").replace("Bearer ", "")
-        conf = load_phone_config()
-
-        # Check cryptographic token or fallback PIN
-        is_auth = is_device_token_valid(token) or (conf.get("require_pin", True) and bool(pin) and str(pin) == str(conf.get("pin", "")))
-
-        if not is_auth:
-            self._send_response(401, "application/json", json.dumps({"reply": "Unauthorized: Device pairing token or PIN required."}))
+        # Check cryptographic token (fail closed - strictly requires valid device token)
+        if not is_device_token_valid(token):
+            self._send_response(401, "application/json", json.dumps({"reply": "Unauthorized: Valid device pairing token required."}))
             return
 
         reply = execute_phone_instruction(speech, session_id="web_call")

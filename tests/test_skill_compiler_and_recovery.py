@@ -42,6 +42,9 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
         kill_switch._ENGAGED_REASON = ""
         taint_tracker.clear_all_taints()
         action_broker._GLOBAL_BROKER = None
+        from tests.phone_testing_keys import enroll_test_device, mint_test_action_approval
+        self.phone_priv, self.phone_pub = enroll_test_device("primary_phone")
+        self.mint_test_action_approval = mint_test_action_approval
 
     def tearDown(self):
         if os.path.exists(self.test_registry_file):
@@ -58,10 +61,13 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
         kill_switch._ENGAGED_REASON = ""
         taint_tracker.clear_all_taints()
         action_broker._GLOBAL_BROKER = None
+        from tests.phone_testing_keys import enroll_test_device, mint_test_action_approval
+        self.phone_priv, self.phone_pub = enroll_test_device("primary_phone")
+        self.mint_test_action_approval = mint_test_action_approval
 
-    def _mint_macro_approval(self, name, steps):
-        m_hash = skill_compiler.compute_macro_canonical_hash(name, steps)
-        return phone_approval_portal.mint_action_approval("homie_compile_macro", m_hash)
+    def _mint_macro_approval(self, name, steps, description=""):
+        m_hash = skill_compiler.compute_macro_canonical_hash(name, steps, description=description)
+        return self.mint_test_action_approval(self.phone_priv, "homie_compile_macro", m_hash)
 
     def test_macro_compilation_signing_and_execution(self):
         """Verifies macro compilation, cryptographic signing, and multi-step execution under bound approval."""
@@ -69,7 +75,7 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
             {"tool": "homie_place_window", "arguments": {"app_name": "notepad", "position": "left"}},
             {"tool": "homie_control_media", "arguments": {"action": "play_pause"}}
         ]
-        approval = self._mint_macro_approval("dev_morning_setup", steps)
+        approval = self._mint_macro_approval("dev_morning_setup", steps, description="Places notepad on the left and toggles music")
 
         ok, msg, macro = self.registry.register_macro(
             name="dev_morning_setup",
@@ -94,7 +100,7 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
     def test_tampered_macro_signature_rejected(self):
         """Verifies that tampering with a macro step causes signature validation failure."""
         steps = [{"tool": "homie_control_media", "arguments": {"action": "volup"}}]
-        approval = self._mint_macro_approval("custom_volume_step", steps)
+        approval = self._mint_macro_approval("custom_volume_step", steps, description="Volume step")
         ok, msg, macro = self.registry.register_macro("custom_volume_step", "Volume step", steps, approval=approval)
         self.assertTrue(ok)
 
@@ -168,7 +174,7 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
         taint_tracker.set_workstation_tainted(True)
         try:
             steps = [{"tool": "homie_control_media", "arguments": {"action": "volup"}}]
-            approval = self._mint_macro_approval("tainted_macro", steps)
+            approval = self._mint_macro_approval("tainted_macro", steps, description="Tainted macro")
             ok, msg, _ = self.registry.register_macro("tainted_macro", "Tainted macro", steps, approval=approval)
             self.assertFalse(ok)
             self.assertIn("Taint Laundering Detected", msg)
@@ -179,7 +185,7 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
         """Verifies macros cannot shadow core deterministic fast commands (mute, pause, pc_status)."""
         steps = [{"tool": "homie_control_media", "arguments": {"action": "volup"}}]
         for forbidden in ["mute", "pause", "pc_status", "volume_up", "clipboard"]:
-            approval = self._mint_macro_approval(forbidden, steps)
+            approval = self._mint_macro_approval(forbidden, steps, description="Shadowing macro")
             ok, msg, _ = self.registry.register_macro(forbidden, "Shadowing macro", steps, approval=approval)
             self.assertFalse(ok, f"Expected forbidden name '{forbidden}' to be rejected")
             self.assertIn("shadows built-in fast command", msg)
@@ -188,7 +194,7 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
         """Verifies macro names must match allowlist regex ^[a-z0-9_]{1,40}$."""
         steps = [{"tool": "homie_control_media", "arguments": {"action": "volup"}}]
         bad_name = "invalid-name$cmd"
-        approval = self._mint_macro_approval(bad_name, steps)
+        approval = self._mint_macro_approval(bad_name, steps, description="Bad name")
         ok, msg, _ = self.registry.register_macro(bad_name, "Bad name", steps, approval=approval)
         self.assertFalse(ok)
         self.assertIn("violates name policy", msg)
@@ -197,11 +203,27 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
         """Verifies deeply nested parameters exceeding nesting limit are rejected."""
         deep_args = {"l1": {"l2": {"l3": {"l4": "too_deep"}}}}
         steps = [{"tool": "homie_place_window", "arguments": deep_args}]
-        approval = self._mint_macro_approval("deep_param_macro", steps)
+        approval = self._mint_macro_approval("deep_param_macro", steps, description="Deep")
         ok, msg, _ = self.registry.register_macro("deep_param_macro", "Deep", steps, approval=approval)
         self.assertFalse(ok)
         self.assertIn("Parameter recursion depth exceeded", msg)
 
+
+
+    def test_macro_compilation_fresh_session_taint_dodge_rejected(self):
+        """Verifies that an attacker cannot dodge taint detection by compiling with a fresh session ID."""
+        import taint_tracker
+        taint_tracker.mark_session_tainted("worker_sub_123", "untrusted_network_payload")
+        self.assertTrue(taint_tracker.is_workstation_tainted())
+
+        try:
+            steps = [{"tool": "homie_control_media", "arguments": {"action": "volup"}}]
+            approval = self._mint_macro_approval("taint_dodge_macro", steps, description="Clean desc")
+            ok, msg, _ = self.registry.register_macro("taint_dodge_macro", "Clean desc", steps, approval=approval)
+            self.assertFalse(ok)
+            self.assertIn("Taint Laundering Detected", msg)
+        finally:
+            taint_tracker.clear_all_taints()
 
 if __name__ == "__main__":
     unittest.main()

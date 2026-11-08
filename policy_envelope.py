@@ -138,16 +138,23 @@ class PolicyEnvelope:
             "device_id": self.device_id
         }
 
-    def activate_with_signature(self, signature: str, device_key_override: Optional[str] = None) -> Tuple[bool, str]:
-        """Activates the envelope after validating mobile device HMAC-SHA256 signature."""
+    def activate_with_signature(self, signature: str) -> Tuple[bool, str]:
+        """Activates the envelope after validating mobile device asymmetric Ed25519 signature."""
         now = time.time()
         if now > self.expiry:
             return False, "Envelope expired before activation"
 
-        dev_key = device_key_override or phone_approval_portal.get_or_create_device_public_key(self.device_id)
-        expected_sig = phone_approval_portal.compute_device_signature(self.compute_canonical_hash(), dev_key)
+        registry = phone_approval_portal._load_device_registry()
+        dev_entry = registry.get(self.device_id)
+        if not dev_entry:
+            return False, f"DEVICE_UNKNOWN: Device '{self.device_id}' is not enrolled in supervisor registry"
 
-        if not hmac.compare_digest(signature, expected_sig):
+        if dev_entry.get("revoked", False):
+            return False, f"DEVICE_REVOKED: Device '{self.device_id}' has been revoked"
+
+        raw_bytes = self.compute_canonical_hash().encode('utf-8')
+        sig_ok = phone_approval_portal.verify_asymmetric_signature(dev_entry["public_key"], raw_bytes, signature)
+        if not sig_ok:
             return False, "Envelope signature invalid or tampered"
 
         self.signature = signature

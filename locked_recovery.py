@@ -185,10 +185,14 @@ def interactive_cli_recovery(approval_provider_func=None):
     if approval_provider_func:
         approval = approval_provider_func()
     else:
-        # Attempt to prompt for device approval
-        print("Obtaining paired phone approval...")
-        payload_hash = compute_recovery_payload_hash(REQUIRED_CONFIRMATION)
-        approval = phone_approval_portal.mint_action_approval("homie_supervisor_recovery", payload_hash)
+        print("A cryptographically signed approval object from your paired phone is required.")
+        print("Please approve the recovery request on your paired device and paste the signed approval JSON:")
+        try:
+            raw_json = input("Signed Approval JSON: ").strip()
+            approval = json.loads(raw_json)
+        except Exception as e:
+            print(f"[FAILED] Invalid or missing approval JSON: {e}")
+            return False
 
     ok, msg, info = recover_from_locked_state(REQUIRED_CONFIRMATION, approval=approval)
     if ok:

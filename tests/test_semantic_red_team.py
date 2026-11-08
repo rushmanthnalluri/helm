@@ -57,7 +57,9 @@ class TestBatch21SemanticRedTeam(unittest.TestCase):
         taint_tracker.clear_all_taints()
         taint_tracker.set_workstation_tainted(False)
 
-        self.device_key = "device_red_team_test_key"
+        from tests.phone_testing_keys import enroll_test_device, sign_test_challenge
+        self.device_id = "phone_red_team"
+        self.phone_priv, self.phone_pub = enroll_test_device(self.device_id)
         self.epoch = int(time.time())
 
         # Standard browser research envelope (allowed: chrome.exe on docs.python.org only)
@@ -69,11 +71,12 @@ class TestBatch21SemanticRedTeam(unittest.TestCase):
             keystroke_cap=200,
             expiry=time.time() + 300,
             taint_epoch=self.epoch,
+            device_id=self.device_id,
             allowed_domains=["docs.python.org", "python.org"]
         )
         ch = self.browser_env.generate_phone_challenge()
-        sig = policy_envelope.phone_approval_portal.compute_device_signature(ch["canonical_hash"], self.device_key)
-        self.browser_env.activate_with_signature(sig, device_key_override=self.device_key)
+        sig = sign_test_challenge(self.phone_priv, ch["canonical_hash"])
+        self.browser_env.activate_with_signature(sig)
 
     def tearDown(self):
         os.environ["HOMIE_COMPLETE_MEDIATION"] = "0"

@@ -27,19 +27,23 @@ import quick_notes
 import meeting_notes
 import agent_audit_ledger
 
+import contextvars
+
 logger = logging.getLogger("homie.mcp")
 
-_ACTIVE_SUPERVISOR_INTENT_TOKEN: Optional[str] = None
+_ACTIVE_SUPERVISOR_INTENT_VAR: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "active_supervisor_intent_var", default=None
+)
 
 
 def set_active_supervisor_intent(token: Optional[str]):
-    """Sets the active two-phase supervisor intent token required for complete mediation."""
-    global _ACTIVE_SUPERVISOR_INTENT_TOKEN
-    _ACTIVE_SUPERVISOR_INTENT_TOKEN = token
+    """Sets the active two-phase supervisor intent token in thread-local / async context."""
+    _ACTIVE_SUPERVISOR_INTENT_VAR.set(token)
 
 
 def get_active_supervisor_intent() -> Optional[str]:
-    return _ACTIVE_SUPERVISOR_INTENT_TOKEN
+    """Retrieves the active two-phase supervisor intent token from thread-local / async context."""
+    return _ACTIVE_SUPERVISOR_INTENT_VAR.get()
 
 # Standard productivity apps permitted for auto-launch
 SAFE_STANDARD_APPS = {
@@ -354,7 +358,7 @@ def execute_mcp_tool(name, arguments, caller_id="mcp_client", client_token=None)
 
     # Taint Tracking Gate: Blocks write tools if caller session has ingested untrusted content
     # If executed under a verified supervisor INTENT token, taint gate has already been mediated
-    if not _ACTIVE_SUPERVISOR_INTENT_TOKEN:
+    if not get_active_supervisor_intent():
         import taint_tracker
         allowed, requires_step_up, reason = taint_tracker.check_action_privilege(caller_id, tier, name, arguments)
         if not allowed:
@@ -391,8 +395,8 @@ def execute_mcp_tool(name, arguments, caller_id="mcp_client", client_token=None)
         return output
 
     # Complete Mediation Gate: In complete mediation mode, actuators cannot execute without supervisor intent token
-    if os.environ.get("HOMIE_COMPLETE_MEDIATION") == "1" and tier in ("WRITE_EXEC", "ELEVATED_CONFIRM"):
-        if not _ACTIVE_SUPERVISOR_INTENT_TOKEN:
+    if os.environ.get("HOMIE_COMPLETE_MEDIATION") == "1" and tier != "READ_ONLY":
+        if not get_active_supervisor_intent():
             decision = "DENY_COMPLETE_MEDIATION_BREACH"
             output = "Security Gate: Complete mediation violation. Actuator execution without matching supervisor INTENT token is blocked."
             try:

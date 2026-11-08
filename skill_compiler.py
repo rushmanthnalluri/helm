@@ -99,6 +99,7 @@ def compute_macro_signature(macro_def: Dict[str, Any], secret: Optional[bytes] =
     sec = secret or _get_compiler_secret()
     canonical = (
         f"{macro_def['name']}|"
+        f"{macro_def.get('description', '')}|"
         f"{','.join(sorted(macro_def.get('declared_processes', [])))}|"
         f"{','.join(sorted(macro_def.get('declared_action_types', [])))}|"
         f"{int(macro_def.get('step_budget', 0))}|"
@@ -111,9 +112,10 @@ def compute_macro_canonical_hash(
     name: str,
     steps: List[Dict[str, Any]],
     declared_processes: Optional[List[str]] = None,
-    declared_action_types: Optional[List[str]] = None
+    declared_action_types: Optional[List[str]] = None,
+    description: str = ""
 ) -> str:
-    """Computes deterministic SHA-256 payload hash of macro steps for phone approval binding."""
+    """Computes deterministic public SHA-256 payload hash of macro steps for phone approval binding."""
     clean_name = name.strip().lower().replace(" ", "_")
     action_types = set(declared_action_types or [])
     procs = set(declared_processes or [])
@@ -126,13 +128,14 @@ def compute_macro_canonical_hash(
             procs.add(os.path.basename(str(target)).lower())
     m_def = {
         "name": clean_name,
+        "description": description.strip(),
         "declared_processes": sorted(list(procs)),
         "declared_action_types": sorted(list(action_types)),
         "step_budget": len(steps),
         "steps": steps
     }
-    sig = compute_macro_signature(m_def)
-    return hashlib.sha256(sig.encode('utf-8')).hexdigest()
+    canonical_json = json.dumps(m_def, sort_keys=True, separators=(',', ':'))
+    return hashlib.sha256(canonical_json.encode('utf-8')).hexdigest()
 
 
 class MacroRegistry:
@@ -184,8 +187,8 @@ class MacroRegistry:
         if clean_name in FORBIDDEN_MACRO_NAMES:
             return False, f"DENY: Macro name '{clean_name}' shadows built-in fast command. Macro rejected.", {}
 
-        # 2. Anti-taint laundering gate
-        if taint_tracker.is_session_tainted("macro_compilation"):
+        # 2. Anti-taint laundering gate: refuses compilation if session OR workstation was tainted
+        if taint_tracker.is_session_tainted("macro_compilation") or taint_tracker.is_workstation_tainted():
             return False, "DENY: Taint Laundering Detected. Cannot compile workstation macros while session or workstation is tainted.", {}
 
         if not steps:
@@ -223,9 +226,10 @@ class MacroRegistry:
             "created_at": time.time()
         }
 
-        # 4. Cryptographically bound human approval verification (no bare booleans or raw bearer tokens)
-        macro_sig = compute_macro_signature(macro_def)
-        macro_canonical_hash = hashlib.sha256(macro_sig.encode('utf-8')).hexdigest()
+        # 4. Cryptographically bound human approval verification using public canonical hash
+        macro_canonical_hash = compute_macro_canonical_hash(
+            clean_name, steps, declared_processes, declared_action_types, description
+        )
 
         if not approval or not isinstance(approval, dict):
             return False, "DENY: Compiling workstation macros strictly requires a signed approval object.", {}
@@ -237,6 +241,7 @@ class MacroRegistry:
             return False, f"DENY: Macro compilation approval verification failed: {app_msg}", {}
 
         # Sign macro
+        macro_sig = compute_macro_signature(macro_def)
         macro_def["signature"] = macro_sig
         self._macros[clean_name] = macro_def
         self.save()

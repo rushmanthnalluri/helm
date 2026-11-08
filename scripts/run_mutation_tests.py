@@ -1,4 +1,4 @@
-"""scripts/run_mutation_tests.py - Batch 21 Automated Mutation Test Harness.
+"""scripts/run_mutation_tests.py - Batch 27 Expanded Automated Mutation Test Harness.
 
 Applies real code mutations across the critical defense layers to verify that:
 1. Confinement File DACLs are truly defending sensitive assets (not cosmetic).
@@ -7,9 +7,19 @@ Applies real code mutations across the critical defense layers to verify that:
 4. Supervisor Actuator Complete Mediation is strictly verifying cryptographic intent tokens.
 5. Policy Envelope domain scoping is actively preventing domain escapes.
 6. Watchdog Low-Level Hook is actively rejecting synthetic injected keystrokes.
-7. Phone Approval Portal is actively verifying cryptographic challenge signatures.
+7. Phone Approval Portal is actively verifying Ed25519 asymmetric device signatures.
+8. Ed25519 Update Verification is strictly enforcing asymmetric signatures.
+9. Update Rollback Epoch Protection is strictly enforcing monotonic version increments.
+10. Macro Anti-Taint Gate is strictly blocking macro registration when session or workstation is tainted.
+11. Locked Recovery Approval Gate is strictly enforcing bound SignedActionApproval objects.
+12. Action Approval Asymmetric Verification is mathematically preventing forgery from PC state.
+13. Intent Token Sequence Binding is strictly binding client sequence to prevent desync replay.
+14. Intent Token Arguments Binding is strictly verifying full 64-character SHA-256 arguments hashes.
+15. Supervisor Tier Allowlist is enforcing complete mediation on every non-READ_ONLY tier.
+16. Macro Fresh-Session Taint Dodge is strictly prevented by workstation-wide taint enforcement.
+17. Action Approval Taint Epoch Gate is rejecting approvals from stale epochs.
 
-If a test suite stays green under a mutation, this script flags a CRITICAL FAILURE.
+If any test suite stays green under a mutation, this script flags a CRITICAL FAILURE.
 All mutations MUST be detected and killed (100% Mutation Kill Rate).
 """
 
@@ -86,9 +96,9 @@ MUTATIONS = [
     },
     {
         "id": "MUTATION_7_PHONE_SIGNATURE_VERIFICATION",
-        "name": "Bypass Cryptographic Signature Check in phone_approval_portal.py",
+        "name": "Bypass Ed25519 Signature Check in phone_approval_portal.py",
         "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
-        "target": "if not hmac.compare_digest(signature, expected_sig):",
+        "target": "if not sig_ok:",
         "replacement": "if False: # MUTATION BYPASS: signature check skipped",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch18_phone_portal.py::TestBatch18PhonePortal::test_tampered_signature_rejection"]
     },
@@ -112,7 +122,7 @@ MUTATIONS = [
         "id": "MUTATION_10_MACRO_TAINT_GATE_BYPASS",
         "name": "Bypass Macro Anti-Taint Laundering Check in skill_compiler.py",
         "file": os.path.join(BASE_DIR, "skill_compiler.py"),
-        "target": 'if taint_tracker.is_session_tainted("macro_compilation"):',
+        "target": 'if taint_tracker.is_session_tainted("macro_compilation") or taint_tracker.is_workstation_tainted():',
         "replacement": "if False: # MUTATION BYPASS: taint laundering check disabled",
         "test_cmd": [sys.executable, "-m", "unittest", "tests.test_skill_compiler_and_recovery.TestSkillCompilerAndRecovery.test_macro_compilation_denied_when_tainted"]
     },
@@ -123,13 +133,61 @@ MUTATIONS = [
         "target": "if not app_ok:",
         "replacement": "if False: # MUTATION BYPASS: approval verification disabled",
         "test_cmd": [sys.executable, "-m", "unittest", "tests.test_operations_and_recovery.TestOperationsAndRecovery.test_locked_recovery_flow"]
+    },
+    {
+        "id": "MUTATION_12_ASYMMETRIC_APPROVAL_FORGERY_BYPASS",
+        "name": "Bypass Asymmetric Signature Check in verify_action_approval",
+        "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
+        "target": "if not sig_ok:\n        return False, \"SIGNATURE_INVALID: Asymmetric Ed25519 signature failed verification\"",
+        "replacement": "if False: pass # MUTATION BYPASS: action approval signature verification disabled",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch18_phone_portal.py::TestBatch18PhonePortal::test_asymmetric_phone_approval_unforgeability_from_pc_state"]
+    },
+    {
+        "id": "MUTATION_13_INTENT_TOKEN_SEQ_BINDING_BYPASS",
+        "name": "Bypass Sequence Binding in verify_and_consume_intent_token",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": "if token_seq != seq:  # Strictly bind sequence number!",
+        "replacement": "if False: # MUTATION BYPASS: seq check disabled",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch20_complete_mediation.py::TestBatch20CompleteMediationAndRedTeam::test_intent_token_sequence_binding_enforcement"]
+    },
+    {
+        "id": "MUTATION_14_INTENT_TOKEN_ARGS_HASH_BYPASS",
+        "name": "Bypass Arguments Hash Verification in verify_and_consume_intent_token",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": "if not hmac.compare_digest(tok_args_hash, expected_args_hash):",
+        "replacement": "if False: # MUTATION BYPASS: args hash check disabled",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch20_complete_mediation.py::TestBatch20CompleteMediationAndRedTeam::test_intent_token_args_hash_binding_enforcement"]
+    },
+    {
+        "id": "MUTATION_15_SUPERVISOR_TIER_ALLOWLIST_BYPASS",
+        "name": "Drop Tier Allowlist Check in SupervisorActuator.execute_actuator",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": 'if tier != "READ_ONLY":',
+        "replacement": "if False: # MUTATION BYPASS: tier allowlist bypassed",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch20_complete_mediation.py::TestBatch20CompleteMediationAndRedTeam::test_supervisor_actuator_requires_cryptographic_intent_token"]
+    },
+    {
+        "id": "MUTATION_16_MACRO_TAINT_DODGE_BYPASS",
+        "name": "Bypass Workstation Taint Check in skill_compiler.py",
+        "file": os.path.join(BASE_DIR, "skill_compiler.py"),
+        "target": 'if taint_tracker.is_session_tainted("macro_compilation") or taint_tracker.is_workstation_tainted():',
+        "replacement": 'if taint_tracker.is_session_tainted("macro_compilation") and False: # MUTATION BYPASS: workstation taint ignored',
+        "test_cmd": [sys.executable, "-m", "unittest", "tests.test_skill_compiler_and_recovery.TestSkillCompilerAndRecovery.test_macro_compilation_fresh_session_taint_dodge_rejected"]
+    },
+    {
+        "id": "MUTATION_17_ACTION_APPROVAL_TAINT_EPOCH_BYPASS",
+        "name": "Bypass Taint Epoch Verification in verify_action_approval",
+        "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
+        "target": "if approval_epoch != current_epoch:",
+        "replacement": "if False: # MUTATION BYPASS: taint epoch check disabled",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch18_phone_portal.py::TestBatch18PhonePortal::test_asymmetric_phone_approval_unforgeability_from_pc_state"]
     }
 ]
 
 
 def run_mutation_tests() -> bool:
     print("=" * 75)
-    print("=== BATCH 26 EXPANDED AUTOMATED CI MUTATION TEST HARNESS ===")
+    print("=== BATCH 27 EXPANDED AUTOMATED CI MUTATION TEST HARNESS ===")
     print("=" * 75)
     print(f"Total Security Mutations to Evaluate: {len(MUTATIONS)}\n")
 
@@ -138,78 +196,98 @@ def run_mutation_tests() -> bool:
 
     for idx, mut in enumerate(MUTATIONS, 1):
         mid = mut["id"]
-        mname = mut["name"]
-        fpath = mut["file"]
+        name = mut["name"]
+        file_path = mut["file"]
         target = mut["target"]
         replacement = mut["replacement"]
         test_cmd = mut["test_cmd"]
 
-        print(f"[{idx}/{len(MUTATIONS)}] Testing Mutation: {mname}")
-        print(f"    File: {os.path.basename(fpath)}")
+        print(f"[{idx}/{len(MUTATIONS)}] Testing Mutation: {name}")
+        print(f"    File: {os.path.basename(file_path)}")
 
-        # 1. Read original content
-        with open(fpath, "r", encoding="utf-8") as f:
+        if not os.path.exists(file_path):
+            print(f"    ❌ ERROR: Target file '{file_path}' does not exist!")
+            all_killed = False
+            results.append((mid, "FILE_NOT_FOUND"))
+            continue
+
+        with open(file_path, "r", encoding="utf-8") as f:
             original_content = f.read()
 
         if target not in original_content:
-            print(f"    ❌ ERROR: Mutation target string not found in {fpath}!")
-            results.append((mid, mname, "ERROR_TARGET_NOT_FOUND"))
+            print(f"    ❌ ERROR: Target string for mutation not found in '{os.path.basename(file_path)}'!")
             all_killed = False
+            results.append((mid, "TARGET_NOT_FOUND"))
             continue
 
-        # 2. Apply mutation
-        mutated_content = original_content.replace(target, replacement, 1)
-        with open(fpath, "w", encoding="utf-8") as f:
-            f.write(mutated_content)
+        backup_path = file_path + ".mut_bak"
+        shutil.copy2(file_path, backup_path)
 
         try:
-            # 3. Run target test
+            mutated_content = original_content.replace(target, replacement, 1)
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(mutated_content)
+
             proc = subprocess.run(
                 test_cmd,
+                cwd=BASE_DIR,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                cwd=BASE_DIR,
+                text=True,
                 timeout=60
             )
 
-            # 4. Check outcome: test MUST FAIL (non-zero exit code)
-            if proc.returncode != 0:
-                print(f"    ✅ MUTATION KILLED! Test failed as expected (exit code {proc.returncode}).")
-                results.append((mid, mname, "KILLED"))
-            else:
-                print(f"    🚨 MUTATION SURVIVED! Test stayed green despite compromised defense!")
-                results.append((mid, mname, "SURVIVED"))
+            # If the test passes (exit code 0), the mutation SURVIVED -> FAILURE
+            if proc.returncode == 0:
+                print(f"    🚨 MUTATION SURVIVED! Security control is not actively defending.")
+                print(f"       Exit code: {proc.returncode}")
                 all_killed = False
+                results.append((mid, "SURVIVED"))
+            else:
+                print(f"    ✅ MUTATION KILLED! Test failed as expected (exit code {proc.returncode}).")
+                results.append((mid, "KILLED"))
 
         except subprocess.TimeoutExpired:
-            print(f"    ⚠️ Test timed out under mutation (treated as killed).")
-            results.append((mid, mname, "KILLED_TIMEOUT"))
+            print(f"    ✅ MUTATION KILLED! Test timed out / hung due to mutation.")
+            results.append((mid, "KILLED"))
+        except Exception as e:
+            print(f"    ⚠️ Exception during mutation testing: {e}")
+            results.append((mid, f"ERROR: {e}"))
+            all_killed = False
         finally:
-            # 5. Restore original file
-            with open(fpath, "w", encoding="utf-8") as f:
-                f.write(original_content)
+            if os.path.exists(backup_path):
+                try:
+                    shutil.copy2(backup_path, file_path)
+                except Exception:
+                    pass
+                for _ in range(5):
+                    try:
+                        os.remove(backup_path)
+                        break
+                    except Exception:
+                        time.sleep(0.1)
 
     print("\n" + "=" * 75)
     print("=== MUTATION TEST SUMMARY REPORT ===")
     print("=" * 75)
-    killed_count = sum(1 for _, _, status in results if status in ("KILLED", "KILLED_TIMEOUT"))
-    total_count = len(results)
-    kill_rate = (killed_count / total_count * 100) if total_count > 0 else 0
-
-    for mid, mname, status in results:
-        status_icon = "✅" if status in ("KILLED", "KILLED_TIMEOUT") else "🚨"
-        print(f"  {status_icon} {mid:<42} : {status}")
+    killed_count = 0
+    for mid, status in results:
+        icon = "✅" if status == "KILLED" else "❌"
+        print(f"  {icon} {mid:<45}: {status}")
+        if status == "KILLED":
+            killed_count += 1
 
     print("-" * 75)
-    print(f"MUTATION KILL RATE: {killed_count}/{total_count} ({kill_rate:.1f}%)")
-    print("=" * 75)
+    rate = (killed_count / len(MUTATIONS)) * 100.0 if MUTATIONS else 0.0
+    print(f"MUTATION KILL RATE: {killed_count}/{len(MUTATIONS)} ({rate:.1f}%)")
+    print("=" * 75 + "\n")
 
-    if not all_killed:
-        print("\n❌ CRITICAL DEFECT: One or more mutations survived! Test suite must be hardened.")
+    if all_killed:
+        print("✅ 100% MUTATION KILL RATE ACHIEVED. All security controls mathematically verified.\n")
+        return True
+    else:
+        print("❌ CRITICAL: One or more mutations survived! Security defense bypass detected.\n")
         return False
-
-    print("\n✅ 100% MUTATION KILL RATE ACHIEVED. All security controls mathematically verified.")
-    return True
 
 
 if __name__ == "__main__":

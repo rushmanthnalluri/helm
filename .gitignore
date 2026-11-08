@@ -35,6 +35,7 @@ claude_extracted_text.txt
 claude_post_refresh.txt
 publisher_offline_private_key.pem
 .homie_device_keys.json
+.homie_consumed_nonces.json
 .homie_vault.key
 homie_installed_version.json
 scratch_*.py

@@ -33,6 +33,11 @@ import taint_tracker
 class TestBatch20CompleteMediationAndRedTeam(unittest.TestCase):
 
     def setUp(self):
+        import homie_supervisor
+        for p in [homie_supervisor.DIRTY_FLAG_PATH, homie_supervisor.CRASH_HISTORY_PATH]:
+            if os.path.exists(p):
+                try: os.remove(p)
+                except Exception: pass
         os.environ["HOMIE_TEST_ENV"] = "1"
         os.environ["HOMIE_COMPLETE_MEDIATION"] = "1"
         homie_mcp.set_active_supervisor_intent(None)
@@ -43,6 +48,11 @@ class TestBatch20CompleteMediationAndRedTeam(unittest.TestCase):
         taint_tracker.set_workstation_tainted(False)
 
     def tearDown(self):
+        import homie_supervisor
+        for p in [homie_supervisor.DIRTY_FLAG_PATH, homie_supervisor.CRASH_HISTORY_PATH]:
+            if os.path.exists(p):
+                try: os.remove(p)
+                except Exception: pass
         os.environ["HOMIE_COMPLETE_MEDIATION"] = "0"
         homie_mcp.set_active_supervisor_intent(None)
         kill_switch._KILL_SWITCH_ACTIVE = False
@@ -172,6 +182,32 @@ class TestBatch20CompleteMediationAndRedTeam(unittest.TestCase):
                 caller_id="worker", intent_token=token_tamper
             )
 
+        # 5b. Direct args hash check assertion
+        tok_direct = supervisor.mint_intent_token("homie_snap_window", {"app_name": "notepad"}, "worker", seq)
+        self.assertFalse(supervisor.verify_and_consume_intent_token(tok_direct, "homie_snap_window", {"app_name": "calc"}, "worker", seq))
+
+        # 6. Sequence mismatch attack (token minted for seq 42, called with client seq 99)
+        supervisor.last_client_seq = 99
+        token_seq_mismatch = supervisor.mint_intent_token("homie_snap_window", args, "worker", 42)
+        with self.assertRaises(homie_supervisor.CompleteMediationBreachError):
+            actuator.execute_actuator(
+                "homie_snap_window", args,
+                caller_id="worker", intent_token=token_seq_mismatch
+            )
+        supervisor.last_client_seq = seq
+
+        # 7. Tier allowlist: Non-READ_ONLY tools (WRITE_EXEC, ELEVATED_CONFIRM, or unlisted) strictly require intent token
+        with self.assertRaises(homie_supervisor.CompleteMediationBreachError):
+            actuator.execute_actuator(
+                "homie_launch_app", {"app_name": "notepad"},
+                caller_id="worker", intent_token=None
+            )
+        with self.assertRaises(homie_supervisor.CompleteMediationBreachError):
+            actuator.execute_actuator(
+                "unlisted_future_tool", {},
+                caller_id="worker", intent_token=None
+            )
+
         supervisor.clean_shutdown()
 
     def test_worker_forged_intent_frame_rejected_by_supervisor(self):
@@ -200,6 +236,25 @@ class TestBatch20CompleteMediationAndRedTeam(unittest.TestCase):
         self.assertEqual(reply_dict["status"], "DENY")
         self.assertEqual(reply_dict["reason_code"], homie_supervisor.REASON_UNAUTHORIZED_TOKEN)
         self.assertIn("Complete Mediation Violation", reply_dict["reason"])
+        supervisor.clean_shutdown()
+
+    def test_intent_token_sequence_binding_enforcement(self):
+        """Verifies verify_and_consume_intent_token strictly fails if token_seq != seq."""
+        supervisor = homie_supervisor.PolicySupervisor()
+        supervisor.state = homie_supervisor.STATE_ARMED
+        args = {"app_name": "notepad"}
+        token = supervisor.mint_intent_token("homie_snap_window", args, "worker", seq=42)
+        valid = supervisor.verify_and_consume_intent_token(token, "homie_snap_window", args, "worker", seq=99)
+        self.assertFalse(valid, "Intent verification must fail when client sequence does not match token sequence!")
+        supervisor.clean_shutdown()
+
+    def test_intent_token_args_hash_binding_enforcement(self):
+        """Verifies verify_and_consume_intent_token strictly fails if arguments hash does not match."""
+        supervisor = homie_supervisor.PolicySupervisor()
+        supervisor.state = homie_supervisor.STATE_ARMED
+        token = supervisor.mint_intent_token("homie_snap_window", {"app_name": "notepad"}, "worker", seq=42)
+        valid = supervisor.verify_and_consume_intent_token(token, "homie_snap_window", {"app_name": "calc"}, "worker", seq=42)
+        self.assertFalse(valid, "Intent verification must fail when arguments differ from minted token args_hash!")
         supervisor.clean_shutdown()
 
     def test_supervisor_taint_clearing_reboots_worker_context(self):

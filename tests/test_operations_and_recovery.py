@@ -41,6 +41,9 @@ class TestOperationsAndRecovery(unittest.TestCase):
         cls.test_key = ECC.generate(curve='ed25519')
         cls.private_key_pem = cls.test_key.export_key(format='PEM')
         cls.public_key_pem = cls.test_key.public_key().export_key(format='PEM')
+        from tests.phone_testing_keys import enroll_test_device, mint_test_action_approval
+        cls.phone_priv, cls.phone_pub = enroll_test_device("primary_phone")
+        cls.mint_test_action_approval = staticmethod(mint_test_action_approval)
 
     def setUp(self):
         for p in [homie_supervisor.DIRTY_FLAG_PATH, homie_supervisor.CRASH_HISTORY_PATH]:
@@ -81,7 +84,7 @@ class TestOperationsAndRecovery(unittest.TestCase):
             self.assertIn("requires a verified cryptographic approval object", msg_no_app)
 
             # 2. Denied if approval is bound to wrong payload hash
-            bad_approval = phone_approval_portal.mint_action_approval("homie_apply_update", "0000badhash0000")
+            bad_approval = self.mint_test_action_approval(self.phone_priv, "homie_apply_update", "0000badhash0000")
             ok_bad, msg_bad, _ = update_verifier.apply_verified_update(
                 manifest, payload_files, approval=bad_approval, target_dir=tmp_dir,
                 public_key_pem=self.public_key_pem
@@ -92,7 +95,7 @@ class TestOperationsAndRecovery(unittest.TestCase):
             # 3. Allowed when valid approval bound to canonical manifest hash is supplied
             manifest_bytes = update_verifier.compute_manifest_canonical_bytes(manifest)
             manifest_hash = hashlib.sha256(manifest_bytes).hexdigest()
-            valid_approval = phone_approval_portal.mint_action_approval("homie_apply_update", manifest_hash)
+            valid_approval = self.mint_test_action_approval(self.phone_priv, "homie_apply_update", manifest_hash)
 
             ok, msg, updated = update_verifier.apply_verified_update(
                 manifest, payload_files, approval=valid_approval, target_dir=tmp_dir,
@@ -120,7 +123,7 @@ class TestOperationsAndRecovery(unittest.TestCase):
 
         manifest_bytes = update_verifier.compute_manifest_canonical_bytes(manifest)
         manifest_hash = hashlib.sha256(manifest_bytes).hexdigest()
-        approval = phone_approval_portal.mint_action_approval("homie_apply_update", manifest_hash)
+        approval = self.mint_test_action_approval(self.phone_priv, "homie_apply_update", manifest_hash)
 
         # Incomplete payload: only file1 provided
         incomplete_payload = {"file1.py": "print('1')"}
@@ -142,7 +145,7 @@ class TestOperationsAndRecovery(unittest.TestCase):
         }
         manifest_bytes = update_verifier.compute_manifest_canonical_bytes(manifest)
         manifest_hash = hashlib.sha256(manifest_bytes).hexdigest()
-        approval = phone_approval_portal.mint_action_approval("homie_apply_update", manifest_hash)
+        approval = self.mint_test_action_approval(self.phone_priv, "homie_apply_update", manifest_hash)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             ok, msg, _ = update_verifier.apply_verified_update(
@@ -243,7 +246,7 @@ class TestOperationsAndRecovery(unittest.TestCase):
         self.assertIn("Missing or malformed signed action approval object", msg_no_app)
 
         # 3b. Forged or mismatched approval object rejected
-        forged_approval = phone_approval_portal.mint_action_approval("homie_supervisor_recovery", "0" * 64)
+        forged_approval = self.mint_test_action_approval(self.phone_priv, "homie_supervisor_recovery", "0" * 64)
         ok_forged, msg_forged, _ = locked_recovery.recover_from_locked_state(
             locked_recovery.REQUIRED_CONFIRMATION, approval=forged_approval
         )
@@ -255,7 +258,7 @@ class TestOperationsAndRecovery(unittest.TestCase):
         self.assertEqual(sup.state, homie_supervisor.STATE_LOCKED)
 
         payload_hash = locked_recovery.compute_recovery_payload_hash(locked_recovery.REQUIRED_CONFIRMATION)
-        valid_approval = phone_approval_portal.mint_action_approval("homie_supervisor_recovery", payload_hash)
+        valid_approval = self.mint_test_action_approval(self.phone_priv, "homie_supervisor_recovery", payload_hash)
 
         ok_good, msg_good, info = locked_recovery.recover_from_locked_state(
             locked_recovery.REQUIRED_CONFIRMATION,
