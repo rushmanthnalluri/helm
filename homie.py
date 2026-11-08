@@ -175,35 +175,48 @@ def delete_macro(name):
         return True, f"Deleted macro '{clean_name}'."
     return False, f"Macro '{clean_name}' not found."
 
-def execute_macro(name):
-    """Executes a workflow macro sequentially."""
-    macros = get_macros()
+def execute_macro(name, caller_id="desktop_user"):
+    """Executes a workflow macro sequentially through ActionBroker and skill_compiler."""
     clean_name = name.lower().strip()
+
+    # 1. Check skill_compiler registry (HMAC-SHA256 signed macros)
+    try:
+        import skill_compiler
+        reg = skill_compiler.get_macro_registry()
+        if reg.get_macro(clean_name):
+            ok, msg, _ = skill_compiler.execute_compiled_macro(clean_name, caller_id=caller_id, registry=reg)
+            return ok, msg
+    except Exception:
+        pass
+
+    # 2. Legacy macros routed through ActionBroker
+    macros = get_macros()
     if clean_name not in macros:
         return False, f"Macro '{clean_name}' not found. Available macros: {', '.join(macros.keys())}"
 
+    import action_broker
     steps = macros[clean_name]
     executed = 0
     for step in steps:
         act = step.get('action', '').lower()
         if act == 'open':
-            windows_tools.launch_app(step.get('target', ''))
+            action_broker.execute_action('homie_launch_app', {'app_name': step.get('target', '')}, caller_id=f"macro:{clean_name}")
             executed += 1
         elif act == 'snap':
-            windows_tools.place_window(step.get('app', ''), step.get('where', 'full'))
+            action_broker.execute_action('homie_place_window', {'app_name': step.get('app', ''), 'position': step.get('where', 'full')}, caller_id=f"macro:{clean_name}")
             executed += 1
         elif act == 'play':
-            windows_tools.play_youtube(step.get('query', ''))
+            action_broker.execute_action('homie_play_youtube', {'query': step.get('query', '')}, caller_id=f"macro:{clean_name}")
             executed += 1
         elif act == 'media':
-            windows_tools.control_media(step.get('action', 'play_pause'))
+            action_broker.execute_action('homie_control_media', {'action': step.get('action', 'play_pause')}, caller_id=f"macro:{clean_name}")
             executed += 1
         elif act == 'cmd':
-            windows_tools.execute_safe_command(step.get('command', ''))
+            action_broker.execute_action('homie_safe_command', {'command': step.get('command', '')}, caller_id=f"macro:{clean_name}")
             executed += 1
         elif act == 'sleep':
             time.sleep(float(step.get('seconds', 0.5)))
-        time.sleep(0.3)
+        time.sleep(0.1)
 
     return True, f"Executed macro '{clean_name}' ({executed} steps completed)."
 
@@ -445,12 +458,25 @@ def try_fast_command(text, caller_id="desktop_user"):
     # 10. Workflow Macros
     macro_m = re.match(r'^(?:run\s+macro|macro|trigger\s+macro)\s+([a-zA-Z0-9_-]+)$', t)
     if macro_m:
-        ok, msg = execute_macro(macro_m.group(1))
+        ok, msg = execute_macro(macro_m.group(1), caller_id=caller_id)
         return True, msg
 
     if re.search(r'\b(list\s+macros|show\s+macros|^macros$)\b', t):
-        macros = get_macros()
-        items = "\n".join(f"• `{name}` ({len(steps)} steps)" for name, steps in macros.items())
+        all_macros = {}
+        try:
+            import skill_compiler
+            for m in skill_compiler.get_macro_registry().list_macros():
+                all_macros[m["name"]] = m.get("steps", [])
+        except Exception:
+            pass
+        for k, v in get_macros().items():
+            if k not in all_macros:
+                all_macros[k] = v
+
+        if not all_macros:
+            return True, "📜 **Workflow Macros**: No macros registered yet."
+
+        items = "\n".join(f"• `{name}` ({len(steps)} steps)" for name, steps in all_macros.items())
         return True, f"📜 **Workflow Macros**:\n{items}\n\nUse 'run macro <name>' or `/macro <name>` to execute."
 
     # 11. Recent Downloads

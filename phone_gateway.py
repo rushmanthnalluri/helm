@@ -218,71 +218,6 @@ def execute_phone_instruction(speech_text, session_id="call"):
 
     return f"I received: {speech}, but could not complete the operation."
 
-class PhoneGatewayHandler(BaseHTTPRequestHandler):
-    def log_message(self, format, *args):
-        # Suppress noisy standard HTTP logs
-        return
-
-    def _send_response(self, code, content_type, body):
-        self.send_response(code)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.end_headers()
-        if isinstance(body, str):
-            body = body.encode("utf-8")
-        self.wfile.write(body)
-
-    def do_OPTIONS(self):
-        self._send_response(200, "text/plain", "")
-
-    def do_GET(self):
-        parsed = urllib.parse.urlparse(self.path)
-        path = parsed.path
-
-        if path == "/" or path == "/call":
-            # Serve the mobile Duplex Web Audio Call Portal
-            self._serve_web_phone_portal()
-        elif path == "/remote":
-            # Handled by mobile_remote module if available, or basic portal
-            from mobile_remote import render_remote_html
-            html = render_remote_html()
-            self._send_response(200, "text/html; charset=utf-8", html)
-        elif path == "/status":
-            conf = load_phone_config()
-            vitals = windows_tools.get_system_vitals()
-            data = {
-                "status": "online",
-                "phone_enabled": conf.get("enabled", True),
-                "vitals": vitals
-            }
-            self._send_response(200, "application/json", json.dumps(data))
-        else:
-            self._send_response(404, "text/plain", "Not Found")
-
-    def do_POST(self):
-        parsed = urllib.parse.urlparse(self.path)
-        path = parsed.path
-
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length).decode("utf-8", errors="ignore")
-
-        # 1. Twilio Inbound Voice Webhook
-        if path == "/voice" or path == "/voice/incoming":
-            self._handle_twilio_incoming(body)
-        elif path == "/voice/process":
-            self._handle_twilio_process(body)
-        elif path == "/api/web-call":
-            self._handle_web_call_speech(body)
-        elif path == "/api/pair":
-            self._handle_device_pairing(body)
-        elif path == "/api/remote-action":
-            self._handle_remote_action(body)
-        else:
-            self._send_response(404, "text/plain", "Endpoint not found")
-
 def _get_call_page_html() -> str:
     conf = load_phone_config()
     return f"""<!DOCTYPE html>
@@ -355,6 +290,17 @@ function addBubble(text, role) {{
   transcript.scrollTop = transcript.scrollHeight;
 }}
 
+function playAudioB64(b64, fallbackText) {{
+  try {{
+    const audio = new Audio("data:audio/wav;base64," + b64);
+    audio.play();
+    return true;
+  }} catch(e) {{
+    if (fallbackText) speakTTS(fallbackText);
+    return false;
+  }}
+}}
+
 function speakTTS(text) {{
   if ('speechSynthesis' in window) {{
     window.speechSynthesis.cancel();
@@ -365,11 +311,63 @@ function speakTTS(text) {{
   }}
 }}
 
+let mediaRecorder = null;
+let audioChunks = [];
+
+function initMediaRecorder() {{
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {{
+    alert("Microphone access is not available in this browser.");
+    return false;
+  }}
+  navigator.mediaDevices.getUserMedia({{ audio: true }}).then(stream => {{
+    mediaRecorder = new MediaRecorder(stream);
+    audioChunks = [];
+    mediaRecorder.ondataavailable = e => {{ if (e.data.size > 0) audioChunks.push(e.data); }};
+    mediaRecorder.onstop = async () => {{
+      const blob = new Blob(audioChunks, {{ type: 'audio/wav' }});
+      callStatus.textContent = 'Transcribing with local Whisper...';
+      const reader = new FileReader();
+      reader.readAsDataURL(blob);
+      reader.onloadend = async () => {{
+        const b64 = reader.result.split(',')[1];
+        const urlParams = new URLSearchParams(window.location.search);
+        const token = urlParams.get('token') || sessionStorage.getItem('homie_token') || '';
+        try {{
+          const resp = await fetch('/api/audio-call', {{
+            method: 'POST',
+            headers: {{ 'Content-Type': 'application/json' }},
+            body: JSON.stringify({{ audio_b64: b64, token: token }})
+          }});
+          const data = await resp.json();
+          if (data.transcription) addBubble(data.transcription, 'user');
+          if (data.reply) {{
+            addBubble(data.reply, 'assistant');
+            if (data.audio_b64) playAudioB64(data.audio_b64, data.reply);
+            else speakTTS(data.reply);
+          }}
+        }} catch(err) {{
+          addBubble("Audio gateway network error.", 'assistant');
+        }} finally {{
+          callStatus.textContent = 'Listening... Speak anytime';
+          if (inCall && mediaRecorder.state === 'inactive') {{
+            audioChunks = [];
+            mediaRecorder.start();
+          }}
+        }}
+      }};
+    }};
+    if (inCall) mediaRecorder.start();
+  }}).catch(err => {{
+    console.error("Mic error:", err);
+  }});
+  return true;
+}}
+
 function initSpeech() {{
   const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRec) {{
-    alert("Speech recognition is not supported in this browser. Please use Chrome/Safari.");
-    return false;
+    // Fall back to MediaRecorder with server-side local Whisper STT
+    return initMediaRecorder();
   }}
   recognition = new SpeechRec();
   recognition.continuous = true;
@@ -394,7 +392,11 @@ function initSpeech() {{
         }});
         const data = await resp.json();
         addBubble(data.reply, 'assistant');
-        speakTTS(data.reply);
+        if (data.audio_b64) {{
+          playAudioB64(data.audio_b64, data.reply);
+        }} else {{
+          speakTTS(data.reply);
+        }}
       }} catch (err) {{
         addBubble("Network error communicating with PC.", 'assistant');
       }} finally {{
@@ -439,6 +441,73 @@ function toggleCall() {{
 </body>
 </html>"""
 
+class PhoneGatewayHandler(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        # Suppress noisy standard HTTP logs
+        return
+
+    def _send_response(self, code, content_type, body):
+        self.send_response(code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.end_headers()
+        if isinstance(body, str):
+            body = body.encode("utf-8")
+        self.wfile.write(body)
+
+    def do_OPTIONS(self):
+        self._send_response(200, "text/plain", "")
+
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+
+        if path == "/" or path == "/call":
+            # Serve the mobile Duplex Web Audio Call Portal
+            self._serve_web_phone_portal()
+        elif path == "/remote":
+            # Handled by mobile_remote module if available, or basic portal
+            from mobile_remote import render_remote_html
+            html = render_remote_html()
+            self._send_response(200, "text/html; charset=utf-8", html)
+        elif path == "/status":
+            conf = load_phone_config()
+            vitals = windows_tools.get_system_vitals()
+            data = {
+                "status": "online",
+                "phone_enabled": conf.get("enabled", True),
+                "vitals": vitals
+            }
+            self._send_response(200, "application/json", json.dumps(data))
+        else:
+            self._send_response(404, "text/plain", "Not Found")
+
+    def do_POST(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+
+        length = int(self.headers.get("Content-Length", 0))
+        raw_body = self.rfile.read(length)
+        body = raw_body.decode("utf-8", errors="ignore")
+
+        # 1. Twilio Inbound Voice Webhook
+        if path == "/voice" or path == "/voice/incoming":
+            self._handle_twilio_incoming(body)
+        elif path == "/voice/process":
+            self._handle_twilio_process(body)
+        elif path == "/api/web-call":
+            self._handle_web_call_speech(body)
+        elif path == "/api/audio-call":
+            self._handle_audio_call(raw_body)
+        elif path == "/api/pair":
+            self._handle_device_pairing(body)
+        elif path == "/api/remote-action":
+            self._handle_remote_action(body)
+        else:
+            self._send_response(404, "text/plain", "Endpoint not found")
 
     def _serve_web_phone_portal(self):
         html = _get_call_page_html()
@@ -560,7 +629,115 @@ function toggleCall() {{
             return
 
         reply = execute_phone_instruction(speech, session_id="web_call")
-        self._send_response(200, "application/json", json.dumps({"reply": reply}))
+        
+        # Synthesize audio for ultra-crisp offline voice playback
+        audio_b64 = None
+        try:
+            import tempfile, voice, base64
+            tmp_wav = os.path.join(tempfile.gettempdir(), f"homie_call_reply_{int(time.time()*1000)}.wav")
+            voice.synthesize_speech_to_wav(reply, tmp_wav)
+            if os.path.exists(tmp_wav):
+                with open(tmp_wav, "rb") as wf:
+                    audio_b64 = base64.b64encode(wf.read()).decode("ascii")
+                try:
+                    os.remove(tmp_wav)
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.debug("TTS synthesis for phone call failed: %s", e)
+
+        resp_payload = {"reply": reply}
+        if audio_b64:
+            resp_payload["audio_b64"] = audio_b64
+
+        self._send_response(200, "application/json", json.dumps(resp_payload))
+
+    def _handle_audio_call(self, raw_body):
+        """Processes raw or base64 audio upload from phone microphone, transcribes via local Whisper,
+        executes via ActionBroker, and returns synthesized audio reply."""
+        token = self.headers.get("X-Homie-Token", "") or self.headers.get("Authorization", "").replace("Bearer ", "")
+        conf = load_phone_config()
+
+        wav_bytes = b""
+        if self.headers.get("Content-Type", "").startswith("application/json"):
+            try:
+                body_str = raw_body.decode("utf-8", errors="ignore") if isinstance(raw_body, bytes) else str(raw_body)
+                data = json.loads(body_str)
+                token = token or data.get("token", "")
+                b64 = data.get("audio_b64", "")
+                if b64:
+                    import base64
+                    wav_bytes = base64.b64decode(b64)
+            except Exception:
+                pass
+        else:
+            wav_bytes = raw_body if isinstance(raw_body, bytes) else raw_body.encode("latin1")
+
+        is_auth = is_device_token_valid(token) or not conf.get("require_pin", True)
+        if not is_auth:
+            self._send_response(401, "application/json", json.dumps({"error": "Unauthorized: Device pairing required"}))
+            return
+
+        if not wav_bytes:
+            self._send_response(400, "application/json", json.dumps({"error": "Missing audio payload"}))
+            return
+
+        # Transcribe audio using voice.VoiceEngine
+        transcription = ""
+        try:
+            import io, wave, numpy as np, voice
+            with wave.open(io.BytesIO(wav_bytes), 'rb') as wf:
+                n_channels = wf.getnchannels()
+                sampwidth = wf.getsampwidth()
+                framerate = wf.getframerate()
+                frames = wf.readframes(wf.getnframes())
+                if sampwidth == 2:
+                    arr = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+                elif sampwidth == 1:
+                    arr = (np.frombuffer(frames, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+                else:
+                    arr = np.frombuffer(frames, dtype=np.int32).astype(np.float32) / 2147483648.0
+                if n_channels > 1:
+                    arr = arr[::n_channels]
+                if framerate != 16000 and len(arr) > 0:
+                    target_len = int(len(arr) * 16000 / framerate)
+                    indices = np.linspace(0, len(arr) - 1, target_len)
+                    arr = np.interp(indices, np.arange(len(arr)), arr)
+
+            engine = voice.VoiceEngine()
+            transcription = engine.transcribe(arr)
+        except Exception as e:
+            logger.warning("Local Whisper transcription failed: %s", e)
+
+        if not transcription:
+            transcription = "status check"
+
+        reply = execute_phone_instruction(transcription, session_id="audio_call")
+
+        # Synthesize reply audio
+        audio_b64 = None
+        try:
+            import tempfile, voice, base64
+            tmp_wav = os.path.join(tempfile.gettempdir(), f"homie_audio_reply_{int(time.time()*1000)}.wav")
+            voice.synthesize_speech_to_wav(reply, tmp_wav)
+            if os.path.exists(tmp_wav):
+                with open(tmp_wav, "rb") as wf:
+                    audio_b64 = base64.b64encode(wf.read()).decode("ascii")
+                try:
+                    os.remove(tmp_wav)
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.debug("TTS synthesis failed: %s", e)
+
+        resp = {
+            "transcription": transcription,
+            "reply": reply
+        }
+        if audio_b64:
+            resp["audio_b64"] = audio_b64
+
+        self._send_response(200, "application/json", json.dumps(resp))
 
     def _handle_remote_action(self, json_body):
         """Handles remote trackpad or presentation clicker action mediated by ActionBroker."""

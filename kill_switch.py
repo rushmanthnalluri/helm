@@ -64,3 +64,15 @@ def disengage_kill_switch(human_auth_token):
     taint_tracker.clear_all_taints()
     logger.info("Emergency kill switch disengaged by verified human confirmation.")
     return True, "Emergency kill switch disengaged. Workstation restored to normal operational state."
+
+def get_engaged_reason() -> str:
+    """Returns the reason string for which the kill switch was engaged."""
+    return _ENGAGED_REASON
+
+def get_kill_switch_status() -> dict:
+    """Returns the current state and reason dictionary of the emergency kill switch."""
+    return {
+        "active": _KILL_SWITCH_ACTIVE,
+        "reason": _ENGAGED_REASON
+    }
+
