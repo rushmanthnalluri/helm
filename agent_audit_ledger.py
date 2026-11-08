@@ -92,6 +92,27 @@ def verify_ledger_integrity():
 
     return True, f"Cryptographic integrity verified across all {len(rows)} ledger entries."
 
+def anchor_head_hash_to_remote():
+    """Returns the latest entry hash and count to anchor the ledger to an external log (Telegram / phone)."""
+    with db_utils.get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*), entry_hash, timestamp FROM agent_audit_ledger ORDER BY id DESC LIMIT 1")
+        row = cur.fetchone()
+        if not row or row[0] == 0:
+            return None, "Ledger is empty"
+        count = row[0]
+        cur.execute("SELECT entry_hash, timestamp FROM agent_audit_ledger ORDER BY id DESC LIMIT 1")
+        tail = cur.fetchone()
+        head_hash = tail[0] if tail else GENESIS_HASH
+        ts_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(tail[1])) if tail else ""
+
+    return {
+        "count": count,
+        "head_hash": head_hash,
+        "head_hash_short": head_hash[:16],
+        "timestamp_str": ts_str
+    }, f"Anchored block #{count} [{head_hash[:16]}] at {ts_str}"
+
 def get_recent_agent_actions(limit=15):
     """Retrieves the latest agent actions for HUD and Telegram reports."""
     with db_utils.get_db() as conn:
