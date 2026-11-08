@@ -38,6 +38,7 @@ import shadow_mode
 import kill_switch
 import windows_tools
 import homie_mcp
+import worker_confinement
 
 logger = logging.getLogger("homie.supervisor")
 
@@ -56,6 +57,7 @@ MSG_HEARTBEAT = 5
 MSG_DATA = 6
 MSG_SHUTDOWN = 7
 MSG_ERROR = 8
+MSG_PROXY_LLM = 9
 
 # Reason Codes
 REASON_OK = "OK"
@@ -290,8 +292,19 @@ class PolicySupervisor:
             return self._handle_propose(payload)
         elif msg_type == MSG_SHUTDOWN:
             return self._handle_shutdown(payload)
+        elif msg_type == MSG_PROXY_LLM:
+            return self._handle_proxy_llm(payload)
         else:
             return self._encode_reply(MSG_ERROR, {"error": f"Unknown message type {msg_type}", "reason_code": REASON_MALFORMED_FRAME})
+
+    def _handle_proxy_llm(self, payload: Dict[str, Any]) -> bytes:
+        prompt = payload.get("prompt", "")
+        caller_id = payload.get("caller_id", "worker")
+        proxy = worker_confinement.SupervisorLLMProxy()
+        ok, res = proxy.proxy_completion(prompt, caller_id=caller_id)
+        if not ok:
+            return self._encode_reply(MSG_ERROR, {"error": res, "reason_code": "PROXY_LLM_DENIED"})
+        return self._encode_reply(MSG_DATA, {"status": "OK", "result": res})
 
     def _encode_reply(self, msg_type: int, payload: Dict[str, Any]) -> bytes:
         self.last_supervisor_seq += 1
@@ -425,15 +438,15 @@ class PolicySupervisor:
                     "reason": f"Client token rejected: {tok_msg}"
                 })
 
-        # 8. Target Process Image Check (Hardware Grounding) for synthetic input
+        # 8. Target Process Image Check (Hardware Grounding) with Millisecond TOCTOU Guard
         if tool in ["homie_agent_click", "homie_agent_type"]:
-            is_prohibited, proc_reason = windows_tools.is_prohibited_target_process()
-            if is_prohibited:
+            safe, toctou_reason = worker_confinement.PreInjectionTOCTOUGuard.verify_injection_target()
+            if not safe:
                 return self._encode_reply(MSG_DECISION, {
                     "req_id": req_id,
                     "status": "DENY",
                     "reason_code": REASON_PROHIBITED_PROCESS,
-                    "reason": f"Input denied: {proc_reason}"
+                    "reason": toctou_reason
                 })
 
         # 9. Taint & Out-of-band Step-up Verification
