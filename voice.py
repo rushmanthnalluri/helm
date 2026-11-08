@@ -14,7 +14,7 @@ CONFIG_DIR = os.environ.get('HOMIE_DIR') or os.path.join(os.path.expanduser('~')
 WHISPER_DIR = os.path.join(CONFIG_DIR, 'whisper')
 
 class VoiceEngine:
-    def __init__(self, model_size="tiny", language="en"):
+    def __init__(self, model_size="small", language="en"):
         self.sample_rate = 16000
         self.channels = 1
         self.model_size = model_size
@@ -39,13 +39,13 @@ class VoiceEngine:
         try:
             from faster_whisper import WhisperModel
             os.makedirs(WHISPER_DIR, exist_ok=True)
-            # Use CPU with int8 quantization for ultra-fast, lightweight inference
-            model = WhisperModel(
-                self.model_size,
-                device="cpu",
-                compute_type="int8",
-                download_root=WHISPER_DIR
-            )
+            model = None
+            for m in (self.model_size, "small", "base", "tiny"):
+                try:
+                    model = WhisperModel(m, device="cpu", compute_type="int8", download_root=WHISPER_DIR)
+                    break
+                except Exception:
+                    pass
             with self._lock:
                 self._whisper_model = model
         except Exception as e:
@@ -124,7 +124,7 @@ class VoiceEngine:
                 segments, _ = self._whisper_model.transcribe(
                     audio_data,
                     language=self.language if self.language != "auto" else None,
-                    beam_size=1,  # Greedy search for minimum latency
+                    beam_size=5,
                     vad_filter=True
                 )
                 text = " ".join(s.text.strip() for s in segments).strip()

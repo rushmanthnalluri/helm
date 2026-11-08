@@ -227,10 +227,10 @@ def check_and_execute_fallback(prompt_text, reply_text):
             return f"✓ Opened YouTube for '{q}'.\n{reply_text}"
 
     # 2. App Launch
-    for app in ('notepad', 'spotify', 'chrome', 'edge', 'calc', 'calculator', 'terminal', 'cmd', 'explorer', 'code'):
+    for app in ('whatsapp', 'telegram', 'notepad', 'spotify', 'chrome', 'edge', 'calc', 'calculator', 'terminal', 'cmd', 'explorer', 'code', 'discord', 'slack', 'teams', 'zoom', 'word', 'excel'):
         if (f"open {app}" in low_p or f"launch {app}" in low_p) or (f"opening {app}" in low_r or f"launched {app}" in low_r):
-            execute_tool("open_app_or_url", {"target": app})
-            return f"✓ Launched {app}.\n{reply_text}"
+            res = execute_tool("open_app_or_url", {"target": app})
+            return f"✓ {res}\n{reply_text}"
 
     # 3. Lock PC
     if 'lock' in low_p and any(w in low_p for w in ('pc', 'computer', 'screen')):

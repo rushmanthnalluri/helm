@@ -235,6 +235,8 @@ def try_fast_command(text):
             ok, msg = windows_tools.launch_app(target)
             if ok:
                 return True, msg
+            else:
+                return True, f"⚠️ {msg}"
 
     # 7. Web Search query (e.g. "google <x>", "search for <x>")
     search_match = re.match(r'^(?:google|search\s+for|search|bing)\s+(.+)$', t)

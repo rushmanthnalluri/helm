@@ -214,50 +214,51 @@ class HomieApp:
                 pass
 
     def start_hotkey_listener(self):
-        """Listens for the hold-to-talk shortcut globally across Windows."""
-        ctrl_pressed = False
-        alt_pressed = False
-        space_pressed = False
+        """Listens for the hold-to-talk shortcut globally across Windows using native GetAsyncKeyState."""
+        import ctypes
+        VK_CONTROL = 0x11
+        VK_SHIFT = 0x10
+        VK_MENU = 0x12   # Alt key
+        VK_SPACE = 0x20  # Space bar
+        VK_ESCAPE = 0x1B # Esc key
 
-        def on_press(key):
-            nonlocal ctrl_pressed, alt_pressed, space_pressed
-            if key in (keyboard.Key.ctrl, keyboard.Key.ctrl_l, keyboard.Key.ctrl_r):
-                ctrl_pressed = True
-            elif key in (keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r, keyboard.Key.alt_gr):
-                alt_pressed = True
-            elif key == keyboard.Key.space:
-                space_pressed = True
+        def is_down(vk):
+            return bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)
 
-            # When Ctrl + Alt + Space is held
-            if ctrl_pressed and alt_pressed and space_pressed:
-                self.start_listening()
+        def hotkey_worker():
+            was_holding = False
+            while True:
+                time.sleep(0.02)  # 50Hz poll (uses <0.01% CPU)
+                try:
+                    ctrl = is_down(VK_CONTROL)
+                    space = is_down(VK_SPACE)
+                    alt = is_down(VK_MENU)
+                    shift = is_down(VK_SHIFT)
+                    esc = is_down(VK_ESCAPE)
 
-            # Escape key cancels listening or stops working
-            if key == keyboard.Key.esc:
-                if self.is_recording:
-                    self.is_recording = False
-                    self.voice.stop_recording()
-                    self.eval_js("window.ui.stopped('Cancelled')")
-                elif self.is_processing:
-                    self.is_processing = False
-                    self.eval_js("window.ui.stopped('Stopped')")
+                    if esc:
+                        if self.is_recording:
+                            self.is_recording = False
+                            self.voice.stop_recording()
+                            self.eval_js("window.ui.stopped('Cancelled')")
+                            time.sleep(0.3)
+                        continue
 
-        def on_release(key):
-            nonlocal ctrl_pressed, alt_pressed, space_pressed
-            if key in (keyboard.Key.ctrl, keyboard.Key.ctrl_l, keyboard.Key.ctrl_r):
-                ctrl_pressed = False
-            elif key in (keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r, keyboard.Key.alt_gr):
-                alt_pressed = False
-            elif key == keyboard.Key.space:
-                space_pressed = False
+                    # Trigger hold-to-talk on Ctrl+Alt+Space OR Ctrl+Shift+Space
+                    is_holding = ctrl and space and (alt or shift)
 
-            # If hotkey was released while recording, stop & transcribe
-            if self.is_recording and not (ctrl_pressed and alt_pressed and space_pressed):
-                self.stop_listening()
+                    if is_holding and not was_holding:
+                        was_holding = True
+                        self.start_listening()
+                    elif not is_holding and was_holding:
+                        was_holding = False
+                        self.stop_listening()
 
-        self.hotkey_listener = keyboard.Listener(on_press=on_press, on_release=on_release)
-        self.hotkey_listener.daemon = True
-        self.hotkey_listener.start()
+                except Exception:
+                    pass
+
+        t = threading.Thread(target=hotkey_worker, daemon=True)
+        t.start()
 
     def start_tray_icon(self):
         """Creates the system tray icon and menu."""
@@ -278,7 +279,7 @@ class HomieApp:
 
             menu = pystray.Menu(
                 pystray.MenuItem("Show Homie", on_toggle, default=True),
-                pystray.MenuItem("Hold Shortcut: Ctrl+Alt+Space", lambda: None, enabled=False),
+                pystray.MenuItem("Hold: Ctrl+Alt+Space or Ctrl+Shift+Space", lambda: None, enabled=False),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Exit", on_exit)
             )

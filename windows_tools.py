@@ -316,11 +316,24 @@ def launch_app(name_or_query):
         'edge': 'msedge',
         'firefox': 'firefox',
         'spotify': 'spotify:',
+        'whatsapp': 'whatsapp:',
+        'telegram': 'tg:',
+        'discord': 'discord:',
+        'slack': 'slack:',
+        'teams': 'msteams:',
+        'zoom': 'zoommtg:',
+        'steam': 'steam:',
         'code': 'code',
         'vscode': 'code',
         'settings': 'ms-settings:',
         'task manager': 'taskmgr.exe',
         'paint': 'mspaint.exe',
+        'camera': 'microsoft.windows.camera:',
+        'clock': 'ms-clock:',
+        'word': 'winword.exe',
+        'excel': 'excel.exe',
+        'powerpoint': 'powerpnt.exe',
+        'vlc': 'vlc.exe',
         'youtube': 'https://www.youtube.com',
         'google': 'https://www.google.com',
         'gmail': 'https://mail.google.com',
@@ -339,10 +352,30 @@ def launch_app(name_or_query):
                     webbrowser.open(cmd)
                     return True, f"Opened {key} in browser"
                 elif cmd.endswith(':'):
-                    os.startfile(cmd)
+                    try:
+                        os.startfile(cmd)
+                        return True, f"Launched {key}"
+                    except Exception:
+                        web_fallbacks = {
+                            'whatsapp': 'https://web.whatsapp.com',
+                            'telegram': 'https://web.telegram.org',
+                            'spotify': 'https://open.spotify.com',
+                            'discord': 'https://discord.com/app',
+                            'netflix': 'https://www.netflix.com'
+                        }
+                        if key in web_fallbacks:
+                            import webbrowser
+                            webbrowser.open(web_fallbacks[key])
+                            return True, f"Opened {key} in your browser."
+                        raise
                 else:
-                    subprocess.Popen(cmd, shell=True)
-                return True, f"Launched {key}"
+                    import shutil
+                    if shutil.which(cmd):
+                        subprocess.Popen([cmd], shell=False)
+                        return True, f"Launched {key}"
+                    else:
+                        subprocess.Popen(cmd, shell=True)
+                        return True, f"Launched {key}"
             except Exception as e:
                 return False, f"Failed to launch {key}: {e}"
 
@@ -353,16 +386,24 @@ def launch_app(name_or_query):
         webbrowser.open(url)
         return True, f"Opened {url}"
 
-    # 3. Generic try via os.startfile or shell
+    # 4. Check if command exists in PATH before calling Popen
+    import shutil
+    cmd_path = shutil.which(q) or shutil.which(f"{q}.exe")
+    if cmd_path:
+        try:
+            subprocess.Popen([cmd_path])
+            return True, f"Launched {q}"
+        except Exception as e:
+            return False, f"Failed to launch '{q}': {e}"
+
+    # 5. Try URI protocol via os.startfile
     try:
         os.startfile(q)
         return True, f"Opened {q}"
     except Exception:
-        try:
-            subprocess.Popen(q, shell=True)
-            return True, f"Ran {q}"
-        except Exception as e:
-            return False, f"Could not launch '{q}': {e}"
+        pass
+
+    return False, f"Could not find or launch application '{q}' on your PC."
 
 def read_window_text(app_query=""):
     """Reads titles and texts from the target or active window."""

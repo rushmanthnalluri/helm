@@ -45,7 +45,16 @@ def get_whisper_model():
     if _SHARED_WHISPER is None:
         from faster_whisper import WhisperModel
         whisper_dir = os.path.join(homie.CONFIG_DIR, 'whisper')
-        _SHARED_WHISPER = WhisperModel("tiny", device="cpu", compute_type="int8", download_root=whisper_dir)
+        prefs = homie.get_prefs()
+        model_name = prefs.get('whisperModel', 'small')
+        # Load high-accuracy model with fallback to base/tiny
+        for m in (model_name, "small", "base", "tiny"):
+            try:
+                _SHARED_WHISPER = WhisperModel(m, device="cpu", compute_type="int8", download_root=whisper_dir)
+                print(f"[Telegram] Loaded Whisper model: {m}", flush=True)
+                break
+            except Exception as e:
+                print(f"[Telegram] Failed to load Whisper {m}: {e}", flush=True)
     return _SHARED_WHISPER
 
 class TelegramBridge:
@@ -238,16 +247,23 @@ class TelegramBridge:
                 return
 
             model = get_whisper_model()
-            segments, _ = model.transcribe(audio_array, beam_size=1)
+            segments, _ = model.transcribe(
+                audio_array,
+                beam_size=5,
+                vad_filter=True,
+                language="en"
+            )
             transcript = " ".join(s.text.strip() for s in segments).strip()
 
             if not transcript:
                 self.send_message(chat_id, "I couldn't hear any clear words in that voice note.")
                 return
 
+            print(f"[Telegram] Transcribed voice note from {chat_id}: \"{transcript}\"", flush=True)
             self.send_message(chat_id, f"🗣️ *Heard:* \"{transcript}\"")
             self.process_homie_task(chat_id, transcript)
         except Exception as e:
+            print(f"[Telegram] Voice note processing error: {e}", flush=True)
             self.send_message(chat_id, f"Transcription error: {e}")
         finally:
             if os.path.exists(audio_path):
