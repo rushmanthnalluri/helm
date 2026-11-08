@@ -25,6 +25,7 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 import update_verifier
+from scripts.sign_release import sign_update_manifest_offline
 import locked_recovery
 import homie_supervisor
 import kill_switch
@@ -70,7 +71,7 @@ class TestOperationsAndRecovery(unittest.TestCase):
                 }
             }
             # Sign with offline Ed25519 private key
-            manifest["signature_b64"] = update_verifier.sign_update_manifest_offline(
+            manifest["signature_b64"] = sign_update_manifest_offline(
                 manifest, self.private_key_pem
             )
             payload_files = {"module_a.py": file_content}
@@ -117,7 +118,7 @@ class TestOperationsAndRecovery(unittest.TestCase):
                 "file2.py": "b" * 64
             }
         }
-        manifest["signature_b64"] = update_verifier.sign_update_manifest_offline(
+        manifest["signature_b64"] = sign_update_manifest_offline(
             manifest, self.private_key_pem
         )
 
@@ -164,7 +165,7 @@ class TestOperationsAndRecovery(unittest.TestCase):
             "expires_at": time.time() + 3600,
             "files": {"old.py": "c" * 64}
         }
-        manifest["signature_b64"] = update_verifier.sign_update_manifest_offline(
+        manifest["signature_b64"] = sign_update_manifest_offline(
             manifest, self.private_key_pem
         )
 
@@ -183,7 +184,7 @@ class TestOperationsAndRecovery(unittest.TestCase):
             "expires_at": time.time() + 3600,
             "files": {"module.py:evil_stream": "d" * 64}
         }
-        manifest_ads["signature_b64"] = update_verifier.sign_update_manifest_offline(
+        manifest_ads["signature_b64"] = sign_update_manifest_offline(
             manifest_ads, self.private_key_pem
         )
         valid_ads, msg_ads = update_verifier.verify_update_manifest(manifest_ads, public_key_pem=self.public_key_pem)
@@ -197,7 +198,7 @@ class TestOperationsAndRecovery(unittest.TestCase):
             "expires_at": time.time() + 3600,
             "files": {"../../Windows/System32/evil.dll": "e" * 64}
         }
-        manifest_traversal["signature_b64"] = update_verifier.sign_update_manifest_offline(
+        manifest_traversal["signature_b64"] = sign_update_manifest_offline(
             manifest_traversal, self.private_key_pem
         )
         valid_trav, msg_trav = update_verifier.verify_update_manifest(manifest_traversal, public_key_pem=self.public_key_pem)
@@ -213,7 +214,7 @@ class TestOperationsAndRecovery(unittest.TestCase):
             "expires_at": time.time() + 3600,
             "files": {"con.txt": "f" * 64}
         }
-        manifest["signature_b64"] = update_verifier.sign_update_manifest_offline(
+        manifest["signature_b64"] = sign_update_manifest_offline(
             manifest, self.private_key_pem
         )
         valid, msg = update_verifier.verify_update_manifest(manifest, public_key_pem=self.public_key_pem)
@@ -273,6 +274,28 @@ class TestOperationsAndRecovery(unittest.TestCase):
         # Workstation taint is preserved across normal recovery
         self.assertTrue(taint_tracker.is_session_tainted("recovery_check"))
         self.assertIn("Preserved workstation taints across recovery", info["actions"])
+
+    def test_no_private_key_signing_in_production_modules(self):
+        """Batch 28 Directive: Static security check guaranteeing that production code
+        contains ZERO private-key signing capabilities or offline release signers."""
+        prod_modules = [
+            "update_verifier.py",
+            "homie_supervisor.py",
+            "phone_approval_portal.py",
+            "locked_recovery.py",
+            "skill_compiler.py",
+            "phone_gateway.py"
+        ]
+        for mod_name in prod_modules:
+            mod_path = os.path.join(BASE_DIR, mod_name)
+            if not os.path.exists(mod_path):
+                continue
+            with open(mod_path, "r", encoding="utf-8") as f:
+                code = f.read()
+
+            self.assertNotIn(".sign(", code, f"Production module '{mod_name}' must NOT contain private-key signing calls (.sign)!")
+            self.assertNotIn("sign_update_manifest_offline", code, f"Production module '{mod_name}' must NOT contain offline release signer!")
+            self.assertNotIn("private_key_pem", code, f"Production module '{mod_name}' must NOT handle private key PEM strings!")
 
 
 if __name__ == "__main__":

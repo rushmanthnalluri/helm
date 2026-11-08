@@ -107,15 +107,6 @@ def compute_manifest_canonical_bytes(manifest: Dict[str, Any]) -> bytes:
     return prefix + canonical_json
 
 
-def sign_update_manifest_offline(manifest: Dict[str, Any], private_key_pem: str) -> str:
-    """Publisher utility: Signs manifest with offline private Ed25519 key."""
-    key = ECC.import_key(private_key_pem)
-    signer = eddsa.new(key, 'rfc8032')
-    data = compute_manifest_canonical_bytes(manifest)
-    sig_bytes = signer.sign(data)
-    return base64.b64encode(sig_bytes).decode("ascii")
-
-
 def verify_update_manifest(manifest: Dict[str, Any], public_key_pem: Optional[str] = None) -> Tuple[bool, str]:
     """Cryptographically verifies Ed25519 signature, rollback epoch, expiration, and path safety."""
     required = ["version", "version_epoch", "expires_at", "files", "signature_b64"]

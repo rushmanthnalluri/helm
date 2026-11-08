@@ -77,8 +77,9 @@ class TestBatch20CompleteMediationAndRedTeam(unittest.TestCase):
 
         # Vector 1: Enrollment Code Theft via Screen Ingestion
         # Enrollment code is displayed strictly on WDA_EXCLUDEFROMCAPTURE surface
-        from phone_approval_portal import start_local_enrollment
-        sess_id, code = start_local_enrollment(ttl_seconds=30.0)
+        from phone_approval_portal import start_local_enrollment, get_session_pairing_code_for_testing
+        sess_id = start_local_enrollment(ttl_seconds=30.0)
+        code = get_session_pairing_code_for_testing(sess_id)
         # Attempt to harvest code via unprivileged screen scrape
         harvested = False  # Screen memory cannot capture WDA_EXCLUDEFROMCAPTURE surfaces
         red_team_results["enrollment_code_theft"] = "COMPROMISED" if harvested else "BLOCKED"
@@ -282,6 +283,15 @@ class TestBatch20CompleteMediationAndRedTeam(unittest.TestCase):
         # 3. Persistent vault storage subkey remains stable and uncorrupted
         storage_key_after = crypto_vault.derive_subkey("storage")
         self.assertEqual(storage_key_before, storage_key_after)
+        supervisor.clean_shutdown()
+
+    def test_supervisor_actuator_rejects_unknown_tool(self):
+        """Batch 28 Security Invariant: Actuator strictly rejects unregistered tools."""
+        supervisor = homie_supervisor.PolicySupervisor()
+        supervisor.state = homie_supervisor.STATE_ARMED
+        with self.assertRaises(homie_supervisor.CompleteMediationBreachError) as cm:
+            supervisor.actuator.execute_actuator("completely_fake_unregistered_tool", {}, "worker")
+        self.assertIn("unknown and not in allowed tools registry", str(cm.exception))
         supervisor.clean_shutdown()
 
 

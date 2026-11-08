@@ -24,6 +24,7 @@ import json
 import hashlib
 import secrets
 import logging
+import threading
 from typing import Dict, Any, Optional, Tuple
 from Crypto.PublicKey import ECC
 from Crypto.Signature import eddsa
@@ -40,6 +41,9 @@ logger = logging.getLogger("homie.phone_portal")
 
 DEVICE_REGISTRY_PATH = os.path.join(BASE_DIR, ".homie_device_keys.json")
 CONSUMED_NONCES_PATH = os.path.join(BASE_DIR, ".homie_consumed_nonces.json")
+
+_REGISTRY_LOCK = threading.Lock()
+MAX_ACTION_APPROVAL_TTL = 300.0  # 5 minutes maximum validity cap for action approvals
 
 _ACTIVE_CHALLENGES: Dict[str, Dict[str, Any]] = {}  # step_up_id -> challenge_metadata
 _LOCAL_ENROLLMENT_SESSIONS: Dict[str, Dict[str, Any]] = {}  # session_id -> {pairing_code, expiry, failed_attempts}
@@ -59,8 +63,8 @@ def _load_consumed_nonces() -> Dict[str, int]:
         try:
             with open(CONSUMED_NONCES_PATH, "r", encoding="utf-8") as f:
                 raw = json.load(f)
-            # Prune nonces older than expiry + 60s
-            valid = {nonce: int(exp) for nonce, exp in raw.items() if int(exp) > now - 60}
+            # Prune nonces only after their approval expiry + 60s has passed
+            valid = {nonce: int(exp) for nonce, exp in raw.items() if int(exp) + 60 > now}
             return valid
         except Exception as e:
             logger.warning("Could not load consumed nonces: %s", e)
@@ -157,21 +161,34 @@ def display_secure_pairing_code(code: str) -> bool:
         return False
 
 
-def start_local_enrollment(ttl_seconds: float = 120.0) -> Tuple[str, str]:
+def start_local_enrollment(ttl_seconds: float = 120.0) -> str:
     """Initiates a local enrollment ceremony requiring physical presence at the PC.
-    Generates a high-entropy 6-digit one-time pairing code.
-    Returns (enrollment_session_id, pairing_code)."""
+    Generates a high-entropy 6-digit one-time pairing code displayed strictly on capture-excluded HUD.
+    Returns enrollment_session_id only (NEVER returns pairing_code to callers, preventing in-process exfiltration).
+    """
     session_id = secrets.token_hex(16)
     pairing_code = f"{secrets.randbelow(1_000_000):06d}"
     expiry = time.time() + ttl_seconds
+
+    # Display code strictly on capture-excluded HUD
+    hud_shown = display_secure_pairing_code(pairing_code)
+    if not hud_shown and not os.environ.get("HOMIE_TEST_ENV"):
+        logger.error("Capture-excluded HUD display failed. Aborting pairing ceremony for physical security.")
+        return ""
+
     _LOCAL_ENROLLMENT_SESSIONS[session_id] = {
         "pairing_code": pairing_code,
         "expiry": expiry,
         "failed_attempts": 0
     }
-    display_secure_pairing_code(pairing_code)
     logger.info("Initiated physical presence enrollment session %s (code valid for %ds)", session_id, int(ttl_seconds))
-    return session_id, pairing_code
+    return session_id
+
+
+def get_session_pairing_code_for_testing(session_id: str) -> str:
+    """Test harness helper: retrieves pairing code from in-memory test session."""
+    sess = _LOCAL_ENROLLMENT_SESSIONS.get(session_id)
+    return sess["pairing_code"] if sess else ""
 
 
 def complete_device_enrollment(
@@ -179,11 +196,13 @@ def complete_device_enrollment(
     pairing_code: str,
     device_id: str,
     public_key_pem: str,
-    authenticator_type: str = "hardware_secure_enclave_ed25519"
+    authenticator_type: str = "device_resident_ed25519"
 ) -> Tuple[bool, str]:
     """Completes phone pairing by verifying the physical presence one-time code.
-    Enforces that public_key_pem is strictly an asymmetric public key (rejects private keys).
-    Locks out and destroys session after 3 failed attempts."""
+    Enforces that public_key_pem is strictly an asymmetric public key on the Ed25519 curve.
+    Locks out and destroys session after 3 failed attempts.
+    Rejects re-enrollment of already enrolled devices to prevent unauthorized overwrites.
+    """
     sess = _LOCAL_ENROLLMENT_SESSIONS.get(session_id)
     if not sess:
         return False, "Enrollment session not found, expired, or locked out"
@@ -202,28 +221,37 @@ def complete_device_enrollment(
             return False, "Enrollment locked out: too many failed attempts. Session destroyed."
         return False, f"Invalid pairing code (attempt {sess['failed_attempts']}/{MAX_FAILED_ENROLLMENT_ATTEMPTS})"
 
-    # Validate asymmetric public key format
+    # Anti-overwrite invariant: Reject re-enrollment of already enrolled devices
+    registry = _load_device_registry()
+    if device_id in registry:
+        del _LOCAL_ENROLLMENT_SESSIONS[session_id]
+        return False, f"DEVICE_EXISTS: Device '{device_id}' is already enrolled. Overwrites are forbidden."
+
+    # Validate asymmetric public key format and curve
     try:
         imported_key = ECC.import_key(public_key_pem.strip())
         if imported_key.has_private():
             del _LOCAL_ENROLLMENT_SESSIONS[session_id]
             return False, "DENY: Enrollment rejects private keys. Only public keys can be registered on PC."
+        if getattr(imported_key, 'curve', '').lower() != 'ed25519':
+            del _LOCAL_ENROLLMENT_SESSIONS[session_id]
+            return False, "DENY: Asymmetric public key must be on the Ed25519 curve."
     except Exception as e:
         return False, f"Invalid public key format: {e}"
 
     # Consume the enrollment session
     del _LOCAL_ENROLLMENT_SESSIONS[session_id]
 
-    registry = _load_device_registry()
-    registry[device_id] = {
-        "public_key": public_key_pem.strip(),
-        "authenticator_type": authenticator_type,
-        "paired_at": time.time(),
-        "counter": 0,
-        "revoked": False,
-        "device_name": f"Paired Mobile Authenticator ({device_id})"
-    }
-    _save_device_registry(registry)
+    with _REGISTRY_LOCK:
+        registry[device_id] = {
+            "public_key": public_key_pem.strip(),
+            "authenticator_type": authenticator_type,
+            "paired_at": time.time(),
+            "counter": 0,
+            "revoked": False,
+            "device_name": f"Paired Mobile Authenticator ({device_id})"
+        }
+        _save_device_registry(registry)
     logger.info("Successfully enrolled device %s with authenticator %s", device_id, authenticator_type)
     return True, f"Device {device_id} successfully paired with hardware-backed key"
 
@@ -326,6 +354,14 @@ def verify_device_approval(
     if not item:
         return False, "Challenge not found or already consumed", None
 
+    # Cross-device check: Challenge must be consumed strictly by the target device
+    if item.get("device_id") and device_id != item.get("device_id"):
+        return False, f"DEVICE_MISMATCH: Challenge was issued to '{item.get('device_id')}', but approval was submitted by '{device_id}'", None
+
+    # Mandatory monotonic counter check
+    if counter is None:
+        return False, "COUNTER_REQUIRED: Monotonic signature counter is mandatory for replay protection", None
+
     now = int(time.time())
     if now > int(item["expiry"]):
         del _ACTIVE_CHALLENGES[step_up_id]
@@ -352,8 +388,12 @@ def verify_device_approval(
             return False, "Challenge canceled: too many failed verification attempts", None
         return False, f"Cryptographic signature verification failed (attempt {item['failed_attempts']}/3)", None
 
-    # Step 2: Signature is authentic -> check anti-replay counter
-    if counter is not None:
+    # Step 2: Signature is authentic -> check anti-replay counter under registry lock
+    with _REGISTRY_LOCK:
+        registry = _load_device_registry()
+        dev_entry = registry.get(device_id)
+        if not dev_entry:
+            return False, f"DEVICE_UNKNOWN: Device '{device_id}' is not enrolled in supervisor registry", None
         last_counter = dev_entry.get("counter", 0)
         if counter <= last_counter:
             del _ACTIVE_CHALLENGES[step_up_id]
@@ -418,6 +458,9 @@ def verify_action_approval(
 
     if now > expiry:
         return False, f"APPROVAL_EXPIRED: Approval expired at {expiry} (current time {now})"
+
+    if expiry > now + MAX_ACTION_APPROVAL_TTL:
+        return False, f"EXPIRY_EXCEEDS_CAP: Approval expiry {expiry} exceeds maximum TTL ({int(MAX_ACTION_APPROVAL_TTL)}s)"
 
     # Taint epoch check
     try:

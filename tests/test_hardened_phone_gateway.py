@@ -319,6 +319,47 @@ class TestHardenedPhoneGateway(unittest.TestCase):
             # Verify execute_phone_instruction was NEVER invoked
             mock_exec.assert_not_called()
 
+    def test_approve_portal_html_and_pending_challenges(self):
+        """Batch 28: Verifies /approve served HTML and /api/pending-challenges structured response."""
+        import phone_approval_portal, urllib.parse
+        phone_approval_portal.clear_active_challenges()
+
+        # 1. Test HTML rendering
+        html = phone_gateway._get_signing_portal_html()
+        self.assertIn("Homie Phone Authenticator", html)
+        self.assertIn("What You See Is What You Sign", html)
+        self.assertIn("Cryptographic Challenge Hash", html)
+
+        # 2. Generate challenge
+        ch = phone_approval_portal.generate_approval_challenge(
+            step_up_id="step_gw_001",
+            tool_name="homie_snap_window",
+            arguments={"app_name": "notepad"},
+            session_id="gw_sess",
+            taint_epoch=0,
+            device_id="gw_test_phone"
+        )
+
+        class MockHandler(phone_gateway.PhoneGatewayHandler):
+            def __init__(self):
+                self.sent_code = None
+                self.sent_body = None
+            def _send_response(self, code, content_type, body):
+                self.sent_code = code
+                self.sent_body = body
+
+        handler = MockHandler()
+        parsed = urllib.parse.urlparse("/api/pending-challenges?device_id=gw_test_phone")
+        handler._handle_get_pending_challenges(parsed)
+
+        self.assertEqual(handler.sent_code, 200)
+        data = json.loads(handler.sent_body)
+        self.assertEqual(len(data["challenges"]), 1)
+        self.assertEqual(data["challenges"][0]["step_up_id"], "step_gw_001")
+        self.assertEqual(data["challenges"][0]["tool_name"], "homie_snap_window")
+        self.assertEqual(data["challenges"][0]["device_id"], "gw_test_phone")
+
+        phone_approval_portal.clear_active_challenges()
 
 
 if __name__ == "__main__":

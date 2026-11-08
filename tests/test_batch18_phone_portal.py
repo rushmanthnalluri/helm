@@ -36,11 +36,21 @@ class TestBatch18PhonePortal(unittest.TestCase):
     def setUp(self):
         clear_active_challenges()
         taint_tracker.clear_all_taints()
+        if os.path.exists(phone_approval_portal.DEVICE_REGISTRY_PATH):
+            try:
+                os.remove(phone_approval_portal.DEVICE_REGISTRY_PATH)
+            except Exception:
+                pass
         self.phone_priv, self.phone_pub_pem = enroll_test_device("primary_phone")
 
     def tearDown(self):
         clear_active_challenges()
         taint_tracker.clear_all_taints()
+        if os.path.exists(phone_approval_portal.DEVICE_REGISTRY_PATH):
+            try:
+                os.remove(phone_approval_portal.DEVICE_REGISTRY_PATH)
+            except Exception:
+                pass
 
     def test_challenge_binding_and_valid_asymmetric_phone_signature(self):
         """Verifies valid Ed25519 phone signature approves the exact bound challenge."""
@@ -55,7 +65,7 @@ class TestBatch18PhonePortal(unittest.TestCase):
         )
 
         sig = sign_test_challenge(self.phone_priv, challenge["challenge_hash"])
-        ok, msg, item = verify_device_approval("step_test_001", sig, device_id="primary_phone")
+        ok, msg, item = verify_device_approval("step_test_001", sig, device_id="primary_phone", counter=1)
         self.assertTrue(ok, f"Verification failed: {msg}")
         self.assertEqual(item["tool_name"], "homie_snap_window")
         self.assertIn("notepad", str(item["arguments"]))
@@ -72,7 +82,7 @@ class TestBatch18PhonePortal(unittest.TestCase):
         )
 
         forged_sig = "deadbeef" * 16  # 64-byte forged hex
-        ok, msg, item = verify_device_approval("step_test_002", forged_sig, device_id="primary_phone")
+        ok, msg, item = verify_device_approval("step_test_002", forged_sig, device_id="primary_phone", counter=1)
         self.assertFalse(ok)
         self.assertIn("verification failed", msg.lower())
 
@@ -88,11 +98,11 @@ class TestBatch18PhonePortal(unittest.TestCase):
         )
 
         sig = sign_test_challenge(self.phone_priv, challenge["challenge_hash"])
-        ok1, _, _ = verify_device_approval("step_test_003", sig, device_id="primary_phone")
+        ok1, _, _ = verify_device_approval("step_test_003", sig, device_id="primary_phone", counter=1)
         self.assertTrue(ok1)
 
         # Replay attempt fails immediately
-        ok2, msg2, _ = verify_device_approval("step_test_003", sig, device_id="primary_phone")
+        ok2, msg2, _ = verify_device_approval("step_test_003", sig, device_id="primary_phone", counter=2)
         self.assertFalse(ok2)
         self.assertIn("already consumed", msg2.lower())
 
@@ -109,7 +119,7 @@ class TestBatch18PhonePortal(unittest.TestCase):
         )
 
         sig = sign_test_challenge(self.phone_priv, challenge["challenge_hash"])
-        ok, msg, _ = verify_device_approval("step_test_004", sig, device_id="primary_phone")
+        ok, msg, _ = verify_device_approval("step_test_004", sig, device_id="primary_phone", counter=1)
         self.assertFalse(ok)
         self.assertIn("expired", msg.lower())
 
@@ -131,7 +141,8 @@ class TestBatch18PhonePortal(unittest.TestCase):
     def test_physical_presence_pairing_and_revocation(self):
         """Verifies physical presence pairing ceremony, monotonic counter, and instant revocation."""
         # 1. Start local ceremony
-        sess_id, code = start_local_enrollment(ttl_seconds=60.0)
+        sess_id = start_local_enrollment(ttl_seconds=60.0)
+        code = phone_approval_portal.get_session_pairing_code_for_testing(sess_id)
         self.assertEqual(len(code), 6)
 
         # 2. Complete pairing with asymmetric public key (rejects private key)
@@ -185,7 +196,8 @@ class TestBatch18PhonePortal(unittest.TestCase):
 
     def test_enrollment_rate_limiting_and_lockout(self):
         """Verifies session is permanently locked out and destroyed after 3 incorrect pairing codes."""
-        sess_id, real_code = start_local_enrollment(ttl_seconds=60.0)
+        sess_id = start_local_enrollment(ttl_seconds=60.0)
+        real_code = phone_approval_portal.get_session_pairing_code_for_testing(sess_id)
         _, fake_pub = generate_test_phone_keypair()
 
         # Attempt 1: wrong code
@@ -254,6 +266,61 @@ class TestBatch18PhonePortal(unittest.TestCase):
         ok_stale, msg_stale = verify_action_approval(stale_approval, "homie_apply_update", payload_hash)
         self.assertFalse(ok_stale, "Approval with stale taint epoch must be rejected!")
         self.assertIn("TAINT_EPOCH_MISMATCH", msg_stale)
+
+    def test_cross_device_approval_rejection(self):
+        """Batch 28 Security Invariant: Challenge issued to primary_phone MUST NOT be approved by another device."""
+        other_priv, other_pub = enroll_test_device("rogue_phone_02")
+        challenge = generate_approval_challenge(
+            step_up_id="step_test_cross_dev",
+            tool_name="homie_snap_window",
+            arguments={"app_name": "cmd.exe"},
+            session_id="session_cross",
+            taint_epoch=taint_tracker.get_taint_epoch(),
+            device_id="primary_phone"
+        )
+
+        sig = sign_test_challenge(other_priv, challenge["challenge_hash"])
+        ok, msg, _ = verify_device_approval("step_test_cross_dev", sig, device_id="rogue_phone_02", counter=1)
+        self.assertFalse(ok, "Approval signed by rogue device must be rejected!")
+        self.assertIn("DEVICE_MISMATCH", msg)
+
+    def test_enrollment_anti_overwrite_rejection(self):
+        """Batch 28 Security Invariant: Existing enrolled devices cannot be overwritten by re-enrollment."""
+        sess_id = start_local_enrollment(ttl_seconds=60.0)
+        code = phone_approval_portal.get_session_pairing_code_for_testing(sess_id)
+        _, pub = generate_test_phone_keypair()
+
+        # primary_phone is already enrolled in setUp -> re-enrollment must fail closed
+        ok, msg = complete_device_enrollment(sess_id, code, "primary_phone", pub)
+        self.assertFalse(ok, "Re-enrollment of existing device must fail closed!")
+        self.assertIn("DEVICE_EXISTS", msg)
+
+    def test_counter_mandatory_rejection(self):
+        """Batch 28 Security Invariant: Monotonic counter is strictly mandatory in verify_device_approval."""
+        challenge = generate_approval_challenge(
+            step_up_id="step_test_no_counter",
+            tool_name="homie_snap_window",
+            arguments={"app_name": "calc.exe"},
+            session_id="session_no_counter",
+            taint_epoch=taint_tracker.get_taint_epoch(),
+            device_id="primary_phone"
+        )
+        sig = sign_test_challenge(self.phone_priv, challenge["challenge_hash"])
+        ok, msg, _ = verify_device_approval("step_test_no_counter", sig, device_id="primary_phone", counter=None)
+        self.assertFalse(ok, "Omitting monotonic counter must fail closed!")
+        self.assertIn("COUNTER_REQUIRED", msg)
+
+    def test_max_action_approval_ttl_cap(self):
+        """Batch 28 Security Invariant: Action approval with expiry exceeding MAX_ACTION_APPROVAL_TTL (300s) is rejected."""
+        payload_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        # Mint approval with 600s TTL (> 300s)
+        excessive_approval = mint_test_action_approval(
+            self.phone_priv, "homie_apply_update", payload_hash, device_id="primary_phone",
+            ttl_seconds=600.0
+        )
+        ok, msg = verify_action_approval(excessive_approval, "homie_apply_update", payload_hash)
+        self.assertFalse(ok, "Action approval with excessive TTL must be rejected!")
+        self.assertIn("EXPIRY_EXCEEDS_CAP", msg)
 
 
 if __name__ == "__main__":

@@ -120,15 +120,21 @@ class SupervisorActuator:
         args: Dict[str, Any],
         caller_id: str,
         client_token: Optional[str] = None,
-        intent_token: Optional[str] = None
+        intent_token: Optional[str] = None,
+        seq: Optional[int] = None
     ) -> str:
         # Enforce Complete Mediation Invariant via allowlist: Any tier other than READ_ONLY requires valid INTENT token
         allowed_tools = get_allowed_tools_map()
+        if tool not in allowed_tools:
+            raise CompleteMediationBreachError(
+                f"Complete mediation invariant breach: tool '{tool}' is unknown and not in allowed tools registry!"
+            )
         tier = allowed_tools.get(tool, "WRITE_EXEC")
 
+        req_seq = seq if seq is not None else self.supervisor.last_client_seq
         if tier != "READ_ONLY":
             if not self.supervisor.verify_and_consume_intent_token(
-                intent_token, tool, args, caller_id, self.supervisor.last_client_seq
+                intent_token, tool, args, caller_id, req_seq
             ):
                 raise CompleteMediationBreachError(
                     f"Complete mediation invariant breach: tool '{tool}' (tier: {tier}) actuator invoked without valid supervisor INTENT token!"
@@ -213,6 +219,7 @@ class PolicySupervisor:
         import crypto_vault
         self._supervisor_secret = crypto_vault.derive_subkey("actuator", length=32)
         self._consumed_intent_tokens = set()
+        self._intent_lock = threading.Lock()
         self.actuator = SupervisorActuator(self)
         
         # Check dirty bit from previous run
@@ -310,64 +317,66 @@ class PolicySupervisor:
         self, token: Optional[str], tool: str, args: Dict[str, Any], caller_id: str, seq: int
     ) -> bool:
         """Verifies supervisor INTENT token integrity, arguments binding (full 64-char args_hash),
-        sequence binding (token_seq == seq), freshness (<=15s), and enforces single-use replay protection."""
+        sequence binding (token_seq == seq), freshness (<=15s), and enforces single-use replay protection.
+        Thread-safe atomic verification and consumption under _intent_lock."""
         if not token or not isinstance(token, str) or not token.startswith("INTENT_V2:"):
             return False
 
-        # Replay prevention: check if token was already consumed
-        if isinstance(self._consumed_intent_tokens, dict):
-            if token in self._consumed_intent_tokens:
+        with self._intent_lock:
+            # Replay prevention: check if token was already consumed
+            if isinstance(self._consumed_intent_tokens, dict):
+                if token in self._consumed_intent_tokens:
+                    return False
+            elif token in self._consumed_intent_tokens:
                 return False
-        elif token in self._consumed_intent_tokens:
-            return False
 
-        if ":" not in token:
-            return False
+            if ":" not in token:
+                return False
 
-        raw, sig = token.rsplit(":", 1)
-        parts = raw.split(":", 6)
-        if len(parts) != 7:
-            return False
+            raw, sig = token.rsplit(":", 1)
+            parts = raw.split(":", 6)
+            if len(parts) != 7:
+                return False
 
-        v_tag, epoch_str, seq_str, ts_str, tok_tool, tok_args_hash, tok_caller = parts
-        try:
-            epoch = int(epoch_str)
-            token_seq = int(seq_str)
-            ts = int(ts_str)
-        except ValueError:
-            return False
+            v_tag, epoch_str, seq_str, ts_str, tok_tool, tok_args_hash, tok_caller = parts
+            try:
+                epoch = int(epoch_str)
+                token_seq = int(seq_str)
+                ts = int(ts_str)
+            except ValueError:
+                return False
 
-        if epoch != self.session_epoch:
-            return False
-        if abs(time.time() - ts) > 15.0:  # 15-second TTL
-            return False
-        if token_seq != seq:  # Strictly bind sequence number!
-            return False
-        if tok_tool != tool or tok_caller != caller_id:
-            return False
+            if epoch != self.session_epoch:
+                return False
+            if abs(time.time() - ts) > 15.0:  # 15-second TTL
+                return False
+            if token_seq != seq:  # Strictly bind sequence number!
+                return False
+            if tok_tool != tool or tok_caller != caller_id:
+                return False
 
-        # Verify arguments hash (reject non-dict args)
-        if not isinstance(args, dict):
-            return False
-        clean_args = json.dumps(args, sort_keys=True, separators=(',', ':'))
-        expected_args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
-        if not hmac.compare_digest(tok_args_hash, expected_args_hash):
-            return False
+            # Verify arguments hash (reject non-dict args)
+            if not isinstance(args, dict):
+                return False
+            clean_args = json.dumps(args, sort_keys=True, separators=(',', ':'))
+            expected_args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
+            if not hmac.compare_digest(tok_args_hash, expected_args_hash):
+                return False
 
-        expected_sig = hmac.new(self._supervisor_secret, raw.encode("utf-8"), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(sig, expected_sig):
-            return False
+            expected_sig = hmac.new(self._supervisor_secret, raw.encode("utf-8"), hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(sig, expected_sig):
+                return False
 
-        # Consume token to enforce single-use replay protection and prune expired tokens (>30s)
-        now = time.time()
-        if not isinstance(self._consumed_intent_tokens, dict):
-            self._consumed_intent_tokens = {}
-        self._consumed_intent_tokens[token] = now
-        # Prune expired tokens
-        to_prune = [t for t, exp in self._consumed_intent_tokens.items() if now - exp > 30.0]
-        for t in to_prune:
-            del self._consumed_intent_tokens[t]
-        return True
+            # Consume token to enforce single-use replay protection and prune expired tokens (>30s)
+            now = time.time()
+            if not isinstance(self._consumed_intent_tokens, dict):
+                self._consumed_intent_tokens = {}
+            self._consumed_intent_tokens[token] = now
+            # Prune expired tokens
+            to_prune = [t for t, exp in self._consumed_intent_tokens.items() if now - exp > 30.0]
+            for t in to_prune:
+                del self._consumed_intent_tokens[t]
+            return True
 
     def verify_intent_token(self, token: Optional[str], tool: str, caller_id: str, seq: int) -> bool:
         """Legacy helper for backwards compatibility."""
@@ -457,7 +466,7 @@ class PolicySupervisor:
         elif msg_type == MSG_HEARTBEAT:
             return self._handle_heartbeat(payload)
         elif msg_type == MSG_PROPOSE:
-            return self._handle_propose(payload)
+            return self._handle_propose(payload, seq=seq)
         elif msg_type == MSG_SHUTDOWN:
             return self._handle_shutdown(payload)
         elif msg_type == MSG_PROXY_LLM:
@@ -523,7 +532,7 @@ class PolicySupervisor:
         self.clean_shutdown()
         return self._encode_reply(MSG_SHUTDOWN, {"status": "SHUTDOWN_CLEAN", "reason": reason})
 
-    def _handle_propose(self, payload: Dict[str, Any]) -> bytes:
+    def _handle_propose(self, payload: Dict[str, Any], seq: int = 0) -> bytes:
         req_id = payload.get("req_id", f"req_{int(time.time()*1000)}")
         tool = payload.get("tool", "")
         args = payload.get("args", {})
@@ -531,6 +540,7 @@ class PolicySupervisor:
         caller_id = payload.get("caller_id", "worker")
         client_token = payload.get("client_token")
         step_up_token = payload.get("step_up_token")
+        frame_seq = seq if seq > 0 else self.last_client_seq
 
         self.active_request_id = req_id
 
@@ -664,7 +674,7 @@ class PolicySupervisor:
 
         # 11. TWO-PHASE ACTION EXECUTION:
         # Phase 1: Supervisor mints unforgeable cryptographic INTENT token & records in audit ledger
-        intent_token = self.mint_intent_token(tool, args, caller_id, self.last_client_seq)
+        intent_token = self.mint_intent_token(tool, args, caller_id, frame_seq)
         agent_audit_ledger.record_agent_action(
             caller_id, tool, tier, args, decision=f"INTENT:{req_id}:{intent_token[:32]}"
         )
@@ -673,7 +683,7 @@ class PolicySupervisor:
         execution_success = True
         try:
             result = self.actuator.execute_actuator(
-                tool, args, caller_id=caller_id, client_token=client_token, intent_token=intent_token
+                tool, args, caller_id=caller_id, client_token=client_token, intent_token=intent_token, seq=frame_seq
             )
         except CompleteMediationBreachError as cme:
             execution_success = False

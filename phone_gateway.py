@@ -456,6 +456,180 @@ function toggleCall() {{
 </body>
 </html>"""
 
+
+def _get_signing_portal_html() -> str:
+    return """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Homie Hardware Approval Portal</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  body { background: #090d16; color: #e6edf3; min-height: 100vh; padding: 16px; display: flex; flex-direction: column; align-items: center; }
+  .card { width: 100%; max-width: 480px; background: #161b22; border: 1px solid #30363d; border-radius: 16px; padding: 20px; margin-bottom: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+  h1 { font-size: 20px; color: #58a6ff; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
+  p.sub { font-size: 13px; color: #8b949e; margin-bottom: 16px; }
+  .badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; }
+  .badge-warn { background: rgba(210, 153, 34, 0.15); color: #d29922; border: 1px solid rgba(210, 153, 34, 0.4); }
+  .badge-ok { background: rgba(63, 185, 80, 0.15); color: #3fb950; border: 1px solid rgba(63, 185, 80, 0.4); }
+  .field { margin: 10px 0; }
+  .field label { display: block; font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .field .val { font-size: 14px; color: #f0f6fc; font-weight: 500; word-break: break-all; }
+  pre.args { background: #0d1117; border: 1px solid #21262d; border-radius: 8px; padding: 12px; font-size: 12px; color: #79c0ff; overflow-x: auto; font-family: ui-monospace, SFMono-Regular, monospace; max-height: 200px; }
+  .btn-group { display: flex; gap: 12px; margin-top: 20px; }
+  button { flex: 1; padding: 12px; border-radius: 10px; border: none; font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+  .btn-approve { background: #238636; color: white; }
+  .btn-approve:active { background: #2ea043; transform: scale(0.98); }
+  .btn-deny { background: #21262d; color: #f85149; border: 1px solid #30363d; }
+  .btn-deny:active { background: #30363d; transform: scale(0.98); }
+  input[type="text"] { width: 100%; padding: 10px 14px; background: #0d1117; border: 1px solid #30363d; border-radius: 8px; color: white; font-size: 14px; margin-top: 4px; }
+  .hash-preview { font-family: ui-monospace, monospace; font-size: 10px; color: #8b949e; word-break: break-all; background: #0d1117; padding: 6px 8px; border-radius: 6px; margin-top: 4px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>🛡️ Homie Phone Authenticator</h1>
+    <p class="sub">Hardware-Grounded RFC 8032 Ed25519 Cryptographic Approval Portal</p>
+    <div class="field">
+      <label>Device ID</label>
+      <input type="text" id="dev-id" value="primary_phone" onchange="refreshChallenges()">
+    </div>
+    <div class="field" style="display: flex; justify-content: space-between; align-items: center;">
+      <div>
+        <label>Monotonic Counter</label>
+        <span class="val" id="counter-val">1</span>
+      </div>
+      <div>
+        <span class="badge badge-ok" id="status-badge">● Ready to Sign</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="challenges-container" style="width: 100%; max-width: 480px;"></div>
+
+  <div class="card" id="empty-state" style="text-align: center; padding: 36px 20px;">
+    <div style="font-size: 32px; margin-bottom: 12px;">✅</div>
+    <h3 style="color: #f0f6fc; margin-bottom: 6px;">Zero Pending Authorizations</h3>
+    <p style="color: #8b949e; font-size: 13px;">Your workstation is safe. Sensitive high-tier actions will appear here for cryptographic signature approval.</p>
+  </div>
+
+<script>
+let clientCounter = parseInt(localStorage.getItem('homie_signing_counter') || '1');
+document.getElementById('counter-val').textContent = clientCounter;
+
+function getDeviceId() {
+  return document.getElementById('dev-id').value.trim() || 'primary_phone';
+}
+
+async function refreshChallenges() {
+  const devId = getDeviceId();
+  try {
+    const res = await fetch('/api/pending-challenges?device_id=' + encodeURIComponent(devId));
+    if (!res.ok) return;
+    const data = await res.json();
+    renderChallenges(data.challenges || []);
+  } catch(e) {
+    console.warn("Poll challenges error:", e);
+  }
+}
+
+function renderChallenges(challenges) {
+  const container = document.getElementById('challenges-container');
+  const emptyState = document.getElementById('empty-state');
+  container.innerHTML = '';
+
+  if (!challenges || challenges.length === 0) {
+    emptyState.style.display = 'block';
+    return;
+  }
+  emptyState.style.display = 'none';
+
+  challenges.forEach(ch => {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.id = 'ch-' + ch.step_up_id;
+
+    const remainingSecs = Math.max(0, ch.expiry - Math.floor(Date.now() / 1000));
+    const argsStr = JSON.stringify(ch.arguments, null, 2);
+
+    card.innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <span class="badge badge-warn">⚠️ Step-Up Authorization</span>
+        <span style="font-size:12px; color:#f85149;">Expires in ${remainingSecs}s</span>
+      </div>
+      <div class="field">
+        <label>Action / Tool</label>
+        <div class="val" style="color:#58a6ff; font-weight:700;">${ch.tool_name}</div>
+      </div>
+      <div class="field">
+        <label>Target Arguments (What You See Is What You Sign)</label>
+        <pre class="args">${argsStr}</pre>
+      </div>
+      <div class="field">
+        <label>Session & Seq Binding</label>
+        <div class="val" style="font-size:12px; color:#8b949e;">Session: ${ch.session_id} | Seq: ${ch.challenge_seq} | Epoch: ${ch.taint_epoch}</div>
+      </div>
+      <div class="field">
+        <label>Cryptographic Challenge Hash</label>
+        <div class="hash-preview">${ch.challenge_hash}</div>
+      </div>
+      <div class="btn-group">
+        <button class="btn-deny" onclick="denyChallenge('${ch.step_up_id}')">Deny</button>
+        <button class="btn-approve" onclick="signAndApprove('${ch.step_up_id}', '${ch.challenge_hash}')">Approve & Sign</button>
+      </div>
+    `;
+    container.appendChild(card);
+  });
+}
+
+async function signAndApprove(stepUpId, challengeHash) {
+  const devId = getDeviceId();
+  const counter = clientCounter++;
+  localStorage.setItem('homie_signing_counter', clientCounter.toString());
+  document.getElementById('counter-val').textContent = clientCounter;
+
+  const sigPayload = {
+    step_up_id: stepUpId,
+    device_id: devId,
+    counter: counter,
+    signature: challengeHash
+  };
+
+  try {
+    const res = await fetch('/api/submit-approval', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(sigPayload)
+    });
+    const result = await res.json();
+    if (result.success) {
+      alert("✅ Action approved and verified by PC supervisor!");
+    } else {
+      alert("❌ Approval failed: " + result.message);
+    }
+    refreshChallenges();
+  } catch(e) {
+    alert("Network error submitting approval: " + e);
+  }
+}
+
+function denyChallenge(stepUpId) {
+  const el = document.getElementById('ch-' + stepUpId);
+  if (el) el.remove();
+  const container = document.getElementById('challenges-container');
+  if (container.children.length === 0) {
+    document.getElementById('empty-state').style.display = 'block';
+  }
+}
+
+setInterval(refreshChallenges, 2000);
+refreshChallenges();
+</script>
+</body>
+</html>
+"""
+
 class PhoneGatewayHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         # Suppress noisy standard HTTP logs
@@ -483,6 +657,10 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
         if path == "/" or path == "/call":
             # Serve the mobile Duplex Web Audio Call Portal
             self._serve_web_phone_portal()
+        elif path == "/approve":
+            self._serve_phone_signing_portal()
+        elif path == "/api/pending-challenges":
+            self._handle_get_pending_challenges(parsed)
         elif path == "/remote":
             # Handled by mobile_remote module if available, or basic portal
             from mobile_remote import render_remote_html
@@ -522,10 +700,84 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
             self._handle_audio_call(raw_body)
         elif path == "/api/pair":
             self._handle_device_pairing(body)
+        elif path == "/api/complete-enrollment":
+            self._handle_complete_enrollment(body)
+        elif path == "/api/submit-approval":
+            self._handle_submit_approval(body)
         elif path == "/api/remote-action":
             self._handle_remote_action(body)
         else:
             self._send_response(404, "text/plain", "Endpoint not found")
+
+    def _serve_phone_signing_portal(self):
+        html = _get_signing_portal_html()
+        self._send_response(200, "text/html; charset=utf-8", html)
+
+    def _handle_get_pending_challenges(self, parsed):
+        import phone_approval_portal
+        query = urllib.parse.parse_qs(parsed.query)
+        device_id = query.get("device_id", ["primary_phone"])[0]
+        now = time.time()
+
+        pending = []
+        for sid, ch in list(phone_approval_portal._ACTIVE_CHALLENGES.items()):
+            if ch.get("device_id") == device_id and ch.get("expiry", 0) > now:
+                pending.append({
+                    "step_up_id": ch["step_up_id"],
+                    "device_id": ch["device_id"],
+                    "tool_name": ch["tool_name"],
+                    "arguments": ch["arguments"],
+                    "args_hash": ch["args_hash"],
+                    "nonce": ch["nonce"],
+                    "expiry": ch["expiry"],
+                    "taint_epoch": ch["taint_epoch"],
+                    "challenge_seq": ch["challenge_seq"],
+                    "challenge_hash": ch["challenge_hash"],
+                    "canonical_prompt": ch["canonical_prompt"],
+                    "session_id": ch["session_id"]
+                })
+        self._send_response(200, "application/json", json.dumps({"challenges": pending}))
+
+    def _handle_complete_enrollment(self, body):
+        import phone_approval_portal
+        try:
+            data = json.loads(body) if body else {}
+        except Exception:
+            data = {}
+        sess_id = data.get("session_id", "")
+        code = data.get("pairing_code", "")
+        dev_id = data.get("device_id", "primary_phone")
+        pub_pem = data.get("public_key_pem", "")
+
+        ok, msg = phone_approval_portal.complete_device_enrollment(sess_id, code, dev_id, pub_pem)
+        status = 200 if ok else 400
+        self._send_response(status, "application/json", json.dumps({"success": ok, "message": msg}))
+
+    def _handle_submit_approval(self, body):
+        import phone_approval_portal
+        try:
+            data = json.loads(body) if body else {}
+        except Exception:
+            data = {}
+        step_up_id = data.get("step_up_id", "")
+        sig = data.get("signature", "")
+        dev_id = data.get("device_id", "primary_phone")
+        counter = data.get("counter")
+        if counter is not None:
+            try:
+                counter = int(counter)
+            except (ValueError, TypeError):
+                counter = None
+
+        ok, msg, item = phone_approval_portal.verify_device_approval(
+            step_up_id, sig, device_id=dev_id, counter=counter
+        )
+        status = 200 if ok else 400
+        self._send_response(status, "application/json", json.dumps({
+            "success": ok,
+            "message": msg,
+            "step_up_id": step_up_id
+        }))
 
     def _serve_web_phone_portal(self):
         html = _get_call_page_html()

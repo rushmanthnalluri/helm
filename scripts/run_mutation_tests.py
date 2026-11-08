@@ -181,13 +181,53 @@ MUTATIONS = [
         "target": "if approval_epoch != current_epoch:",
         "replacement": "if False: # MUTATION BYPASS: taint epoch check disabled",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch18_phone_portal.py::TestBatch18PhonePortal::test_asymmetric_phone_approval_unforgeability_from_pc_state"]
+    },
+    {
+        "id": "MUTATION_18_CROSS_DEVICE_APPROVAL_BYPASS",
+        "name": "Bypass Cross-Device Binding in verify_device_approval",
+        "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
+        "target": 'if item.get("device_id") and device_id != item.get("device_id"):',
+        "replacement": "if False: # MUTATION BYPASS: cross device check disabled",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch18_phone_portal.py::TestBatch18PhonePortal::test_cross_device_approval_rejection"]
+    },
+    {
+        "id": "MUTATION_19_DEVICE_RE_ENROLLMENT_OVERWRITE_BYPASS",
+        "name": "Bypass Device Anti-Overwrite Gate in complete_device_enrollment",
+        "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
+        "target": "if device_id in registry:\n        del _LOCAL_ENROLLMENT_SESSIONS[session_id]\n        return False, f\"DEVICE_EXISTS: Device '{device_id}' is already enrolled. Overwrites are forbidden.\"",
+        "replacement": "if False: pass # MUTATION BYPASS: anti-overwrite check disabled",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch18_phone_portal.py::TestBatch18PhonePortal::test_enrollment_anti_overwrite_rejection"]
+    },
+    {
+        "id": "MUTATION_20_MONOTONIC_COUNTER_CHECK_BYPASS",
+        "name": "Bypass Mandatory Monotonic Counter in verify_device_approval",
+        "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
+        "target": "if counter is None:",
+        "replacement": "if False: # MUTATION BYPASS: counter check disabled",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch18_phone_portal.py::TestBatch18PhonePortal::test_counter_mandatory_rejection"]
+    },
+    {
+        "id": "MUTATION_21_MAX_ACTION_APPROVAL_TTL_CAP_BYPASS",
+        "name": "Bypass Max TTL Expiry Cap in verify_action_approval",
+        "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
+        "target": "if expiry > now + MAX_ACTION_APPROVAL_TTL:",
+        "replacement": "if False: # MUTATION BYPASS: TTL cap disabled",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch18_phone_portal.py::TestBatch18PhonePortal::test_max_action_approval_ttl_cap"]
+    },
+    {
+        "id": "MUTATION_22_SUPERVISOR_UNKNOWN_TOOL_ACTUATOR_BYPASS",
+        "name": "Bypass Tool Registry Allowlist in SupervisorActuator.execute_actuator",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": "if tool not in allowed_tools:",
+        "replacement": "if False: # MUTATION BYPASS: unknown tool check disabled",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch20_complete_mediation.py::TestBatch20CompleteMediationAndRedTeam::test_supervisor_actuator_rejects_unknown_tool"]
     }
 ]
 
 
 def run_mutation_tests() -> bool:
     print("=" * 75)
-    print("=== BATCH 27 EXPANDED AUTOMATED CI MUTATION TEST HARNESS ===")
+    print("=== BATCH 28 EXPANDED AUTOMATED CI MUTATION TEST HARNESS ===")
     print("=" * 75)
     print(f"Total Security Mutations to Evaluate: {len(MUTATIONS)}\n")
 
