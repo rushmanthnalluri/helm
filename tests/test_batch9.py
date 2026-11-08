@@ -21,6 +21,16 @@ import agent_audit_ledger
 import homie
 
 class TestBatch9Features(unittest.TestCase):
+    def setUp(self):
+        import kill_switch
+        import desktop_agent
+        import taint_tracker
+        kill_switch._KILL_SWITCH_ACTIVE = False
+        kill_switch._ENGAGED_REASON = ""
+        desktop_agent.reset_abort()
+        taint_tracker.clear_all_taints()
+        taint_tracker.set_workstation_tainted(False)
+
     def test_mcp_capability_tier_annotations(self):
         """Verifies every MCP tool has an assigned capability tier."""
         tiers = {t["name"]: t.get("capabilityTier") for t in homie_mcp.MCP_TOOLS}

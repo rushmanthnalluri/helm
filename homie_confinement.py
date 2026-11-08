@@ -1,20 +1,19 @@
-"""homie_confinement.py - Batch 18A (Windows only, requires pywin32).
+"""homie_confinement.py - Batch 18A & Batch 19-pre (Windows only).
 
 Provides hardware and kernel-level confinement for untrusted LLM workers:
-  * Worker runs with a restricted token: privileges stripped (DISABLE_MAX_PRIVILEGE),
-    Administrators deny-only.
-  * Low integrity level (UIPI blocks input injection into higher-IL windows and protects
-    supervisor memory/handles).
-  * Job object: KILL_ON_JOB_CLOSE, ActiveProcessLimit=1 (fork bombing blocked), UI limits
-    (clipboard, handles, desktop, global atoms, exit windows, sysparams).
+  * Worker runs inside a Windows AppContainer (LowBox token) with ZERO network capabilities
+    (kernel-enforced network denial; socket.connect fails with WSAEACCES WinError 10013).
+  * True DACL file isolation: AppContainer token lacks access to any owner-only user files
+    (ledger_key, dirty flag, MCP registry) even when the supervisor closes its handles.
+  * Job object sandbox: KILL_ON_JOB_CLOSE, ActiveProcessLimit=1 (fork bombing blocked),
+    UI limits (clipboard, handles, desktop, global atoms, exit windows, sysparams).
   * IPC via an inherited handle to an unnamed-by-convention random pipe, so the
-    worker has no pipe name worth connecting to.
-  * Process DACL hardening so the supervisor process cannot be opened with PROCESS_TERMINATE
+    worker cannot connect by pipe name.
+  * Supervisor process DACL hardening so supervisor cannot be opened with PROCESS_TERMINATE
     or VM manipulation rights.
-  * File-level isolation via non-inheriting owner-only DACLs and exclusive lease locks so
-    confidential keys (ledger_key.bin, dirty flag) cannot be read, written, or deleted by worker.
 """
 import ctypes
+from ctypes import wintypes
 import os
 import secrets
 import subprocess
@@ -25,7 +24,6 @@ import pywintypes
 import win32api
 import win32con
 import win32file
-import win32gui
 import win32job
 import win32pipe
 import win32process
@@ -33,12 +31,58 @@ import win32security
 import win32service
 
 LOW_IL_SID = "S-1-16-4096"
-SE_GROUP_INTEGRITY = 0x00000020
-ADMIN_SIDS_TO_DISABLE = ["S-1-5-32-544"]  # BUILTIN\Administrators
+ALL_APP_PACKAGES_SID = "S-1-15-2-1"
+APP_CONTAINER_NAME = "HomieWorkerContainer"
 PIPE_BUF = 1 << 20
 
-# Active exclusive locks for hardened paths held by supervisor
-_HARDENED_FILE_HANDLES = {}
+# Win32 / Userenv Ctypes Definitions for AppContainer & AttributeList
+kernel32 = ctypes.windll.kernel32
+userenv = ctypes.windll.userenv
+advapi32 = ctypes.windll.advapi32
+
+PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020009
+EXTENDED_STARTUPINFO_PRESENT = 0x00080000
+
+class SECURITY_CAPABILITIES(ctypes.Structure):
+    _fields_ = [
+        ("AppContainerSid", ctypes.c_void_p),
+        ("Capabilities", ctypes.c_void_p),
+        ("CapabilityCount", wintypes.DWORD),
+        ("Reserved", wintypes.DWORD),
+    ]
+
+class STARTUPINFOEXW(ctypes.Structure):
+    _fields_ = [
+        ("cb", wintypes.DWORD),
+        ("lpReserved", wintypes.LPWSTR),
+        ("lpDesktop", wintypes.LPWSTR),
+        ("lpTitle", wintypes.LPWSTR),
+        ("dwX", wintypes.DWORD),
+        ("dwY", wintypes.DWORD),
+        ("dwXSize", wintypes.DWORD),
+        ("dwYSize", wintypes.DWORD),
+        ("dwXCountChars", wintypes.DWORD),
+        ("dwYCountChars", wintypes.DWORD),
+        ("dwFillAttribute", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD),
+        ("wShowWindow", wintypes.WORD),
+        ("cbReserved2", wintypes.WORD),
+        ("lpReserved2", ctypes.c_void_p),
+        ("hStdInput", wintypes.HANDLE),
+        ("hStdOutput", wintypes.HANDLE),
+        ("hStdError", wintypes.HANDLE),
+        ("lpAttributeList", ctypes.c_void_p),
+    ]
+
+class PROCESS_INFORMATION(ctypes.Structure):
+    _fields_ = [
+        ("hProcess", wintypes.HANDLE),
+        ("hThread", wintypes.HANDLE),
+        ("dwProcessId", wintypes.DWORD),
+        ("dwThreadId", wintypes.DWORD),
+    ]
+
+_CACHED_CONTAINER_SID = None
 
 
 def _sid(s):
@@ -52,41 +96,91 @@ def _my_sid():
 
 
 def _owner_only_dacl(access_mask):
-    """DACL granting only the current user and SYSTEM."""
+    """DACL granting only the current user and SYSTEM, explicitly omitting AppContainer."""
     dacl = win32security.ACL()
     dacl.AddAccessAllowedAce(win32security.ACL_REVISION, access_mask, _my_sid())
     dacl.AddAccessAllowedAce(win32security.ACL_REVISION, access_mask, _sid("S-1-5-18"))
     return dacl
 
 
+def get_appcontainer_sid():
+    """Retrieves or creates the AppContainer SID."""
+    global _CACHED_CONTAINER_SID
+    if _CACHED_CONTAINER_SID is not None:
+        return _CACHED_CONTAINER_SID
+
+    CreateAppContainerProfile = userenv.CreateAppContainerProfile
+    CreateAppContainerProfile.argtypes = [
+        wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPCWSTR,
+        ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p)
+    ]
+    CreateAppContainerProfile.restype = ctypes.c_long
+
+    sid_ptr = ctypes.c_void_p()
+    try:
+        hr = CreateAppContainerProfile(
+            APP_CONTAINER_NAME,
+            "Homie Worker Sandbox",
+            "Homie Confined Worker AppContainer",
+            None, 0, ctypes.byref(sid_ptr)
+        )
+    except OSError:
+        pass
+
+    DeriveAppContainerSidFromAppContainerName = userenv.DeriveAppContainerSidFromAppContainerName
+    DeriveAppContainerSidFromAppContainerName.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p)]
+    DeriveAppContainerSidFromAppContainerName.restype = ctypes.c_long
+
+    sid_out = ctypes.c_void_p()
+    hr2 = DeriveAppContainerSidFromAppContainerName(APP_CONTAINER_NAME, ctypes.byref(sid_out))
+    if hr2 != 0:
+        raise ctypes.WinError(hr2)
+
+    _CACHED_CONTAINER_SID = sid_out
+    return _CACHED_CONTAINER_SID
+
+
 def ensure_desktop_low_integrity():
-    """Ensure the interactive desktop and window station allow Low-IL processes to initialize DLLs."""
+    """Ensure interactive desktop and window station allow sandboxed processes to initialize DLLs."""
     try:
         hdesk = win32service.GetThreadDesktop(win32api.GetCurrentThreadId())
-        sd_desk = win32security.GetUserObjectSecurity(hdesk, win32security.LABEL_SECURITY_INFORMATION)
+        sd_desk = win32security.GetUserObjectSecurity(
+            hdesk, win32security.LABEL_SECURITY_INFORMATION | win32security.DACL_SECURITY_INFORMATION)
         sacl = win32security.ACL()
         SYSTEM_MANDATORY_LABEL_NO_WRITE_UP = 0x1
         sacl.AddMandatoryAce(win32security.ACL_REVISION, 0, SYSTEM_MANDATORY_LABEL_NO_WRITE_UP, _sid(LOW_IL_SID))
         sd_desk.SetSecurityDescriptorSacl(1, sacl, 0)
-        win32security.SetUserObjectSecurity(hdesk, win32security.LABEL_SECURITY_INFORMATION, sd_desk)
+
+        dacl_desk = sd_desk.GetSecurityDescriptorDacl() or win32security.ACL()
+        dacl_desk.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_ALL, _sid(ALL_APP_PACKAGES_SID))
+        sd_desk.SetSecurityDescriptorDacl(1, dacl_desk, 0)
+        win32security.SetUserObjectSecurity(
+            hdesk, win32security.LABEL_SECURITY_INFORMATION | win32security.DACL_SECURITY_INFORMATION, sd_desk)
     except Exception:
         pass
 
     try:
         hwinsta = win32service.GetProcessWindowStation()
-        sd_winsta = win32security.GetUserObjectSecurity(hwinsta, win32security.LABEL_SECURITY_INFORMATION)
+        sd_winsta = win32security.GetUserObjectSecurity(
+            hwinsta, win32security.LABEL_SECURITY_INFORMATION | win32security.DACL_SECURITY_INFORMATION)
         sacl_w = win32security.ACL()
         sacl_w.AddMandatoryAce(win32security.ACL_REVISION, 0, 0x1, _sid(LOW_IL_SID))
         sd_winsta.SetSecurityDescriptorSacl(1, sacl_w, 0)
-        win32security.SetUserObjectSecurity(hwinsta, win32security.LABEL_SECURITY_INFORMATION, sd_winsta)
+
+        dacl_winsta = sd_winsta.GetSecurityDescriptorDacl() or win32security.ACL()
+        dacl_winsta.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_ALL, _sid(ALL_APP_PACKAGES_SID))
+        sd_winsta.SetSecurityDescriptorDacl(1, dacl_winsta, 0)
+        win32security.SetUserObjectSecurity(
+            hwinsta, win32security.LABEL_SECURITY_INFORMATION | win32security.DACL_SECURITY_INFORMATION, sd_winsta)
     except Exception:
         pass
 
 
 # ---------------------------------------------------------------- DACL helpers
 def harden_path(path):
-    """Make a file/dir owner-only and hold an exclusive handle (FILE_SHARE=0).
-    The confined worker token is denied read, write, and delete at the OS level."""
+    """Make a file/dir owner-only with protected DACL.
+    AppContainer processes (and Low-IL tokens) are denied read, write, and delete at the OS level
+    even when NO supervisor handle is open."""
     norm_path = os.path.abspath(path)
     dacl = _owner_only_dacl(nsc.FILE_ALL_ACCESS)
     win32security.SetNamedSecurityInfo(
@@ -95,38 +189,10 @@ def harden_path(path):
         | win32security.PROTECTED_DACL_SECURITY_INFORMATION,
         None, None, dacl, None)
 
-    # If already held, close existing
-    if norm_path in _HARDENED_FILE_HANDLES:
-        try:
-            _HARDENED_FILE_HANDLES[norm_path].Close()
-        except Exception:
-            pass
-
-    # Acquire exclusive non-shared handle
-    try:
-        hfile = win32file.CreateFile(
-            norm_path,
-            win32file.GENERIC_READ | win32file.GENERIC_WRITE,
-            0,  # FILE_SHARE=0 (exclusive lock)
-            None,
-            win32file.OPEN_EXISTING,
-            0,
-            None
-        )
-        _HARDENED_FILE_HANDLES[norm_path] = hfile
-    except Exception:
-        pass
-
 
 def unharden_path(path):
-    """Release exclusive handle for a path."""
-    norm_path = os.path.abspath(path)
-    if norm_path in _HARDENED_FILE_HANDLES:
-        try:
-            _HARDENED_FILE_HANDLES[norm_path].Close()
-        except Exception:
-            pass
-        del _HARDENED_FILE_HANDLES[norm_path]
+    """Helper to unharden or clean up."""
+    pass
 
 
 def harden_current_process():
@@ -145,23 +211,6 @@ def harden_current_process():
         win32security.DACL_SECURITY_INFORMATION
         | win32security.PROTECTED_DACL_SECURITY_INFORMATION,
         None, None, dacl, None)
-
-
-# ---------------------------------------------------------------------- token
-def build_worker_token():
-    proc_tok = win32security.OpenProcessToken(
-        win32api.GetCurrentProcess(), win32security.TOKEN_ALL_ACCESS)
-    restricted = win32security.CreateRestrictedToken(
-        proc_tok,
-        win32security.DISABLE_MAX_PRIVILEGE,
-        [(_sid(s), 0) for s in ADMIN_SIDS_TO_DISABLE],
-        None,
-        None,
-    )
-    win32security.SetTokenInformation(
-        restricted, win32security.TokenIntegrityLevel,
-        (_sid(LOW_IL_SID), SE_GROUP_INTEGRITY))
-    return restricted
 
 
 # ------------------------------------------------------------------------ job
@@ -198,9 +247,13 @@ def make_ipc_pair():
     Returns (server_handle, client_handle_int, name)."""
     name = r"\\.\pipe\homie-" + secrets.token_hex(16)
 
+    dacl = win32security.ACL()
+    dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32file.GENERIC_READ | win32file.GENERIC_WRITE, _my_sid())
+    dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32file.GENERIC_READ | win32file.GENERIC_WRITE, _sid("S-1-5-18"))
+    dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32file.GENERIC_READ | win32file.GENERIC_WRITE, _sid(ALL_APP_PACKAGES_SID))
+
     sd = pywintypes.SECURITY_DESCRIPTOR()
-    sd.SetSecurityDescriptorDacl(1, _owner_only_dacl(
-        win32file.GENERIC_READ | win32file.GENERIC_WRITE), 0)
+    sd.SetSecurityDescriptorDacl(1, dacl, 0)
     server_sa = pywintypes.SECURITY_ATTRIBUTES()
     server_sa.SECURITY_DESCRIPTOR = sd
     server_sa.bInheritHandle = False
@@ -230,52 +283,91 @@ def _minimal_env():
         "USERPROFILE", "LOCALAPPDATA", "APPDATA", "ProgramData",
     )
     env = {k: os.environ[k] for k in keep if k in os.environ}
-    # Point temporary folders to Low IL temp if available
-    low_temp = os.path.expanduser(r"~\AppData\Local\Temp\Low")
-    if os.path.exists(low_temp):
-        env["TEMP"] = low_temp
-        env["TMP"] = low_temp
     env["PYTHONNOUSERSITE"] = "1"
-    return env  # no API keys, no tokens, no supervisor secrets
+    return env
 
 
 def spawn_confined_worker(args, client_handle_int):
     """args: list of args AFTER the interpreter, e.g. ['-m', 'homie_worker'].
+    Spawns worker in a zero-network-capability AppContainer + Job Object.
     Returns (process_handle, pid, job). Keep `job` referenced for the worker's
     lifetime: closing it kills the worker (KILL_ON_JOB_CLOSE)."""
     ensure_desktop_low_integrity()
-    token = build_worker_token()
+    sid_appcontainer = get_appcontainer_sid()
     job = build_job()
 
     argv = [sys._base_executable] + list(args) + [str(client_handle_int)]
     cmdline = subprocess.list2cmdline(argv)
 
-    si = win32process.STARTUPINFO()
-    # Explicitly redirect standard handles to NUL so pytest capture pipes are not leaked
-    try:
-        sa_nul = pywintypes.SECURITY_ATTRIBUTES()
-        sa_nul.bInheritHandle = True
-        h_nul = win32file.CreateFile(
-            "NUL", win32file.GENERIC_READ | win32file.GENERIC_WRITE,
-            win32file.FILE_SHARE_READ | win32file.FILE_SHARE_WRITE,
-            sa_nul, win32file.OPEN_EXISTING, 0, None
-        )
-        si.dwFlags |= win32process.STARTF_USESTDHANDLES
-        si.hStdInput = h_nul
-        si.hStdOutput = h_nul
-        si.hStdError = h_nul
-    except Exception:
-        pass
+    # Security capabilities structure (Zero network capabilities)
+    sec_cap = SECURITY_CAPABILITIES()
+    sec_cap.AppContainerSid = sid_appcontainer
+    sec_cap.Capabilities = None
+    sec_cap.CapabilityCount = 0
+    sec_cap.Reserved = 0
 
-    hproc, hthread, pid, _tid = win32process.CreateProcessAsUser(
-        token, None, cmdline, None, None, True,
-        win32con.CREATE_SUSPENDED | win32con.CREATE_NO_WINDOW,
-        _minimal_env(), None, si)
+    # Initialize PROC_THREAD_ATTRIBUTE_LIST
+    size = ctypes.c_size_t(0)
+    kernel32.InitializeProcThreadAttributeList(None, 1, 0, ctypes.byref(size))
+    attr_buf = ctypes.create_string_buffer(size.value)
+    lpAttributeList = ctypes.cast(attr_buf, ctypes.c_void_p)
+    if not kernel32.InitializeProcThreadAttributeList(lpAttributeList, 1, 0, ctypes.byref(size)):
+        raise ctypes.WinError()
+
+    if not kernel32.UpdateProcThreadAttribute(
+        lpAttributeList,
+        0,
+        PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+        ctypes.byref(sec_cap),
+        ctypes.sizeof(sec_cap),
+        None,
+        None
+    ):
+        raise ctypes.WinError()
+
+    siex = STARTUPINFOEXW()
+    siex.cb = ctypes.sizeof(STARTUPINFOEXW)
+    siex.lpAttributeList = lpAttributeList
+
+    # siex.dwFlags |= win32process.STARTF_USESTDHANDLES
+
+    pi = PROCESS_INFORMATION()
+
+    # Pass client_handle_int as inheritable handle
+    flags = EXTENDED_STARTUPINFO_PRESENT | win32con.CREATE_SUSPENDED | win32con.CREATE_NO_WINDOW
+
+    ok = kernel32.CreateProcessW(
+        None,
+        cmdline,
+        None,
+        None,
+        True,  # bInheritHandles = True so client_handle_int is accessible
+        flags,
+        None,
+        None,
+        ctypes.byref(siex),
+        ctypes.byref(pi)
+    )
+
+    kernel32.DeleteProcThreadAttributeList(lpAttributeList)
+
+    if not ok:
+        raise ctypes.WinError()
+
+    hproc = pywintypes.HANDLE(pi.hProcess)
+    hthread = pywintypes.HANDLE(pi.hThread)
 
     try:
         win32job.AssignProcessToJobObject(job, hproc)
     except Exception:
-        win32process.TerminateProcess(hproc, 1)  # never run unjobbed
+        win32process.TerminateProcess(hproc, 1)
+        win32api.CloseHandle(hthread)
         raise
+
     win32process.ResumeThread(hthread)
-    return hproc, pid, job
+    win32api.CloseHandle(hthread)
+    try:
+        win32api.CloseHandle(client_handle_int)
+    except Exception:
+        pass
+    return hproc, pi.dwProcessId, job

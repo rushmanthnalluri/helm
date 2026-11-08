@@ -242,6 +242,21 @@ class PolicySupervisor:
         kill_switch.disengage_kill_switch(human_auth_token)
         return True, "Supervisor successfully unlocked by human confirmation."
 
+    def attach_watchdog(self, watchdog):
+        """Attaches an independent watchdog to monitor supervisor and mutual liveness."""
+        self.watchdog = watchdog
+
+    def check_watchdog_liveness(self) -> bool:
+        """Verifies watchdog is alive. If watchdog died or is unresponsive, locks supervisor."""
+        if not getattr(self, "watchdog", None):
+            return True
+        if self.watchdog.locked or not self.watchdog.heartbeat.check_liveness():
+            self.state = STATE_LOCKED
+            self.lock_reason = "WATCHDOG_DEAD_OR_TIMEOUT"
+            kill_switch.engage_kill_switch("Watchdog unresponsive or died")
+            return False
+        return True
+
     def check_unresolved_intents(self) -> list:
         """Inspects audit ledger for INTENT entries that lack a subsequent OUTCOME entry."""
         import db_utils

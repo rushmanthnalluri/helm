@@ -121,6 +121,64 @@ class TestBatch18PhonePortal(unittest.TestCase):
         self.assertIn("homie_launch_app", prompt)
         self.assertIn("calc.exe", prompt)
 
+    def test_physical_presence_pairing_and_revocation(self):
+        """Verifies physical presence pairing ceremony, monotonic counter, and instant revocation."""
+        from phone_approval_portal import (
+            start_local_enrollment, complete_device_enrollment, revoke_device_key
+        )
+        # 1. Start local ceremony
+        sess_id, code = start_local_enrollment(ttl_seconds=60.0)
+        self.assertEqual(len(code), 6)
+
+        # 2. Complete pairing
+        phone_key = "secure_enclave_key_7777"
+        ok, msg = complete_device_enrollment(sess_id, code, "secure_phone_01", phone_key)
+        self.assertTrue(ok)
+        self.assertIn("successfully paired", msg)
+
+        # 3. Use signature with counter
+        ch = generate_approval_challenge(
+            step_up_id="step_test_006",
+            tool_name="homie_move_cursor",
+            arguments={"x": 100, "y": 200},
+            session_id="enrolled_sess",
+            taint_epoch=1700000000,
+            device_id="secure_phone_01"
+        )
+        sig1 = compute_device_signature(ch["challenge_hash"], phone_key)
+        ok1, _, _ = verify_device_approval("step_test_006", sig1, device_id="secure_phone_01", counter=1)
+        self.assertTrue(ok1)
+
+        # 4. Anti-replay counter rejection: same or lower counter fails
+        ch2 = generate_approval_challenge(
+            step_up_id="step_test_007",
+            tool_name="homie_click_coords",
+            arguments={"button": "left"},
+            session_id="enrolled_sess",
+            taint_epoch=1700000000,
+            device_id="secure_phone_01"
+        )
+        sig2 = compute_device_signature(ch2["challenge_hash"], phone_key)
+        ok2, msg2, _ = verify_device_approval("step_test_007", sig2, device_id="secure_phone_01", counter=1)
+        self.assertFalse(ok2)
+        self.assertIn("Replay detected", msg2)
+
+        # 5. Revocation test
+        revoked = revoke_device_key("secure_phone_01")
+        self.assertTrue(revoked)
+        ch3 = generate_approval_challenge(
+            step_up_id="step_test_008",
+            tool_name="homie_click_coords",
+            arguments={"button": "left"},
+            session_id="enrolled_sess",
+            taint_epoch=1700000000,
+            device_id="secure_phone_01"
+        )
+        sig3 = compute_device_signature(ch3["challenge_hash"], phone_key)
+        ok3, msg3, _ = verify_device_approval("step_test_008", sig3, device_id="secure_phone_01", counter=2)
+        self.assertFalse(ok3)
+        self.assertIn("has been revoked", msg3)
+
 
 if __name__ == "__main__":
     unittest.main()
