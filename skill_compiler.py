@@ -236,21 +236,6 @@ class MacroRegistry:
         if not app_ok:
             return False, f"DENY: Macro compilation approval verification failed: {app_msg}", {}
 
-        if not steps:
-            return False, "Macro must contain at least one action step", {}
-
-        # 4. Typed parameter schema validation
-        for idx, s in enumerate(steps):
-            if not isinstance(s, dict):
-                return False, f"Step {idx + 1} must be a dictionary", {}
-            tool = s.get("tool")
-            if not tool or not isinstance(tool, str):
-                return False, f"Step {idx + 1} missing required 'tool' string", {}
-            args = s.get("arguments", {})
-            ok, msg = validate_parameter_schema(args)
-            if not ok:
-                return False, f"Step {idx + 1} parameter schema violation: {msg}", {}
-
         # Sign macro
         macro_def["signature"] = macro_sig
         self._macros[clean_name] = macro_def
@@ -259,7 +244,7 @@ class MacroRegistry:
         # Audit ledger record
         try:
             agent_audit_ledger.record_agent_action(
-                "human_admin" if human_auth else "phone_admin",
+                f"phone_device_{approval.get('device_id', 'primary_phone')}",
                 "homie_compile_macro",
                 "ELEVATED_CONFIRM",
                 {"name": clean_name, "steps_count": len(steps)},
