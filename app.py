@@ -31,7 +31,10 @@ from voice import VoiceEngine
 class HomieApi:
     """JS Bridge exposed to the webview via pywebview.api."""
     def __init__(self, app):
-        self.app = app
+        self._app = app
+
+    def __dir__(self):
+        return ['post']
 
     def post(self, message):
         """Receives events and actions dispatched from the UI."""
@@ -42,12 +45,12 @@ class HomieApi:
         if 'send' in message:
             text = str(message['send']).strip()
             if text:
-                threading.Thread(target=self.app.handle_user_ask, args=(text,), daemon=True).start()
+                threading.Thread(target=self._app.handle_user_ask, args=(text,), daemon=True).start()
 
         # 2. Copy answer
         elif 'copy' in message:
             pyperclip.copy(str(message['copy']))
-            self.app.eval_js("window.ui.notice('Copied to clipboard')")
+            self._app.eval_js("window.ui.notice('Copied to clipboard')")
 
         # 3. Insert / Replace at cursor
         elif 'replace' in message:
@@ -56,12 +59,12 @@ class HomieApi:
 
         # 4. Manual mic button click
         elif 'mic' in message:
-            self.app.toggle_listening()
+            self._app.toggle_listening()
 
         # 5. Safe mode switch
         elif 'safe' in message:
             homie.save_pref('safe', bool(message['safe']))
-            self.app.eval_js("window.ui.mode(true)")
+            self._app.eval_js("window.ui.mode(true)")
 
         # 6. User clicked tip / support
         elif 'kofi' in message:
@@ -70,8 +73,8 @@ class HomieApi:
 
         # 7. Resume app
         elif 'resume' in message:
-            self.app.paused = False
-            self.app.eval_js("window.ui.paused(false)")
+            self._app.paused = False
+            self._app.eval_js("window.ui.paused(false)")
 
 class HomieApp:
     def __init__(self):
@@ -93,6 +96,17 @@ class HomieApp:
     def start_telegram_bridge(self):
         """Starts the Telegram bridge if a bot token is available."""
         try:
+            # Terminate any standalone telegram_bridge process to prevent 409 Conflict
+            import subprocess
+            try:
+                my_pid = os.getpid()
+                subprocess.run(
+                    f'powershell -Command "Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -like \'*telegram_bridge.py*\' -and $_.ProcessId -ne {my_pid} }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}"',
+                    shell=True, timeout=4
+                )
+            except Exception:
+                pass
+
             from telegram_bridge import TelegramBridge
             self.telegram = TelegramBridge()
             if self.telegram.token:
