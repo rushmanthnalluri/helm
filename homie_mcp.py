@@ -131,6 +131,33 @@ MCP_TOOLS = [
             },
             "required": ["app_name"]
         }
+    },
+    {
+        "name": "homie_agent_click",
+        "description": "Executes a synthetic desktop agent mouse click gated by session taint tracking and audit ledger.",
+        "capabilityTier": "WRITE_EXEC",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "x": {"type": "integer", "description": "Target screen X coordinate"},
+                "y": {"type": "integer", "description": "Target screen Y coordinate"},
+                "element_name": {"type": "string", "description": "Name of targeted UI element"}
+            },
+            "required": ["x", "y"]
+        }
+    },
+    {
+        "name": "homie_agent_type",
+        "description": "Executes a synthetic desktop agent keystroke sequence gated by session taint tracking and audit ledger.",
+        "capabilityTier": "WRITE_EXEC",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "Text to type"},
+                "element_name": {"type": "string", "description": "Name of targeted UI element"}
+            },
+            "required": ["text"]
+        }
     }
 ]
 
@@ -260,6 +287,22 @@ def execute_mcp_tool(name, arguments, caller_id="mcp_client", client_token=None)
             else:
                 ok, msg = windows_tools.launch_app(app)
                 output = f"Launch result: {msg}"
+
+        elif name == "homie_agent_click":
+            x = int(arguments.get("x", 0))
+            y = int(arguments.get("y", 0))
+            elem_name = arguments.get("element_name", "unknown")
+            import pyautogui
+            pyautogui.click(x, y)
+            output = f"Agent clicked ({x}, {y}) on '{elem_name}'"
+
+        elif name == "homie_agent_type":
+            txt = arguments.get("text", "")
+            elem_name = arguments.get("element_name", "unknown")
+            import pyautogui, pyperclip
+            pyperclip.copy(txt)
+            pyautogui.hotkey("ctrl", "v")
+            output = f"Agent typed {len(txt)} chars into '{elem_name}'"
 
         else:
             decision = "DENY_UNKNOWN"

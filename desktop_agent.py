@@ -51,12 +51,13 @@ def is_abort_requested():
     return _abort_requested
 
 class DesktopGroundingEngine:
-    def __init__(self, target_window_title=None, max_steps=10, dry_run=False):
+    def __init__(self, target_window_title=None, max_steps=10, dry_run=False, session_id="desktop_agent"):
         self.target_window_title = target_window_title
         self.target_hwnd = None
         self.max_steps = max_steps
         self.steps_taken = 0
         self.dry_run = dry_run
+        self.session_id = session_id
         self.execution_log = []
 
     def attach_target_window(self):
@@ -123,7 +124,16 @@ class DesktopGroundingEngine:
             if self.dry_run:
                 return True, f"[DRY-RUN] Would {action_desc}"
 
-            pyautogui.click(cx, cy)
+            # Route click through hardened MCP dispatcher (enforces taint tracking & audit ledger)
+            import homie_mcp
+            res = homie_mcp.execute_mcp_tool(
+                "homie_agent_click",
+                {"x": cx, "y": cy, "element_name": elem["name"]},
+                caller_id=self.session_id
+            )
+            if "Security Gate:" in res or "Blocked" in res:
+                return False, f"Blocked by Security Gate: {res}"
+
             time.sleep(0.3)
             return True, action_desc
 
@@ -153,11 +163,16 @@ class DesktopGroundingEngine:
             if self.dry_run:
                 return True, f"[DRY-RUN] Would {action_desc}"
 
-            pyautogui.click(cx, cy)
-            time.sleep(0.2)
-            import pyperclip
-            pyperclip.copy(text_to_type)
-            pyautogui.hotkey("ctrl", "v")
+            # Route typing through hardened MCP dispatcher (enforces taint tracking & audit ledger)
+            import homie_mcp
+            res = homie_mcp.execute_mcp_tool(
+                "homie_agent_type",
+                {"text": text_to_type, "element_name": elem["name"]},
+                caller_id=self.session_id
+            )
+            if "Security Gate:" in res or "Blocked" in res:
+                return False, f"Blocked by Security Gate: {res}"
+
             time.sleep(0.2)
             return True, action_desc
 

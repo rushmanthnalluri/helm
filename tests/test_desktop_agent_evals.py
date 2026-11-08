@@ -72,5 +72,31 @@ class TestDesktopAgentEvals(unittest.TestCase):
         self.assertTrue(ok_cb)
         self.assertIn("Approved & Executed", rep)
 
+    def test_eval_tainted_agent_click_interception(self):
+        """Verifies desktop agent clicks route through MCP and are blocked when session is tainted."""
+        taint_tracker.mark_session_tainted("eval_tainted_desktop")
+        engine = desktop_agent.DesktopGroundingEngine(max_steps=5, dry_run=False, session_id="eval_tainted_desktop")
+        # Mock element finding
+        engine.find_uia_element = lambda name, ctype=None: {"grounding": "UIA", "name": name, "center": (100, 200)}
+
+        ok, msg = engine.click_element("TaintedButton")
+        self.assertFalse(ok)
+        self.assertIn("Security Gate:", msg)
+
+    def test_eval_macro_fast_path_latency(self):
+        """Verifies compiled macros compile and serialize within the sub-50ms deterministic fast-path guarantee."""
+        import workflow_compiler
+        import time
+
+        steps = [
+            {"action": "click", "element": {"name": "FileMenu", "type": "ButtonControl"}},
+            {"action": "type", "element": {"name": "FileNameInput"}, "text": "report.txt"}
+        ]
+        start = time.time()
+        ok, msg = workflow_compiler.compile_agent_steps_to_macro("test_eval_fast_macro", steps)
+        duration_ms = (time.time() - start) * 1000
+        self.assertLess(duration_ms, 50, f"Compilation exceeded 50ms latency: {duration_ms}ms")
+        self.assertTrue(ok, msg)
+
 if __name__ == '__main__':
     unittest.main()
