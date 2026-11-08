@@ -268,6 +268,18 @@ class HomieApp:
                         was_holding = False
                         self.stop_listening()
 
+                    # Quick Note trigger: Ctrl + Alt + N
+                    if ctrl and alt and is_down(0x4E): # VK_N
+                        import quick_notes
+                        clip = windows_tools.get_clipboard_text()
+                        if clip:
+                            nid = quick_notes.save_quick_note(clip, is_pinned=True)
+                            self.eval_js(f"window.ui.notice('Pinned Note #{nid} from Clipboard')")
+                        else:
+                            self.show_window()
+                            self.eval_js("window.ui.notice('Quick Note scratchpad active')")
+                        time.sleep(0.4)
+
                 except Exception:
                     pass
 
@@ -275,30 +287,11 @@ class HomieApp:
         t.start()
 
     def start_tray_icon(self):
-        """Creates the system tray icon and menu."""
+        """Creates the system tray icon and unified HUD menu."""
         try:
-            import pystray
+            import tray_hud
             icon_path = os.path.join(BASE_DIR, 'ui', 'AppIcon.png')
-            image = Image.open(icon_path) if os.path.exists(icon_path) else Image.new('RGB', (64, 64), (0, 107, 214))
-
-            def on_toggle():
-                self.show_window()
-
-            def on_exit():
-                if self.tray:
-                    self.tray.stop()
-                if self.window:
-                    self.window.destroy()
-                os._exit(0)
-
-            menu = pystray.Menu(
-                pystray.MenuItem("Show Homie", on_toggle, default=True),
-                pystray.MenuItem("Hold: Ctrl+Alt+Space or Ctrl+Shift+Space", lambda: None, enabled=False),
-                pystray.Menu.SEPARATOR,
-                pystray.MenuItem("Exit", on_exit)
-            )
-
-            self.tray = pystray.Icon("Homie", image, "Homie - AI Assistant", menu)
+            self.tray = tray_hud.create_tray_hud(app=self, icon_path=icon_path)
             threading.Thread(target=self.tray.run, daemon=True).start()
         except Exception as e:
             print(f"[Tray] Tray icon error: {e}")

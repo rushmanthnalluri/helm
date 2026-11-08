@@ -445,7 +445,7 @@ class TelegramBridge:
 
     def _vitals_monitor_worker(self):
         """Background daemon monitoring PC RAM and battery, sending proactive alerts with hysteresis."""
-        time.sleep(15)
+        time.sleep(10)
         while self.running:
             try:
                 if self.allowed_users:
@@ -484,8 +484,8 @@ class TelegramBridge:
                                 self._battery_alert_active = False
                     else:
                         self._battery_alert_active = False
-            except Exception:
-                pass
+            except Exception as e:
+                time.sleep(5)
             time.sleep(45)
 
     def _reminder_monitor_worker(self):
@@ -513,8 +513,8 @@ class TelegramBridge:
                                 os.remove(tmp_wav)
                         except Exception:
                             pass
-            except Exception:
-                pass
+            except Exception as e:
+                time.sleep(3)
             time.sleep(3)
 
     def download_file(self, file_id, dest_path):

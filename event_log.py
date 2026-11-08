@@ -5,21 +5,7 @@ in a lightweight SQLite database for presence catch-ups and remote briefs.
 import os
 import sqlite3
 import time
-import contextlib
-
-CONFIG_DIR = os.environ.get('HOMIE_DIR') or os.path.join(os.path.expanduser('~'), '.config', 'homie')
-os.makedirs(CONFIG_DIR, exist_ok=True)
-DEFAULT_DB_PATH = os.path.join(CONFIG_DIR, 'homie.db')
-
-@contextlib.contextmanager
-def get_connection(db_path=None):
-    path = db_path or DEFAULT_DB_PATH
-    conn = sqlite3.connect(path, timeout=10.0)
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-    finally:
-        conn.close()
+from db_utils import get_db_connection as get_connection, DEFAULT_DB_PATH, CONFIG_DIR
 
 def init_db(db_path=None):
     with get_connection(db_path) as conn:
@@ -35,6 +21,11 @@ def init_db(db_path=None):
             CREATE INDEX IF NOT EXISTS idx_event_occurred ON event_log(occurred_at);
         """)
         conn.commit()
+    # Automated retention maintenance: prune events older than 14 days
+    try:
+        clear_old_events(days=14, db_path=db_path)
+    except Exception:
+        pass
 
 def log_event(event_type: str, event_summary: str, occurred_at: float = None, db_path=None):
     """Logs an event to the persistent event log."""

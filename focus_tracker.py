@@ -8,27 +8,20 @@ import sqlite3
 import ctypes
 from ctypes import wintypes
 import threading
-import contextlib
 import psutil
-
-CONFIG_DIR = os.environ.get('HOMIE_DIR') or os.path.join(os.path.expanduser('~'), '.config', 'homie')
-os.makedirs(CONFIG_DIR, exist_ok=True)
-DEFAULT_DB_PATH = os.path.join(CONFIG_DIR, 'homie.db')
+from db_utils import get_db_connection as get_connection, DEFAULT_DB_PATH, CONFIG_DIR
 
 MEETING_PROCESS_NAMES = {
     'zoom.exe', 'teams.exe', 'msteams.exe', 'slack.exe',
     'webex.exe', 'skype.exe', 'discord.exe'
 }
 
-@contextlib.contextmanager
-def get_connection(db_path=None):
-    path = db_path or DEFAULT_DB_PATH
-    conn = sqlite3.connect(path, timeout=10.0)
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-    finally:
-        conn.close()
+def clear_old_sessions(days: int = 30, db_path=None):
+    """Prunes focus sessions older than N days to prevent unbounded DB growth."""
+    cutoff = time.time() - (days * 86400)
+    with get_connection(db_path) as conn:
+        conn.execute("DELETE FROM focus_sessions WHERE occurred_at < ?", (cutoff,))
+        conn.commit()
 
 def init_focus_db(db_path=None):
     with get_connection(db_path) as conn:
@@ -45,6 +38,10 @@ def init_focus_db(db_path=None):
             CREATE INDEX IF NOT EXISTS idx_focus_occurred ON focus_sessions(occurred_at);
         """)
         conn.commit()
+    try:
+        clear_old_sessions(days=30, db_path=db_path)
+    except Exception:
+        pass
 
 def format_duration(seconds: float) -> str:
     """Formats duration in seconds into human-readable representation."""

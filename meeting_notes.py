@@ -17,19 +17,7 @@ try:
 except ImportError:
     PYAUDIO_AVAILABLE = False
 
-CONFIG_DIR = os.environ.get('HOMIE_DIR') or os.path.join(os.path.expanduser('~'), '.config', 'homie')
-os.makedirs(CONFIG_DIR, exist_ok=True)
-DEFAULT_DB_PATH = os.path.join(CONFIG_DIR, 'homie.db')
-
-@contextlib.contextmanager
-def get_connection(db_path=None):
-    path = db_path or DEFAULT_DB_PATH
-    conn = sqlite3.connect(path, timeout=10.0)
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-    finally:
-        conn.close()
+from db_utils import get_db_connection as get_connection, DEFAULT_DB_PATH, CONFIG_DIR
 
 def init_meetings_db(db_path=None):
     with get_connection(db_path) as conn:

@@ -13,10 +13,25 @@ import win32api
 import win32process
 from PIL import ImageGrab, Image, ImageDraw, ImageFont
 
+def enable_dpi_awareness():
+    """Sets per-monitor DPI awareness (V2) to guarantee exact multi-monitor coordinate precision."""
+    try:
+        import ctypes
+        # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+    except Exception:
+        try:
+            import ctypes
+            # PROCESS_PER_MONITOR_DPI_AWARE = 2
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        except Exception:
+            pass
+
 def ensure_desktop_attached():
     """Ensures the current thread and process are attached to the interactive user desktop (WinSta0\\Default).
     Crucial for Windows services, background terminal tasks, and child processes to interact with desktop windows.
     """
+    enable_dpi_awareness()
     try:
         import ctypes
         u = ctypes.windll.user32
@@ -29,7 +44,7 @@ def ensure_desktop_attached():
     except Exception:
         pass
 
-# Ensure desktop attachment at load time
+# Ensure desktop attachment and DPI awareness at load time
 ensure_desktop_attached()
 
 def force_foreground_window(hwnd):
@@ -853,17 +868,28 @@ def execute_safe_command(command, timeout=20):
     if not cmd:
         return False, "No command provided."
 
-    blocked = [
-        r'rmdir\s+/[sS]',
-        r'del\s+/[fF]?[sS]?[qQ]?\s+[cC]:\\',
-        r'format\s+[a-zA-Z]:',
-        r'bcdedit',
-        r'diskpart',
-        r'reg\s+delete\s+hklm',
-        r'shutdown\s+/[sS]'
+    blocked_patterns = [
+        # Destructive file/disk/system actions
+        r'\b(rmdir|rd)\s+/[sS]\b',
+        r'\bdel\s+.*(/[sS]|/[fF])\b',
+        r'\bformat\s+[a-zA-Z]:',
+        r'\b(diskpart|bcdedit)\b',
+        r'\breg\s+delete\b',
+        r'\bshutdown\s+/[sS]\b',
+        r'\b(takeown|icacls)\b.*(/[gG]|grant)',
+        # PowerShell evasion & execution bypasses
+        r'-(?:e|enc|encodedcommand)\s+[a-zA-Z0-9+/=]{8,}',
+        r'\b(invoke-expression|iex)\b',
+        r'\b(downloadstring|downloadfile)\b',
+        r'\bi(?:wr|rm)\s+.*\|\s*iex\b',
+        r'\bcertutil\b.*-(?:decode|urlcache)',
+        r'\bbitsadmin\b.*transfer',
+        r'-executionpolicy\s+bypass',
+        # Chained shell executions
+        r'\|\s*(?:powershell|cmd|sh|bash)\b'
     ]
     import re
-    for pattern in blocked:
+    for pattern in blocked_patterns:
         if re.search(pattern, cmd, re.I):
             return False, f"Blocked unsafe command matching security guardrail: '{pattern}'"
 

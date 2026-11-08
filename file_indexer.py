@@ -7,9 +7,7 @@ import sqlite3
 import time
 import contextlib
 
-CONFIG_DIR = os.environ.get('HOMIE_DIR') or os.path.join(os.path.expanduser('~'), '.config', 'homie')
-os.makedirs(CONFIG_DIR, exist_ok=True)
-DEFAULT_DB_PATH = os.path.join(CONFIG_DIR, 'homie.db')
+from db_utils import get_db_connection as get_connection, DEFAULT_DB_PATH, CONFIG_DIR
 
 DEFAULT_INDEXED_ROOTS = [
     os.path.expanduser("~/Desktop"),
@@ -32,16 +30,6 @@ def format_file_size(size_bytes: int) -> str:
         return f"{round(size_bytes / (1024.0 * 1024.0), 1)} MB"
     else:
         return f"{round(size_bytes / (1024.0 * 1024.0 * 1024.0), 2)} GB"
-
-@contextlib.contextmanager
-def get_connection(db_path=None):
-    path = db_path or DEFAULT_DB_PATH
-    conn = sqlite3.connect(path, timeout=10.0)
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-    finally:
-        conn.close()
 
 def init_index_db(db_path=None):
     with get_connection(db_path) as conn:
