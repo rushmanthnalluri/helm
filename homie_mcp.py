@@ -63,6 +63,7 @@ MCP_TOOLS = [
         "name": "homie_read_screen_memory",
         "description": "Searches the local timeline of what was looked at or read on screen. Returns content with dynamic nonce tags.",
         "capabilityTier": "SENSITIVE_READ",
+        "returns_untrusted": True,
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -76,6 +77,7 @@ MCP_TOOLS = [
         "name": "homie_get_clipboard",
         "description": "Reads current clipboard content with dynamic nonce protection.",
         "capabilityTier": "SENSITIVE_READ",
+        "returns_untrusted": True,
         "inputSchema": {"type": "object", "properties": {}, "required": []}
     },
     {
@@ -94,6 +96,7 @@ MCP_TOOLS = [
         "name": "homie_capture_screen",
         "description": "Takes a high-resolution screenshot of connected Windows monitors.",
         "capabilityTier": "SENSITIVE_READ",
+        "returns_untrusted": True,
         "inputSchema": {"type": "object", "properties": {}, "required": []}
     },
     {
@@ -112,6 +115,7 @@ MCP_TOOLS = [
         "name": "homie_list_windows",
         "description": "Lists all visible, non-minimized desktop application windows (window titles wrapped in nonce tags).",
         "capabilityTier": "READ_ONLY",
+        "returns_untrusted": True,
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -313,9 +317,13 @@ def execute_mcp_tool(name, arguments, caller_id="mcp_client", client_token=None)
             y = int(arguments.get("y", 0))
             elem_name = str(arguments.get("element_name", "")).lower()
 
-            # Defense against synthetic self-approval & UAC evasion
-            blocked_targets = ["telegram", "user account control", "run", "task manager", "credential manager", "windows security", "step_up", "uac"]
-            if any(bt in elem_name for bt in blocked_targets):
+            # Defense 1: Window-level process image hardware check
+            is_prohibited, proc_reason = windows_tools.is_prohibited_target_process()
+            if is_prohibited:
+                decision = "DENY_PROHIBITED_PROCESS_TARGET"
+                output = f"Security Gate: Input denied. {proc_reason}."
+            # Defense 2: Element-level target safety shield
+            elif any(bt in elem_name for bt in ["telegram", "user account control", "run", "task manager", "credential manager", "windows security", "step_up", "uac"]):
                 decision = "DENY_SECURITY_TARGET"
                 output = f"Security Gate: Synthetic clicks targeting privileged security dialog or approval interface '{elem_name}' are prohibited."
             else:
@@ -327,10 +335,13 @@ def execute_mcp_tool(name, arguments, caller_id="mcp_client", client_token=None)
             txt = str(arguments.get("text", ""))
             elem_name = str(arguments.get("element_name", "unknown"))
 
-            # Defense against synthetic shell injection
-            blocked_binaries = ["powershell", "cmd", "cmd.exe", "powershell.exe", "wt.exe", "bash", "regedit", "certutil", "wscript", "cscript"]
-            txt_lower = txt.lower()
-            if any(b in txt_lower for b in blocked_binaries):
+            # Defense 1: Window-level process image hardware check
+            is_prohibited, proc_reason = windows_tools.is_prohibited_target_process()
+            if is_prohibited:
+                decision = "DENY_PROHIBITED_PROCESS_TARGET"
+                output = f"Security Gate: Input denied. {proc_reason}."
+            # Defense 2: Block prohibited binary typing
+            elif any(b in txt.lower() for b in ["powershell", "cmd", "cmd.exe", "powershell.exe", "wt.exe", "bash", "regedit", "certutil", "wscript", "cscript"]):
                 decision = "DENY_BLOCKED_BINARY_TYPING"
                 output = f"Security Gate: Synthetic keystrokes containing prohibited shell execution '{txt[:30]}' are blocked."
             else:
@@ -353,6 +364,15 @@ def execute_mcp_tool(name, arguments, caller_id="mcp_client", client_token=None)
         agent_audit_ledger.record_agent_action(caller_id, name, tier, arguments, decision=decision)
     except Exception as ex:
         logger.debug("Failed to record audit ledger: %s", ex)
+
+    # Mark provenance taint if tool returns untrusted data
+    tool_meta = next((t for t in MCP_TOOLS if t["name"] == name), {})
+    if tool_meta.get("returns_untrusted") and decision == "ALLOW":
+        try:
+            import taint_tracker
+            taint_tracker.mark_session_tainted(caller_id, source=f"tool_provenance:{name}")
+        except Exception:
+            pass
 
     return output
 

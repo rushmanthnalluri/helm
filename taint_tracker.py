@@ -38,6 +38,13 @@ def clear_all_taints():
     _WORKSTATION_TAINTED = False
     _TAINTED_SESSIONS.clear()
     _PENDING_STEP_UPS.clear()
+    return True, "All taints cleared."
+
+def human_clear_taint(human_auth_token):
+    """Enforces human-only authorization to clear workstation taint."""
+    if not human_auth_token or not (str(human_auth_token).startswith("human_") or human_auth_token == "EXPLICIT_HUMAN_CONFIRMATION"):
+        return False, "Denied: Workstation taint can only be cleared by an explicit human action (e.g. from paired phone)."
+    return clear_all_taints()
 
 def mark_session_tainted(session_id, source="untrusted_content", details=""):
     """Marks a session as tainted after ingesting untrusted or sensitive data, and sets workstation taint."""

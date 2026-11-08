@@ -156,6 +156,56 @@ def get_foreground_window():
     except Exception:
         return None
 
+def get_window_process_info(hwnd):
+    """Retrieves process ID, executable name, and full image path for any HWND."""
+    if not hwnd or not win32gui.IsWindow(hwnd):
+        return {'pid': 0, 'proc_name': '', 'exe_path': ''}
+    try:
+        _, pid = win32process.GetWindowThreadProcessId(hwnd)
+        proc_name = ""
+        exe_path = ""
+        try:
+            import psutil
+            p = psutil.Process(pid)
+            proc_name = p.name()
+            exe_path = p.exe()
+        except Exception:
+            pass
+        return {'pid': pid, 'proc_name': proc_name, 'exe_path': exe_path}
+    except Exception:
+        return {'pid': 0, 'proc_name': '', 'exe_path': ''}
+
+PROHIBITED_PROCESS_IMAGES = {
+    "powershell.exe", "pwsh.exe", "cmd.exe", "wt.exe", "bash.exe", "wsl.exe",
+    "python.exe", "pythonw.exe", "mshta.exe", "rundll32.exe", "cscript.exe",
+    "wscript.exe", "regedit.exe", "mmc.exe", "telegram.exe", "consent.exe"
+}
+
+def is_prohibited_target_process(hwnd=None):
+    """Evaluates whether an HWND (or current foreground window) belongs to a prohibited interpreter, shell, or security boundary."""
+    target_hwnd = hwnd
+    if not target_hwnd:
+        target_hwnd = win32gui.GetForegroundWindow()
+    if not target_hwnd:
+        return False, "No active window"
+
+    info = get_window_process_info(target_hwnd)
+    proc_name = (info.get("proc_name") or "").lower()
+
+    if proc_name in PROHIBITED_PROCESS_IMAGES:
+        return True, f"Prohibited process image: '{proc_name}'"
+
+    # Check for Windows Run Dialog (#32770 with title 'Run')
+    try:
+        cls_name = win32gui.GetClassName(target_hwnd)
+        title = win32gui.GetWindowText(target_hwnd)
+        if cls_name == "#32770" and title.lower() == "run":
+            return True, "Prohibited system dialog: Windows Run Dialog"
+    except Exception:
+        pass
+
+    return False, "Permitted target process"
+
 def find_windows(query=""):
     """Finds all visible top-level windows matching an app name or title query."""
     ensure_desktop_attached()
