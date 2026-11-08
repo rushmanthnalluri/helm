@@ -153,10 +153,23 @@ def wrap_untrusted_content_with_nonce(text, source="External"):
 
 wrap_untrusted_content = wrap_untrusted_content_with_nonce
 
-def execute_mcp_tool(name, arguments, caller_id="mcp_client"):
-    """Executes an MCP tool call with capability tier validation and audit logging."""
+def execute_mcp_tool(name, arguments, caller_id="mcp_client", client_token=None):
+    """Executes an MCP tool call with capability tier validation, client token verification, and audit logging."""
     tier_map = {t["name"]: t.get("capabilityTier", "WRITE_EXEC") for t in MCP_TOOLS}
     tier = tier_map.get(name, "WRITE_EXEC")
+
+    # Scoped Token Gate: Validates client token scope against required capability tier
+    if client_token:
+        import client_token_auth
+        token_ok, token_msg, _ = client_token_auth.validate_client_token(client_token, required_tier=tier)
+        if not token_ok:
+            decision = "DENY_TOKEN_UNAUTHORIZED"
+            output = f"Security Gate: {token_msg}"
+            try:
+                agent_audit_ledger.record_agent_action(caller_id, name, tier, arguments, decision=decision)
+            except Exception:
+                pass
+            return output
 
     # Taint Tracking Gate: Blocks write tools if caller session has ingested untrusted content
     import taint_tracker
@@ -292,7 +305,8 @@ def handle_jsonrpc_request(req, caller_id="mcp_client"):
         params = req.get("params", {})
         tool_name = params.get("name", "")
         tool_args = params.get("arguments", {})
-        result_text = execute_mcp_tool(tool_name, tool_args, caller_id=caller_id)
+        client_token = params.get("client_token") or (tool_args.pop("client_token", None) if isinstance(tool_args, dict) else None)
+        result_text = execute_mcp_tool(tool_name, tool_args, caller_id=caller_id, client_token=client_token)
         return {
             "jsonrpc": "2.0",
             "id": req_id,

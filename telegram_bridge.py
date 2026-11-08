@@ -447,6 +447,11 @@ class TelegramBridge:
             except Exception as e:
                 self.send_message(chat_id, f"Failed to toggle note pin: {e}")
 
+        elif data.startswith('approve_stepup_') or data.startswith('reject_stepup_'):
+            import step_up_gate
+            ok, msg = step_up_gate.handle_step_up_callback(data, chat_id)
+            self.send_message(chat_id, msg)
+
         elif data == 'action_phone_portal':
             self.handle_command(chat_id, '/call')
 

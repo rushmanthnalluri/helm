@@ -20,6 +20,7 @@ if BASE_DIR not in sys.path:
 
 import db_utils
 import windows_tools
+import crypto_vault
 
 logger = logging.getLogger("homie.screen_memory")
 
@@ -28,43 +29,49 @@ SENSITIVE_KEYWORDS = [
     "banking", "incognito", "private browsing", "credit card", "security code"
 ]
 
-_monitor_running = False
-_monitor_thread = None
+EXCLUDED_APPS = {
+    "1password.exe", "bitwarden.exe", "keepass.exe", "lastpass.exe", "tor.exe"
+}
 
-def init_screen_memory_db():
-    with db_utils.get_db() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS screen_timeline (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp REAL NOT NULL,
-                proc_name TEXT NOT NULL,
-                window_title TEXT NOT NULL,
-                text_content TEXT,
-                summary TEXT
-            )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_screen_ts ON screen_timeline(timestamp)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_screen_proc ON screen_timeline(proc_name)")
-        conn.commit()
+def add_excluded_app(proc_name):
+    """Adds a process name to the exclusion blacklist."""
+    if proc_name:
+        EXCLUDED_APPS.add(proc_name.lower().strip())
 
-init_screen_memory_db()
+def get_excluded_apps():
+    """Returns the set of excluded application process names."""
+    return set(EXCLUDED_APPS)
 
 def is_sensitive(title, proc_name, text=""):
+    proc_clean = (proc_name or "").lower().strip()
+    if proc_clean in EXCLUDED_APPS or any(app in proc_clean for app in EXCLUDED_APPS):
+        return True
     combined = f"{title} {proc_name} {text}".lower()
     return any(k in combined for k in SENSITIVE_KEYWORDS)
 
-def record_screen_event(proc_name, window_title, text_content=None, summary=None):
+def record_screen_event(proc_name, window_title, text_content=None, summary=None, encrypt_at_rest=True):
     if is_sensitive(window_title, proc_name, text_content or ""):
         logger.debug("Skipping sensitive window: %s (%s)", window_title, proc_name)
         return False
+
+    raw_text = text_content or ""
+    stored_text = crypto_vault.encrypt(raw_text) if encrypt_at_rest and raw_text else raw_text
 
     with db_utils.get_db() as conn:
         conn.execute("""
             INSERT INTO screen_timeline (timestamp, proc_name, window_title, text_content, summary)
             VALUES (?, ?, ?, ?, ?)
-        """, (time.time(), proc_name or "unknown", window_title or "", text_content or "", summary or ""))
+        """, (time.time(), proc_name or "unknown", window_title or "", stored_text, summary or ""))
         conn.commit()
     return True
+
+def _decrypt_row_text(stored_text):
+    if not stored_text:
+        return ""
+    try:
+        return crypto_vault.decrypt(stored_text)
+    except Exception:
+        return stored_text
 
 def get_recent_timeline(minutes=30, limit=20):
     cutoff = time.time() - (minutes * 60)
@@ -85,7 +92,7 @@ def get_recent_timeline(minutes=30, limit=20):
             "timestamp": r[0],
             "proc_name": r[1],
             "window_title": r[2],
-            "text_content": r[3],
+            "text_content": _decrypt_row_text(r[3]),
             "summary": r[4],
             "time_str": time.strftime("%H:%M:%S", time.localtime(r[0]))
         })
@@ -94,28 +101,64 @@ def get_recent_timeline(minutes=30, limit=20):
 def search_screen_history(query, limit=10):
     if not query:
         return []
-    q = f"%{query.strip()}%"
+    q_lower = query.strip().lower()
+    
+    # Query database and decrypt in memory to evaluate matches across encrypted records
     with db_utils.get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT timestamp, proc_name, window_title, text_content, summary
             FROM screen_timeline
-            WHERE window_title LIKE ? OR text_content LIKE ? OR summary LIKE ?
             ORDER BY timestamp DESC
-            LIMIT ?
-        """, (q, q, q, limit))
+            LIMIT 200
+        """)
         rows = cursor.fetchall()
 
     results = []
     for r in rows:
-        results.append({
-            "timestamp": r[0],
-            "proc_name": r[1],
-            "window_title": r[2],
-            "text_content": r[3],
-            "time_str": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r[0]))
-        })
+        decrypted_text = _decrypt_row_text(r[3])
+        title = r[2] or ""
+        summary = r[4] or ""
+        proc = r[1] or ""
+        
+        if (q_lower in title.lower() or 
+            q_lower in decrypted_text.lower() or 
+            q_lower in summary.lower() or 
+            q_lower in proc.lower()):
+            results.append({
+                "timestamp": r[0],
+                "proc_name": proc,
+                "window_title": title,
+                "text_content": decrypted_text,
+                "time_str": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r[0]))
+            })
+            if len(results) >= limit:
+                break
     return results
+
+def forget_recent_history(minutes=15):
+    """Immediately purges all recorded screen history from the past N minutes.
+    Returns the count of purged events.
+    """
+    cutoff = time.time() - (minutes * 60)
+    with db_utils.get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM screen_timeline WHERE timestamp >= ?", (cutoff,))
+        deleted_count = cur.rowcount
+        conn.commit()
+    logger.info("Purged %d screen history records from the last %d minutes.", deleted_count, minutes)
+    return deleted_count
+
+def cleanup_expired_retention(retention_hours=24):
+    """Removes historical screen timeline records older than the retention TTL."""
+    cutoff = time.time() - (retention_hours * 3600)
+    with db_utils.get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM screen_timeline WHERE timestamp < ?", (cutoff,))
+        purged = cur.rowcount
+        conn.commit()
+    logger.info("Pruned %d expired screen timeline entries older than %d hours.", purged, retention_hours)
+    return purged
 
 def summarize_timeline_text(minutes=30):
     events = get_recent_timeline(minutes=minutes, limit=15)

@@ -1,0 +1,83 @@
+"""Interactive Out-of-Band Step-Up Gate Bridge.
+Connects taint_tracker with Telegram and Desktop HUD:
+When an agent or untrusted session attempts a privileged WRITE_EXEC action,
+this automatically pushes an interactive confirmation card to the user's paired Telegram phone
+with [Allow] and [Block] buttons.
+"""
+
+import os
+import sys
+import time
+import logging
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+import taint_tracker
+import agent_audit_ledger
+
+logger = logging.getLogger("homie.step_up_gate")
+
+def push_step_up_request_to_phone(step_up_id, session_id, tool_name, arguments, source="untrusted_content"):
+    """Pushes an interactive confirmation to the user's paired Telegram phone."""
+    try:
+        import homie
+        prefs = homie.get_prefs()
+        allowed_users = prefs.get("telegramAllowedUsers", [])
+        token = prefs.get("telegramToken", "")
+        if not token or not allowed_users:
+            logger.info("No paired Telegram user available for step-up push notification.")
+            return False, "No paired Telegram phone"
+
+        owner_chat_id = allowed_users[0]
+        import telegram_bridge
+        bridge = telegram_bridge.TelegramBridge(token=token, allowed_users=allowed_users)
+
+        msg = (
+            "🚨 **Workstation Security Gate: Step-Up Approval**\n\n"
+            f"An agent or external trigger requested privileged execution:\n"
+            f"• **Tool**: `{tool_name}`\n"
+            f"• **Arguments**: `{str(arguments)[:120]}`\n"
+            f"• **Session**: `{session_id}` (Tainted by: `{source}`)\n\n"
+            "Tap an action below to allow or reject this execution on your PC:"
+        )
+
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "✅ Allow Execution", "callback_data": f"approve_stepup_{step_up_id}"},
+                    {"text": "❌ Block & Deny", "callback_data": f"reject_stepup_{step_up_id}"}
+                ]
+            ]
+        }
+
+        bridge.send_message(owner_chat_id, msg, reply_markup=keyboard)
+        logger.info("Pushed step-up approval [ID: %s] to Telegram chat %s", step_up_id, owner_chat_id)
+        return True, f"Step-up request sent to Telegram phone ({owner_chat_id})"
+    except Exception as e:
+        logger.error("Failed to push step-up request: %s", e)
+        return False, str(e)
+
+def handle_step_up_callback(callback_data, chat_id):
+    """Handles Telegram inline button callbacks for step-up approvals."""
+    if callback_data.startswith("approve_stepup_"):
+        step_up_id = callback_data[15:]
+        ok, item, msg = taint_tracker.approve_step_up(step_up_id)
+        if ok and item:
+            # Execute the approved tool
+            import homie_mcp
+            tool_name = item["tool_name"]
+            args = item["arguments"]
+            res = homie_mcp.execute_mcp_tool(tool_name, args, caller_id=f"approved_{chat_id}")
+            agent_audit_ledger.record_agent_action(f"telegram_approved_{chat_id}", tool_name, "WRITE_EXEC", args, decision="USER_APPROVED")
+            return True, f"✅ **Approved & Executed**: `{tool_name}`\nResult: {res}"
+        return False, f"⚠️ Could not approve: {msg}"
+
+    elif callback_data.startswith("reject_stepup_"):
+        step_up_id = callback_data[14:]
+        taint_tracker.approve_step_up(step_up_id) # Cleans up pending entry
+        agent_audit_ledger.record_agent_action(f"telegram_rejected_{chat_id}", "unknown", "WRITE_EXEC", {}, decision="USER_DENIED")
+        return True, "❌ **Blocked**: Privileged action was denied and cancelled."
+
+    return False, "Unknown callback"

@@ -23,3 +23,6 @@ wheels/
 *.egg
 .pytest_cache/
 *.log
+*.key
+claude_*.png
+*.jsonl

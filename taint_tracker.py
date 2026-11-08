@@ -66,6 +66,15 @@ def check_action_privilege(session_id, capability_tier, tool_name, arguments):
             }
             logger.warning("Step-up approval required for tainted session %s calling %s (StepUp ID: %s)",
                            session_id, tool_name, step_up_id)
+            # Asynchronously push interactive step-up approval to user's paired phone
+            try:
+                import step_up_gate
+                step_up_gate.push_step_up_request_to_phone(
+                    step_up_id, session_id, tool_name, arguments, source=_TAINTED_SESSIONS.get(session_id, {}).get("source", "untrusted")
+                )
+            except Exception as e:
+                logger.debug("Could not push step-up notification: %s", e)
+
             return False, True, f"STEP_UP_REQUIRED: Session is tainted by external data. Out-of-band approval required [ID: {step_up_id}]"
 
     return True, False, "Permitted"

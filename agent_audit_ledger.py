@@ -19,9 +19,44 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 import db_utils
+import hmac
 
 logger = logging.getLogger("homie.audit_ledger")
 GENESIS_HASH = "0" * 64
+
+_LEDGER_KEY_CACHE = None
+
+def get_ledger_secret_key():
+    """Retrieves or creates a persistent secret HMAC key for ledger signing."""
+    global _LEDGER_KEY_CACHE
+    if _LEDGER_KEY_CACHE:
+        return _LEDGER_KEY_CACHE
+
+    env_key = os.environ.get("HOMIE_LEDGER_SECRET")
+    if env_key:
+        _LEDGER_KEY_CACHE = env_key.encode("utf-8")
+        return _LEDGER_KEY_CACHE
+
+    key_file = os.path.join(BASE_DIR, ".homie_ledger_hmac.key")
+    if os.path.exists(key_file):
+        try:
+            with open(key_file, "rb") as f:
+                _LEDGER_KEY_CACHE = f.read()
+                if _LEDGER_KEY_CACHE:
+                    return _LEDGER_KEY_CACHE
+        except Exception:
+            pass
+
+    import secrets
+    new_key = secrets.token_bytes(32)
+    try:
+        with open(key_file, "wb") as f:
+            f.write(new_key)
+        _LEDGER_KEY_CACHE = new_key
+    except Exception:
+        _LEDGER_KEY_CACHE = b"homie_default_audit_ledger_hmac_key"
+
+    return _LEDGER_KEY_CACHE
 
 def init_audit_ledger_db():
     with db_utils.get_db() as conn:
@@ -44,12 +79,17 @@ def init_audit_ledger_db():
 
 init_audit_ledger_db()
 
-def _compute_hash(prev_hash, timestamp, caller_id, tool_name, tier, args_hash, decision):
-    payload = f"{prev_hash}|{timestamp}|{caller_id}|{tool_name}|{tier}|{args_hash}|{decision}"
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+def _compute_hash(prev_hash, timestamp, caller_id, tool_name, tier, args_hash, decision, secret_key=None):
+    payload = f"{prev_hash}|{timestamp}|{caller_id}|{tool_name}|{tier}|{args_hash}|{decision}".encode("utf-8")
+    if secret_key:
+        k = secret_key if isinstance(secret_key, bytes) else str(secret_key).encode("utf-8")
+        return hmac.new(k, payload, hashlib.sha256).hexdigest()
+    return hashlib.sha256(payload).hexdigest()
 
-def record_agent_action(caller_id, tool_name, tier, arguments, decision="ALLOW"):
-    """Records an agent action into the hash-chained audit ledger."""
+def record_agent_action(caller_id, tool_name, tier, arguments, decision="ALLOW", secret_key=None):
+    """Records an agent action into the hash-chained audit ledger.
+    Optionally signs with an HMAC secret key for tamper-proof attestation.
+    """
     clean_args = json.dumps(arguments, sort_keys=True) if isinstance(arguments, dict) else str(arguments)
     args_hash = hashlib.sha256(clean_args.encode("utf-8")).hexdigest()[:16]
     args_summary = clean_args[:100] + ("..." if len(clean_args) > 100 else "")
@@ -61,17 +101,20 @@ def record_agent_action(caller_id, tool_name, tier, arguments, decision="ALLOW")
         last_row = cur.fetchone()
         prev_hash = last_row[0] if last_row else GENESIS_HASH
 
-        entry_hash = _compute_hash(prev_hash, now, caller_id, tool_name, tier, args_hash, decision)
+        entry_hash = _compute_hash(prev_hash, now, caller_id, tool_name, tier, args_hash, decision, secret_key=secret_key)
 
         cur.execute("""
             INSERT INTO agent_audit_ledger (timestamp, caller_id, tool_name, tier, arguments_summary, args_hash, decision, prev_hash, entry_hash)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (now, caller_id, tool_name, tier, args_summary, args_hash, decision, prev_hash, entry_hash))
         conn.commit()
+
     return entry_hash
 
-def verify_ledger_integrity():
-    """Validates the cryptographic hash chain from genesis to head."""
+def verify_ledger_integrity(secret_key=None):
+    """Validates the cryptographic hash chain from genesis to head.
+    Supports standard SHA-256 and HMAC-SHA256 signatures across mixed ledger entries.
+    """
     with db_utils.get_db() as conn:
         cur = conn.cursor()
         cur.execute("SELECT id, timestamp, caller_id, tool_name, tier, args_hash, decision, prev_hash, entry_hash FROM agent_audit_ledger ORDER BY id ASC")
@@ -85,12 +128,59 @@ def verify_ledger_integrity():
         row_id, ts, caller, tool, tier, args_hash, decision, prev_h, curr_h = r
         if prev_h != expected_prev:
             return False, f"Broken chain at entry #{row_id}: expected prev_hash '{expected_prev}', got '{prev_h}'"
-        recomputed = _compute_hash(prev_h, ts, caller, tool, tier, args_hash, decision)
+
+        # Check standard SHA-256
+        recomputed = _compute_hash(prev_h, ts, caller, tool, tier, args_hash, decision, secret_key=None)
         if recomputed != curr_h:
-            return False, f"Tampered hash at entry #{row_id}: recomputed '{recomputed}', found '{curr_h}'"
+            matched = False
+            if secret_key:
+                if _compute_hash(prev_h, ts, caller, tool, tier, args_hash, decision, secret_key=secret_key) == curr_h:
+                    matched = True
+            if not matched:
+                if _compute_hash(prev_h, ts, caller, tool, tier, args_hash, decision, secret_key=get_ledger_secret_key()) == curr_h:
+                    matched = True
+            if not matched:
+                return False, f"Tampered hash at entry #{row_id}: recomputed '{recomputed}', found '{curr_h}'"
+
         expected_prev = curr_h
 
     return True, f"Cryptographic integrity verified across all {len(rows)} ledger entries."
+
+def verify_against_remote_anchor(remote_anchor, secret_key=None):
+    """Compares the local ledger state against an externally anchored checkpoint.
+    Prevents local ledger truncation, rollback, or fork attacks.
+    remote_anchor: dict with {'head_hash': str, 'count': int}
+    """
+    if not remote_anchor or "head_hash" not in remote_anchor:
+        return False, "Invalid remote anchor data"
+
+    remote_head = remote_anchor.get("head_hash")
+    remote_count = remote_anchor.get("count", 0)
+
+    # First verify internal hash chain
+    ok, chain_msg = verify_ledger_integrity(secret_key=secret_key)
+    if not ok:
+        return False, f"Ledger integrity failure: {chain_msg}"
+
+    with db_utils.get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM agent_audit_ledger")
+        local_count = cur.fetchone()[0]
+
+        cur.execute("SELECT entry_hash FROM agent_audit_ledger ORDER BY id ASC LIMIT 1 OFFSET ?", (remote_count - 1,))
+        anchor_row = cur.fetchone()
+
+    if local_count < remote_count:
+        return False, f"Rollback detected: local ledger has {local_count} entries, but remote anchor proves {remote_count} entries existed."
+
+    if not anchor_row:
+        return False, f"Tampering detected: block #{remote_count} missing in local ledger."
+
+    local_anchor_hash = anchor_row[0]
+    if local_anchor_hash != remote_head:
+        return False, f"Ledger fork/tampering detected at block #{remote_count}: local hash '{local_anchor_hash}' != anchored '{remote_head}'"
+
+    return True, f"Ledger matches remote anchor at block #{remote_count} [{remote_head[:16]}]."
 
 def anchor_head_hash_to_remote():
     """Returns the latest entry hash and count to anchor the ledger to an external log (Telegram / phone)."""

@@ -69,9 +69,9 @@ def send_message_to_claude(prompt_text, wait_for_reply_sec=12):
     height = bottom - top
 
     # 3. Calculate target click coordinates for Claude input box
-    # Claude's input box is at roughly X=67% of width, Y=59% of height in modern claude.ai
-    click_x = left + int(width * 0.65)
-    click_y = top + int(height * 0.59)
+    # Claude's input box in active conversation is located near the bottom of the window
+    click_x = left + int(width * 0.55)
+    click_y = bottom - 110
 
     logger.info("Clicking Claude input prompt at (%d, %d)", click_x, click_y)
     pyautogui.click(click_x, click_y)
