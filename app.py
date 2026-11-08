@@ -88,6 +88,18 @@ class HomieApp:
         self.held_keys = set()
         self.hotkey_listener = None
         self.tray = None
+        self.telegram = None
+
+    def start_telegram_bridge(self):
+        """Starts the Telegram bridge if a bot token is available."""
+        try:
+            from telegram_bridge import TelegramBridge
+            self.telegram = TelegramBridge()
+            if self.telegram.token:
+                self.telegram.start()
+                print("[App] Telegram remote control bridge active.")
+        except Exception as e:
+            print(f"[App] Telegram bridge error: {e}")
 
     def eval_js(self, script):
         """Thread-safe evaluation of JavaScript in the overlay window."""
@@ -284,7 +296,10 @@ class HomieApp:
         # 2. Start system tray icon
         self.start_tray_icon()
 
-        # 3. Create PyWebView transparent floating overlay
+        # 3. Start Telegram remote control bridge (if token configured)
+        self.start_telegram_bridge()
+
+        # 4. Create PyWebView transparent floating overlay
         html_content = self.get_ui_html()
         monitors = windows_tools.get_monitors()
         primary = monitors[0] if monitors else {'x': 0, 'y': 0}

@@ -66,6 +66,31 @@ Or configure it in your `~/.config/homie/settings.json`:
 
 ---
 
+## 📱 Call / Message Your PC from Telegram (100% Free)
+
+You can call or message your PC remotely from your phone using Telegram at zero cost:
+
+- 🎙️ **Voice Walkie-Talkie**: Hold the microphone button in Telegram, speak naturally, and send. Homie transcribes your voice with local Whisper, executes the action, and replies back!
+- 📸 **Live Desktop Screen**: Send `/screen` to get an instant high-res photo of your Windows displays.
+- 🔒 **Lock Workstation**: Send `/lock` from anywhere to immediately lock your PC.
+- 🪟 **Window Management**: Send `/snap left` or `/snap right`.
+- 🎵 **Media Playback**: Send `/media pause`, `/media play`, or `/media volup`.
+- 🚀 **App Launcher**: Send `/open chrome` or `/open notepad`.
+- 💬 **Ask Anything**: Any prompt or question is processed by Homie via Gemini / NVIDIA NIM and replied back to your phone.
+- 🛡️ **Secure Auto-Pairing**: The first person to message your bot is registered as the sole owner. Other Telegram users are blocked from controlling your PC.
+
+### How to Set It Up in 60 Seconds:
+1. Open Telegram on your phone and message **`@BotFather`**.
+2. Type `/newbot`, give it a name (e.g. `MyHomiePCBot`) and username.
+3. Copy the Bot API Token (e.g. `7890123456:AAH...`).
+4. Set the token on your PC:
+   ```powershell
+   setx TELEGRAM_BOT_TOKEN "7890123456:AAH..."
+   ```
+5. Run Homie (`.\run.bat` or `python app.py`). Homie will automatically connect to Telegram in the background. Now just send a message or voice note to your bot from your phone!
+
+---
+
 ## 🚀 Quick Install
 
 ### Prerequisites
