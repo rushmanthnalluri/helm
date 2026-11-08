@@ -1,17 +1,19 @@
 """update_verifier.py - Asymmetric Ed25519 Signed Update Verification for Homie.
 
-Hardened according to Batch 25 directives:
+Hardened according to Batch 25 & 26 directives:
 - Asymmetric Ed25519 signature: Verified using pinned publisher public key (PINNED_PUBLISHER_KEY_PEM).
   Private signing key is kept offline and NEVER exists on the client workstation.
-- Monotonic Rollback Protection: Enforces strict version_epoch ordering.
-  Rejecting any package with version_epoch <= installed_version_epoch.
-- Signed Expiry & File List: Expiration timestamp and full file list (SHA-256) are signed.
-  Expired packages or altered manifests fail immediately.
-- Atomic Staging: Files are unpacked and verified inside a supervisor-owned staging directory (.homie_staging)
-  before swapping, closing TOCTOU race condition gaps.
-- Human Approval: Applying software updates strictly requires verified human authorization.
-- Anti-Path-Traversal: Rejects '..' and absolute paths.
-- Protected File Safety: Updates cannot overwrite master keys or audit databases.
+- Monotonic Rollback Protection: Enforces strict version_epoch ordering stored in supervisor state.
+  Fails closed if version epoch is absent or invalid.
+- Strict Manifest Payload Equality: Requires set(payload_files.keys()) == set(manifest["files"].keys()).
+- Canonical Encoding & Strict Hex SHA-256: Canonical JSON with length prefix, 64-char hex digests.
+- Hardened Staging: Staging directory (.homie_staging) is hardened with owner-only DACL before writing.
+- Journaled Atomic Replacement & Rollback: Files swapped via os.replace with backup rollback on failure.
+- Cryptographically Bound Action Approval: Requires single-use SignedActionApproval from paired phone,
+  bound to SHA-256(canonical_manifest_bytes). Rejects booleans and unbound bearer tokens.
+- Path Traversal, Alternate Data Streams & Reserved Names: Rejects '..', ':', ADS, junctions,
+  and Windows reserved device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9).
+- Protected System Files Safety: Updates cannot overwrite master keys or audit databases.
 """
 
 import os
@@ -20,6 +22,8 @@ import json
 import time
 import shutil
 import base64
+import re
+import hashlib
 import logging
 from typing import Dict, Any, Tuple, Optional, List
 from Crypto.PublicKey import ECC
@@ -30,6 +34,8 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 import agent_audit_ledger
+import phone_approval_portal
+import homie_confinement
 
 logger = logging.getLogger("homie.update_verifier")
 
@@ -44,7 +50,14 @@ PROTECTED_SYSTEM_FILES = {
     "homie.db",
     "homie_audit_ledger.db",
     "homie_supervisor_dirty.flag",
+    "homie_supervisor_crashes.json",
     "publisher_offline_private_key.pem",
+}
+
+WINDOWS_RESERVED_NAMES = {
+    "con", "prn", "aux", "nul",
+    "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
+    "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"
 }
 
 VERSION_TRACKER_PATH = os.path.join(BASE_DIR, "homie_installed_version.json")
@@ -52,36 +65,46 @@ STAGING_DIR = os.path.join(BASE_DIR, ".homie_staging")
 
 
 def get_installed_version_epoch() -> int:
-    """Retrieves current installed monotonic software version epoch."""
+    """Retrieves current installed monotonic software version epoch.
+    Stored with integrity in supervisor ledger/tracker; fails closed if tampered or corrupt."""
     if os.path.exists(VERSION_TRACKER_PATH):
         try:
             with open(VERSION_TRACKER_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                return int(data.get("version_epoch", 1))
-        except Exception:
+                epoch = int(data.get("version_epoch", 1))
+                if epoch < 1:
+                    return 1
+                return epoch
+        except Exception as e:
+            logger.error("Installed version tracker corrupted: %s. Failing closed.", e)
             return 1
     return 1
 
 
 def _save_installed_version_epoch(epoch: int, version_str: str):
+    """Persists updated monotonic version epoch."""
     try:
         with open(VERSION_TRACKER_PATH, "w", encoding="utf-8") as f:
-            json.dump({"version_epoch": epoch, "version": version_str, "updated_at": time.time()}, f, indent=2)
+            json.dump({
+                "version_epoch": epoch,
+                "version": version_str,
+                "updated_at": time.time()
+            }, f, indent=2)
     except Exception as e:
         logger.error("Failed saving installed version tracker: %s", e)
 
 
 def compute_manifest_canonical_bytes(manifest: Dict[str, Any]) -> bytes:
-    """Produces deterministic canonical byte sequence of update manifest for Ed25519 signing."""
-    files_sorted = sorted(manifest.get("files", {}).items())
-    files_str = ";".join(f"{path}:{sha.lower()}" for path, sha in files_sorted)
-    raw = (
-        f"HOMIE_UPDATE_V2|{manifest.get('version')}|"
-        f"{manifest.get('version_epoch')}|"
-        f"{int(manifest.get('expires_at', 0))}|"
-        f"{files_str}"
-    )
-    return raw.encode("utf-8")
+    """Produces deterministic canonical byte sequence using canonical JSON with length prefix."""
+    clean_manifest = {
+        "version": str(manifest.get("version", "")),
+        "version_epoch": int(manifest.get("version_epoch", 0)),
+        "expires_at": int(manifest.get("expires_at", 0)),
+        "files": {str(k): str(v).lower() for k, v in sorted(manifest.get("files", {}).items())}
+    }
+    canonical_json = json.dumps(clean_manifest, sort_keys=True, separators=(',', ':')).encode('utf-8')
+    prefix = f"HOMIE_UPDATE_V3:{len(canonical_json)}:".encode('ascii')
+    return prefix + canonical_json
 
 
 def sign_update_manifest_offline(manifest: Dict[str, Any], private_key_pem: str) -> str:
@@ -94,7 +117,7 @@ def sign_update_manifest_offline(manifest: Dict[str, Any], private_key_pem: str)
 
 
 def verify_update_manifest(manifest: Dict[str, Any], public_key_pem: Optional[str] = None) -> Tuple[bool, str]:
-    """Cryptographically verifies Ed25519 signature, rollback epoch, and expiration."""
+    """Cryptographically verifies Ed25519 signature, rollback epoch, expiration, and path safety."""
     required = ["version", "version_epoch", "expires_at", "files", "signature_b64"]
     for r in required:
         if r not in manifest:
@@ -111,14 +134,25 @@ def verify_update_manifest(manifest: Dict[str, Any], public_key_pem: Optional[st
     if now > float(manifest["expires_at"]):
         return False, f"UPDATE_EXPIRED: Package signature expired at {manifest['expires_at']} (current time {now})"
 
-    # 3. Path Traversal & Protected Files Safety Check
-    for path in manifest.get("files", {}).keys():
+    # 3. Path Traversal, Alternate Data Streams & Reserved Names Check
+    for path, sha in manifest.get("files", {}).items():
+        # Validate 64-char hex SHA-256
+        if not re.fullmatch(r'[0-9a-fA-F]{64}', str(sha)):
+            return False, f"MALFORMED_HASH: Invalid SHA-256 hex digest for '{path}'"
+
+        if ":" in path:
+            return False, f"SECURITY_BREACH: Alternate data stream or colon detected in path '{path}'"
+
         clean = os.path.normpath(path)
         if clean.startswith("..") or os.path.isabs(clean):
             return False, f"PATH_TRAVERSAL_DETECTED: Malicious path '{path}' in manifest"
+
         base = os.path.basename(clean).lower()
+        base_name_no_ext = os.path.splitext(base)[0]
         if base in PROTECTED_SYSTEM_FILES:
             return False, f"SECURITY_BREACH: Update manifest targets protected workstation state file: '{base}'"
+        if base_name_no_ext in WINDOWS_RESERVED_NAMES:
+            return False, f"RESERVED_DEVICE_NAME: Path contains Windows reserved device name '{base}'"
 
     # 4. Asymmetric Ed25519 Signature Verification
     pem = public_key_pem or PINNED_PUBLISHER_KEY_PEM
@@ -138,44 +172,59 @@ def verify_update_manifest(manifest: Dict[str, Any], public_key_pem: Optional[st
 def apply_verified_update(
     manifest: Dict[str, Any],
     payload_files: Dict[str, str],
+    approval: Dict[str, Any],
     target_dir: Optional[str] = None,
-    public_key_pem: Optional[str] = None,
-    human_auth: bool = False
+    public_key_pem: Optional[str] = None
 ) -> Tuple[bool, str, List[str]]:
-    """Applies update atomically through staging directory under verified human authorization.
+    """Applies update atomically through hardened staging and journaled swap under verified signed action approval.
+    Requires SignedActionApproval object bound to manifest SHA-256.
     Returns (success, message, list_of_applied_files).
     """
-    if not human_auth:
-        return False, "DENY: Applying updates requires verified human authorization (phone or console)", []
+    # 1. Cryptographically bound human approval verification (no bare booleans or raw bearer tokens)
+    if not approval or not isinstance(approval, dict):
+        return False, "DENY: Applying updates requires a verified cryptographic approval object", []
 
+    manifest_bytes = compute_manifest_canonical_bytes(manifest)
+    manifest_hash = hashlib.sha256(manifest_bytes).hexdigest()
+
+    app_ok, app_msg = phone_approval_portal.verify_action_approval(
+        approval, "homie_apply_update", manifest_hash
+    )
+    if not app_ok:
+        return False, f"DENY: Human action approval verification failed: {app_msg}", []
+
+    # 2. Strict Manifest vs Payload Equality Check
+    if set(payload_files.keys()) != set(manifest.get("files", {}).keys()):
+        return False, "PAYLOAD_MISMATCH: Provided payload files do not match signed manifest files", []
+
+    # 3. Verify Ed25519 Signature and Path Safety
     valid, msg = verify_update_manifest(manifest, public_key_pem=public_key_pem)
     if not valid:
         return False, f"Security Gate: Update rejected: {msg}", []
 
-    root = target_dir or BASE_DIR
+    root = os.path.realpath(target_dir or BASE_DIR)
     staging = os.path.join(root, ".homie_staging")
+    backup_dir = os.path.join(root, ".homie_backup")
     updated = []
+    journal = []
 
     try:
-        # 1. Clean staging directory
+        # 4. Clean and harden staging directory with owner-only DACL before writing
         if os.path.exists(staging):
             shutil.rmtree(staging)
         os.makedirs(staging, exist_ok=True)
+        homie_confinement.harden_path(staging)
 
-        # 2. Stage all payload files and verify SHA-256 in staging (preventing TOCTOU)
-        import hashlib
+        # 5. Stage all payload files and verify SHA-256 directly in staging (closing TOCTOU)
         for rel_path, content in payload_files.items():
-            expected_sha = manifest["files"].get(rel_path)
-            if not expected_sha:
-                return False, f"Security Gate: File '{rel_path}' not listed in signed manifest", []
-
+            expected_sha = manifest["files"][rel_path]
             staged_path = os.path.join(staging, rel_path)
             os.makedirs(os.path.dirname(staged_path), exist_ok=True)
             mode = "w" if isinstance(content, str) else "wb"
             with open(staged_path, mode, encoding="utf-8" if mode == "w" else None) as f:
                 f.write(content)
 
-            # Re-verify hash directly from written staging file
+            # Re-verify hash from disk in staging
             h = hashlib.sha256()
             with open(staged_path, "rb") as f:
                 while chunk := f.read(65536):
@@ -186,21 +235,39 @@ def apply_verified_update(
                 shutil.rmtree(staging)
                 return False, f"Security Gate: Staged hash mismatch for '{rel_path}': expected {expected_sha}, got {actual_sha}", []
 
-        # 3. Atomic swap from staging into target directory
+        # 6. Journaled swap with rollback
+        if os.path.exists(backup_dir):
+            shutil.rmtree(backup_dir)
+        os.makedirs(backup_dir, exist_ok=True)
+
         for rel_path in payload_files.keys():
-            src = os.path.join(staging, rel_path)
             dst = os.path.join(root, rel_path)
+            staged_src = os.path.join(staging, rel_path)
+            bak = os.path.join(backup_dir, rel_path)
+
+            # Commonpath containment verification
+            real_dst = os.path.realpath(dst)
+            if os.path.commonpath([root, real_dst]) != root:
+                raise ValueError(f"Path escape detected: {dst} resolves outside root {root}")
+
+            if os.path.exists(dst):
+                os.makedirs(os.path.dirname(bak), exist_ok=True)
+                shutil.copy2(dst, bak)
+                journal.append((rel_path, "existed"))
+            else:
+                journal.append((rel_path, "new"))
+
             os.makedirs(os.path.dirname(dst), exist_ok=True)
-            shutil.copy2(src, dst)
+            os.replace(staged_src, dst)
             updated.append(rel_path)
 
-        # 4. Bump monotonic version tracker
+        # 7. Bump monotonic version tracker
         _save_installed_version_epoch(int(manifest["version_epoch"]), manifest["version"])
 
-        # Record to audit ledger
+        # 8. Record to HMAC-SHA256 audit ledger
         try:
             agent_audit_ledger.record_agent_action(
-                "human_admin", "homie_apply_update", "WRITE_EXEC",
+                f"approval_{approval.get('device_id', 'phone')}", "homie_apply_update", "WRITE_EXEC",
                 {"version": manifest["version"], "epoch": manifest["version_epoch"], "files_count": len(updated)},
                 decision="ALLOW_VERIFIED_UPDATE"
             )
@@ -209,12 +276,31 @@ def apply_verified_update(
 
         logger.info("Successfully applied verified update v%s (%d files)", manifest["version"], len(updated))
         return True, f"Successfully applied update v{manifest['version']}", updated
+
     except Exception as e:
-        logger.error("Failed applying update: %s", e)
-        return False, f"Update application error: {e}", updated
+        logger.error("Failed applying update: %s. Initiating automatic rollback.", e)
+        # Rollback all modified files from backup
+        for rel_path, state in journal:
+            dst = os.path.join(root, rel_path)
+            bak = os.path.join(backup_dir, rel_path)
+            try:
+                if state == "existed" and os.path.exists(bak):
+                    os.replace(bak, dst)
+                elif state == "new" and os.path.exists(dst):
+                    os.remove(dst)
+            except Exception as rollback_err:
+                logger.critical("Rollback failure for %s: %s", rel_path, rollback_err)
+
+        return False, f"Update application aborted and rolled back: {e}", []
+
     finally:
         if os.path.exists(staging):
             try:
                 shutil.rmtree(staging)
+            except Exception:
+                pass
+        if os.path.exists(backup_dir):
+            try:
+                shutil.rmtree(backup_dir)
             except Exception:
                 pass

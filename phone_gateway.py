@@ -63,6 +63,15 @@ _SEEN_PHONE_NONCES = set()
 MAX_AUDIO_PAYLOAD_BYTES = 5 * 1024 * 1024   # 5 MB
 
 MAX_AUDIO_DURATION_SECS = 30.0             # 30 seconds
+_DEVICE_NONCES = {}  # device_token:nonce -> expiry_timestamp
+_SHARED_VOICE_ENGINE = None
+
+def get_shared_voice_engine():
+    global _SHARED_VOICE_ENGINE
+    if _SHARED_VOICE_ENGINE is None:
+        import voice
+        _SHARED_VOICE_ENGINE = voice.VoiceEngine()
+    return _SHARED_VOICE_ENGINE
 
 import secrets
 import qrcode
@@ -496,6 +505,9 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
         path = parsed.path
 
         length = int(self.headers.get("Content-Length", 0))
+        if length > MAX_AUDIO_PAYLOAD_BYTES:
+            self._send_response(413, "application/json", json.dumps({"error": f"PAYLOAD_TOO_LARGE: Content-Length {length} exceeds {MAX_AUDIO_PAYLOAD_BYTES} limit"}))
+            return
         raw_body = self.rfile.read(length)
         body = raw_body.decode("utf-8", errors="ignore")
 
@@ -660,11 +672,18 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
 
     def _handle_audio_call(self, raw_body):
         """Interactive Half-Duplex Push-to-Talk Voice Call: Processes raw or base64 audio upload from
-        paired phone microphone, verifies device token, timestamp (+/-30s replay window), and nonce,
-        enforces 5MB and 30s caps, transcribes via local Whisper, executes via ActionBroker (capped to
-        READ_ONLY / REVERSIBLE tiers), and returns synthesized audio reply."""
+        paired phone microphone.
+        Enforces fail-closed authentication first, mandatory timestamp (+/-30s replay window) and nonce,
+        bounded per-device nonces, pre-read and duration caps (<=5MB and <=30s), singlet confined STT worker,
+        supervisor-side reversible tier cap, and safe atomic temporary files."""
         token = self.headers.get("X-Homie-Token", "") or self.headers.get("Authorization", "").replace("Bearer ", "")
         conf = load_phone_config()
+
+        # 1. Authenticate FIRST (fail closed: no configurable disablement)
+        is_auth = is_device_token_valid(token)
+        if not is_auth:
+            self._send_response(401, "application/json", json.dumps({"error": "Unauthorized: Valid paired device token required"}))
+            return
 
         wav_bytes = b""
         data = {}
@@ -682,30 +701,36 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
         else:
             wav_bytes = raw_body if isinstance(raw_body, bytes) else raw_body.encode("latin1")
 
-        # 1. Replay Protection: Check timestamp window (+/- 30s) and single-use nonce
+        # 2. Mandatory Replay Protection: Timestamp window (+/- 30s) and single-use Nonce
         ts_val = self.headers.get("X-Homie-Timestamp") or data.get("timestamp") or data.get("ts")
         nonce_val = self.headers.get("X-Homie-Nonce") or data.get("nonce")
 
-        if ts_val:
-            try:
-                if abs(time.time() - float(ts_val)) > 30.0:
-                    self._send_response(401, "application/json", json.dumps({"error": "REPLAY_REJECTED: Timestamp is outside +/- 30s replay window"}))
-                    return
-            except (ValueError, TypeError):
-                self._send_response(400, "application/json", json.dumps({"error": "BAD_REQUEST: Malformed timestamp"}))
-                return
-
-        if nonce_val:
-            if str(nonce_val) in _SEEN_PHONE_NONCES:
-                self._send_response(401, "application/json", json.dumps({"error": "REPLAY_REJECTED: Nonce has already been consumed"}))
-                return
-            _SEEN_PHONE_NONCES.add(str(nonce_val))
-
-        # 2. Authentication check
-        is_auth = is_device_token_valid(token) or not conf.get("require_pin", True)
-        if not is_auth:
-            self._send_response(401, "application/json", json.dumps({"error": "Unauthorized: Device pairing required"}))
+        if not ts_val:
+            self._send_response(400, "application/json", json.dumps({"error": "BAD_REQUEST: Missing required timestamp"}))
             return
+        if not nonce_val:
+            self._send_response(400, "application/json", json.dumps({"error": "BAD_REQUEST: Missing required nonce"}))
+            return
+
+        try:
+            if abs(time.time() - float(ts_val)) > 30.0:
+                self._send_response(401, "application/json", json.dumps({"error": "REPLAY_REJECTED: Timestamp is outside +/- 30s replay window"}))
+                return
+        except (ValueError, TypeError):
+            self._send_response(400, "application/json", json.dumps({"error": "BAD_REQUEST: Malformed timestamp"}))
+            return
+
+        # Bounded per-device nonce store with TTL
+        now = time.time()
+        expired = [k for k, exp in _DEVICE_NONCES.items() if now > exp]
+        for k in expired:
+            del _DEVICE_NONCES[k]
+
+        nonce_key = f"{token}:{nonce_val}"
+        if nonce_key in _DEVICE_NONCES:
+            self._send_response(401, "application/json", json.dumps({"error": "REPLAY_REJECTED: Nonce has already been consumed for this device"}))
+            return
+        _DEVICE_NONCES[nonce_key] = now + 60.0
 
         if not wav_bytes:
             self._send_response(400, "application/json", json.dumps({"error": "Missing audio payload"}))
@@ -716,15 +741,21 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
             self._send_response(413, "application/json", json.dumps({"error": f"PAYLOAD_TOO_LARGE: Audio payload {len(wav_bytes)} bytes exceeds 5MB limit"}))
             return
 
-        # Transcribe audio using voice.VoiceEngine
+        # 4. Transcribe audio using singlet confined STT worker and enforce duration cap
         transcription = ""
         try:
-            import io, wave, numpy as np, voice
+            import io, wave, numpy as np
             with wave.open(io.BytesIO(wav_bytes), 'rb') as wf:
+                framerate = wf.getframerate()
+                n_frames = wf.getnframes()
+                duration = float(n_frames) / float(framerate) if framerate > 0 else 0
+                if duration > MAX_AUDIO_DURATION_SECS:
+                    self._send_response(400, "application/json", json.dumps({"error": f"AUDIO_DURATION_EXCEEDED: Spoken audio length {duration:.1f}s exceeds 30.0s cap"}))
+                    return
+
                 n_channels = wf.getnchannels()
                 sampwidth = wf.getsampwidth()
-                framerate = wf.getframerate()
-                frames = wf.readframes(wf.getnframes())
+                frames = wf.readframes(n_frames)
                 if sampwidth == 2:
                     arr = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
                 elif sampwidth == 1:
@@ -738,21 +769,26 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
                     indices = np.linspace(0, len(arr) - 1, target_len)
                     arr = np.interp(indices, np.arange(len(arr)), arr)
 
-            engine = voice.VoiceEngine()
+            engine = get_shared_voice_engine()
             transcription = engine.transcribe(arr)
         except Exception as e:
             logger.warning("Local Whisper transcription failed: %s", e)
 
-        if not transcription:
-            transcription = "status check"
+        # Fail closed on empty/unintelligible audio: NEVER execute unuttered fallback commands
+        clean_transcript = (transcription or "").strip()
+        if not clean_transcript:
+            self._send_response(400, "application/json", json.dumps({"error": "TRANSCRIPTION_FAILED: Spoken audio could not be recognized or was silent"}))
+            return
 
-        reply = execute_phone_instruction(transcription, session_id="audio_call")
+        # Execute phone instruction through ActionBroker with reversible tier cap
+        reply = execute_phone_instruction(clean_transcript, session_id="audio_call")
 
-        # Synthesize reply audio
+        # 5. Synthesize reply audio into secure randomized temporary file
         audio_b64 = None
         try:
-            import tempfile, voice, base64
-            tmp_wav = os.path.join(tempfile.gettempdir(), f"homie_audio_reply_{int(time.time()*1000)}.wav")
+            import tempfile, voice, base64, secrets
+            rand_token = secrets.token_hex(16)
+            tmp_wav = os.path.join(tempfile.gettempdir(), f"homie_reply_{rand_token}.wav")
             voice.synthesize_speech_to_wav(reply, tmp_wav)
             if os.path.exists(tmp_wav):
                 with open(tmp_wav, "rb") as wf:
@@ -765,7 +801,7 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
             logger.debug("TTS synthesis failed: %s", e)
 
         resp = {
-            "transcription": transcription,
+            "transcription": clean_transcript,
             "reply": reply
         }
         if audio_b64:

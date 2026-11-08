@@ -28,7 +28,11 @@ import action_broker
 import agent_audit_ledger
 import taint_tracker
 import phone_gateway
+import phone_approval_portal
+import re
 from policy_envelope import PolicyEnvelope
+
+MACRO_NAME_REGEX = re.compile(r"^[a-z0-9_]{1,40}$")
 
 logger = logging.getLogger("homie.skill_compiler")
 
@@ -46,31 +50,42 @@ FORBIDDEN_MACRO_NAMES = {
 
 def validate_parameter_schema(args: Any, depth: int = 0) -> Tuple[bool, str]:
     """Validates that step arguments adhere to strictly typed, bounded schemas."""
-    if depth >= 3:
-        return False, "Parameter recursion depth exceeded (max depth 2)"
-    if not isinstance(args, dict):
-        return False, f"Step arguments must be a dictionary, got {type(args).__name__}"
-    for k, v in args.items():
-        if not isinstance(k, str) or not k.strip():
-            return False, "Argument key must be a non-empty string"
-        if not isinstance(v, (str, int, float, bool, list, dict)):
-            return False, f"Unsupported argument value type '{type(v).__name__}' for key '{k}'"
-        if isinstance(v, (dict, list)):
-            if isinstance(v, dict):
+    if depth > 2:
+        return False, "Parameter recursion depth exceeded (max nesting depth 2)"
+    if isinstance(args, dict):
+        for k, v in args.items():
+            if not isinstance(k, str) or not k.strip() or len(k) > 64:
+                return False, "Invalid argument key: must be non-empty string <= 64 chars"
+            if not re.fullmatch(r"^[a-zA-Z0-9_\-\._]{1,64}$", k):
+                return False, f"Malformed parameter key '{k}': contains illegal characters"
+            if isinstance(v, str):
+                if len(v) > 512:
+                    return False, f"Parameter string value for '{k}' exceeds 512 character limit"
+            elif isinstance(v, (int, float, bool)):
+                pass
+            elif isinstance(v, (dict, list)):
                 ok, msg = validate_parameter_schema(v, depth + 1)
                 if not ok:
                     return False, msg
-            elif isinstance(v, list):
-                if len(v) > 50:
-                    return False, f"List argument '{k}' exceeds maximum 50 elements"
-                for item in v:
-                    if isinstance(item, (dict, list)):
-                        if isinstance(item, dict):
-                            ok, msg = validate_parameter_schema(item, depth + 1)
-                            if not ok:
-                                return False, msg
-                    elif not isinstance(item, (str, int, float, bool)):
-                        return False, f"Unsupported item type '{type(item).__name__}' in list '{k}'"
+            else:
+                return False, f"Unsupported argument value type '{type(v).__name__}' for key '{k}'"
+    elif isinstance(args, list):
+        if len(args) > 50:
+            return False, "List parameter exceeds maximum 50 elements"
+        for item in args:
+            if isinstance(item, str):
+                if len(item) > 512:
+                    return False, "List string element exceeds 512 character limit"
+            elif isinstance(item, (int, float, bool)):
+                pass
+            elif isinstance(item, (dict, list)):
+                ok, msg = validate_parameter_schema(item, depth + 1)
+                if not ok:
+                    return False, msg
+            else:
+                return False, f"Unsupported item type '{type(item).__name__}' in list parameter"
+    else:
+        return False, f"Step arguments must be a dictionary or list, got {type(args).__name__}"
     return True, "Valid"
 
 
@@ -90,6 +105,34 @@ def compute_macro_signature(macro_def: Dict[str, Any], secret: Optional[bytes] =
         f"{json.dumps(macro_def.get('steps', []), sort_keys=True)}"
     )
     return hmac.new(sec, canonical.encode('utf-8'), hashlib.sha256).hexdigest()
+
+
+def compute_macro_canonical_hash(
+    name: str,
+    steps: List[Dict[str, Any]],
+    declared_processes: Optional[List[str]] = None,
+    declared_action_types: Optional[List[str]] = None
+) -> str:
+    """Computes deterministic SHA-256 payload hash of macro steps for phone approval binding."""
+    clean_name = name.strip().lower().replace(" ", "_")
+    action_types = set(declared_action_types or [])
+    procs = set(declared_processes or [])
+    broker = action_broker.get_action_broker()
+    for s in steps:
+        tool = broker.normalize_tool_name(s.get("tool", ""))
+        action_types.add(tool)
+        target = s.get("arguments", {}).get("app_name") or s.get("arguments", {}).get("target")
+        if target:
+            procs.add(os.path.basename(str(target)).lower())
+    m_def = {
+        "name": clean_name,
+        "declared_processes": sorted(list(procs)),
+        "declared_action_types": sorted(list(action_types)),
+        "step_budget": len(steps),
+        "steps": steps
+    }
+    sig = compute_macro_signature(m_def)
+    return hashlib.sha256(sig.encode('utf-8')).hexdigest()
 
 
 class MacroRegistry:
@@ -123,19 +166,21 @@ class MacroRegistry:
         name: str,
         description: str,
         steps: List[Dict[str, Any]],
+        approval: Dict[str, Any],
         declared_processes: Optional[List[str]] = None,
-        declared_action_types: Optional[List[str]] = None,
-        human_auth: bool = False,
-        phone_auth_token: Optional[str] = None
+        declared_action_types: Optional[List[str]] = None
     ) -> Tuple[bool, str, Dict[str, Any]]:
-        """Compiles, signs, and stores a new macro definition under verified human authorization.
-        Enforces anti-taint-laundering, forbidden fast-command name protection, and typed parameter boundaries.
+        """Compiles, signs, and stores a new macro definition under verified signed action approval.
+        Enforces anti-taint-laundering, name allowlist regex, fast-command priority, and typed parameter boundaries.
         """
         clean_name = name.strip().lower().replace(" ", "_")
         if not clean_name:
             return False, "Macro name cannot be empty", {}
 
-        # 1. Anti-shadowing check: Prevent overriding fast commands
+        # 1. Macro name regex allowlist and anti-shadowing check
+        if not MACRO_NAME_REGEX.fullmatch(clean_name):
+            return False, f"DENY: Macro name '{clean_name}' violates name policy (must match ^[a-z0-9_]{{1,40}}$).", {}
+
         if clean_name in FORBIDDEN_MACRO_NAMES:
             return False, f"DENY: Macro name '{clean_name}' shadows built-in fast command. Macro rejected.", {}
 
@@ -143,15 +188,10 @@ class MacroRegistry:
         if taint_tracker.is_session_tainted("macro_compilation"):
             return False, "DENY: Taint Laundering Detected. Cannot compile workstation macros while session or workstation is tainted.", {}
 
-        # 3. Explicit human authorization gate (console or paired phone)
-        is_authorized = human_auth or (phone_auth_token and phone_gateway.is_device_token_valid(phone_auth_token))
-        if not is_authorized:
-            return False, "DENY: Compiling workstation macros strictly requires explicit human authorization or paired phone approval.", {}
-
         if not steps:
             return False, "Macro must contain at least one action step", {}
 
-        # 4. Typed parameter schema validation
+        # 3. Typed parameter schema validation
         for idx, s in enumerate(steps):
             if not isinstance(s, dict):
                 return False, f"Step {idx + 1} must be a dictionary", {}
@@ -183,8 +223,36 @@ class MacroRegistry:
             "created_at": time.time()
         }
 
+        # 4. Cryptographically bound human approval verification (no bare booleans or raw bearer tokens)
+        macro_sig = compute_macro_signature(macro_def)
+        macro_canonical_hash = hashlib.sha256(macro_sig.encode('utf-8')).hexdigest()
+
+        if not approval or not isinstance(approval, dict):
+            return False, "DENY: Compiling workstation macros strictly requires a signed approval object.", {}
+
+        app_ok, app_msg = phone_approval_portal.verify_action_approval(
+            approval, "homie_compile_macro", macro_canonical_hash
+        )
+        if not app_ok:
+            return False, f"DENY: Macro compilation approval verification failed: {app_msg}", {}
+
+        if not steps:
+            return False, "Macro must contain at least one action step", {}
+
+        # 4. Typed parameter schema validation
+        for idx, s in enumerate(steps):
+            if not isinstance(s, dict):
+                return False, f"Step {idx + 1} must be a dictionary", {}
+            tool = s.get("tool")
+            if not tool or not isinstance(tool, str):
+                return False, f"Step {idx + 1} missing required 'tool' string", {}
+            args = s.get("arguments", {})
+            ok, msg = validate_parameter_schema(args)
+            if not ok:
+                return False, f"Step {idx + 1} parameter schema violation: {msg}", {}
+
         # Sign macro
-        macro_def["signature"] = compute_macro_signature(macro_def)
+        macro_def["signature"] = macro_sig
         self._macros[clean_name] = macro_def
         self.save()
 

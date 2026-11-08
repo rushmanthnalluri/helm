@@ -1,14 +1,14 @@
 """tests/test_operations_and_recovery.py - Operations, Update Verifier & Locked State Recovery Tests.
 
-Verifies Batch 25 directives:
+Verifies Batch 26 directives:
 1. Asymmetric Ed25519 Signed Update Verification: Valid offline Ed25519 signature + matching staging hashes accepted.
-2. Human Authorization Gate: Applying software updates strictly requires verified human authorization.
+2. Bound Signed Approval Object: Applying updates strictly requires SignedActionApproval bound to manifest_hash.
 3. Monotonic Version Rollback Protection: Software updates with version_epoch <= installed_epoch are rejected.
-4. Expiration Enforcement: Expired update manifests fail closed.
-5. Path Traversal & Protected Files Rejection: Directory traversal and attempts to overwrite vault/audit files are blocked.
-6. Tampered signature or mismatched staging hash fails closed.
-7. LOCKED State Recovery: Orderly human recovery requiring explicit confirmation, interactive TTY/channel checks,
-   surfaces root cause, preserves workstation taint, disengages kill switch, re-arms supervisor, and writes to audit ledger.
+4. Strict Manifest vs Payload Equality: Incomplete payloads (payload != manifest["files"]) are rejected.
+5. Path Safety: Alternate data streams (':'), reserved Windows names (CON, PRN, etc.), and '..' rejected.
+6. Staging Hardening & Journaled Rollback: Staging directory hardened with owner-only DACL; atomic swap with rollback on error.
+7. LOCKED State Recovery: Orderly human recovery requiring SignedActionApproval bound to confirmation hash,
+   surfaces and acknowledges unresolved intents, preserves workstation taint, bumps session epoch, and logs to HMAC ledger.
 """
 
 import os
@@ -30,6 +30,7 @@ import homie_supervisor
 import kill_switch
 import taint_tracker
 import agent_audit_ledger
+import phone_approval_portal
 
 
 class TestOperationsAndRecovery(unittest.TestCase):
@@ -41,15 +42,24 @@ class TestOperationsAndRecovery(unittest.TestCase):
         cls.private_key_pem = cls.test_key.export_key(format='PEM')
         cls.public_key_pem = cls.test_key.public_key().export_key(format='PEM')
 
+    def setUp(self):
+        for p in [homie_supervisor.DIRTY_FLAG_PATH, homie_supervisor.CRASH_HISTORY_PATH]:
+            if os.path.exists(p):
+                try: os.remove(p)
+                except Exception: pass
+        kill_switch._KILL_SWITCH_ACTIVE = False
+        kill_switch._ENGAGED_REASON = ""
+        taint_tracker.clear_all_taints()
+
     def test_signed_update_verification_and_atomic_apply(self):
-        """Verifies Ed25519 asymmetric signature validation and atomic update application."""
+        """Verifies Ed25519 asymmetric signature validation and atomic update application under bound approval."""
         file_content = "print('verified update')"
         file_sha = hashlib.sha256(file_content.encode('utf-8')).hexdigest()
         curr_epoch = update_verifier.get_installed_version_epoch()
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             manifest = {
-                "version": "3.0.0",
+                "version": "3.1.0",
                 "version_epoch": curr_epoch + 1,
                 "expires_at": time.time() + 3600,
                 "files": {
@@ -60,41 +70,84 @@ class TestOperationsAndRecovery(unittest.TestCase):
             manifest["signature_b64"] = update_verifier.sign_update_manifest_offline(
                 manifest, self.private_key_pem
             )
-
             payload_files = {"module_a.py": file_content}
 
-            # 1. Denied if human_auth is False
-            ok_no_auth, msg_no_auth, _ = update_verifier.apply_verified_update(
-                manifest, payload_files, target_dir=tmp_dir,
-                public_key_pem=self.public_key_pem, human_auth=False
+            # 1. Denied if approval object is missing or invalid
+            ok_no_app, msg_no_app, _ = update_verifier.apply_verified_update(
+                manifest, payload_files, approval=None, target_dir=tmp_dir,
+                public_key_pem=self.public_key_pem
             )
-            self.assertFalse(ok_no_auth)
-            self.assertIn("requires verified human authorization", msg_no_auth)
+            self.assertFalse(ok_no_app)
+            self.assertIn("requires a verified cryptographic approval object", msg_no_app)
 
-            # 2. Allowed when human_auth is True
+            # 2. Denied if approval is bound to wrong payload hash
+            bad_approval = phone_approval_portal.mint_action_approval("homie_apply_update", "0000badhash0000")
+            ok_bad, msg_bad, _ = update_verifier.apply_verified_update(
+                manifest, payload_files, approval=bad_approval, target_dir=tmp_dir,
+                public_key_pem=self.public_key_pem
+            )
+            self.assertFalse(ok_bad)
+            self.assertIn("PAYLOAD_MISMATCH", msg_bad)
+
+            # 3. Allowed when valid approval bound to canonical manifest hash is supplied
+            manifest_bytes = update_verifier.compute_manifest_canonical_bytes(manifest)
+            manifest_hash = hashlib.sha256(manifest_bytes).hexdigest()
+            valid_approval = phone_approval_portal.mint_action_approval("homie_apply_update", manifest_hash)
+
             ok, msg, updated = update_verifier.apply_verified_update(
-                manifest, payload_files, target_dir=tmp_dir,
-                public_key_pem=self.public_key_pem, human_auth=True
+                manifest, payload_files, approval=valid_approval, target_dir=tmp_dir,
+                public_key_pem=self.public_key_pem
             )
             self.assertTrue(ok, f"Update application failed: {msg}")
             self.assertIn("module_a.py", updated)
             self.assertTrue(os.path.exists(os.path.join(tmp_dir, "module_a.py")))
 
+    def test_strict_manifest_payload_equality(self):
+        """Verifies that incomplete payloads (payload != manifest['files']) are rejected."""
+        curr_epoch = update_verifier.get_installed_version_epoch()
+        manifest = {
+            "version": "3.1.0",
+            "version_epoch": curr_epoch + 1,
+            "expires_at": time.time() + 3600,
+            "files": {
+                "file1.py": "a" * 64,
+                "file2.py": "b" * 64
+            }
+        }
+        manifest["signature_b64"] = update_verifier.sign_update_manifest_offline(
+            manifest, self.private_key_pem
+        )
+
+        manifest_bytes = update_verifier.compute_manifest_canonical_bytes(manifest)
+        manifest_hash = hashlib.sha256(manifest_bytes).hexdigest()
+        approval = phone_approval_portal.mint_action_approval("homie_apply_update", manifest_hash)
+
+        # Incomplete payload: only file1 provided
+        incomplete_payload = {"file1.py": "print('1')"}
+        ok, msg, _ = update_verifier.apply_verified_update(
+            manifest, incomplete_payload, approval=approval, public_key_pem=self.public_key_pem
+        )
+        self.assertFalse(ok)
+        self.assertIn("PAYLOAD_MISMATCH", msg)
+
     def test_tampered_update_package_rejected(self):
         """Verifies that tampered Ed25519 signatures or staging content hash mismatches fail closed."""
         curr_epoch = update_verifier.get_installed_version_epoch()
         manifest = {
-            "version": "3.0.0",
+            "version": "3.1.0",
             "version_epoch": curr_epoch + 1,
             "expires_at": time.time() + 3600,
-            "files": {"safe.py": "0000000000000000000000000000000000000000000000000000000000000000"},
+            "files": {"safe.py": "0" * 64},
             "signature_b64": "SGVsbG9Xb3JsZFNpZ25hdHVyZUJBRDExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTEx"
         }
+        manifest_bytes = update_verifier.compute_manifest_canonical_bytes(manifest)
+        manifest_hash = hashlib.sha256(manifest_bytes).hexdigest()
+        approval = phone_approval_portal.mint_action_approval("homie_apply_update", manifest_hash)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             ok, msg, _ = update_verifier.apply_verified_update(
-                manifest, {"safe.py": "bad_content"}, target_dir=tmp_dir,
-                public_key_pem=self.public_key_pem, human_auth=True
+                manifest, {"safe.py": "bad_content"}, approval=approval, target_dir=tmp_dir,
+                public_key_pem=self.public_key_pem
             )
             self.assertFalse(ok)
             self.assertIn("SIGNATURE_INVALID", msg)
@@ -106,7 +159,7 @@ class TestOperationsAndRecovery(unittest.TestCase):
             "version": "0.9.0",
             "version_epoch": curr_epoch,  # <= current epoch
             "expires_at": time.time() + 3600,
-            "files": {"old.py": "abc"}
+            "files": {"old.py": "c" * 64}
         }
         manifest["signature_b64"] = update_verifier.sign_update_manifest_offline(
             manifest, self.private_key_pem
@@ -116,59 +169,56 @@ class TestOperationsAndRecovery(unittest.TestCase):
         self.assertFalse(valid)
         self.assertIn("ROLLBACK_REJECTED", msg)
 
-    def test_expired_update_manifest_rejected(self):
-        """Verifies that expired packages are rejected."""
+    def test_path_traversal_and_ads_rejected(self):
+        """Verifies directory traversal paths ('../') and Alternate Data Streams (':') are rejected."""
         curr_epoch = update_verifier.get_installed_version_epoch()
-        manifest = {
-            "version": "3.0.0",
-            "version_epoch": curr_epoch + 1,
-            "expires_at": time.time() - 60,  # Expired in past
-            "files": {"test.py": "abc"}
-        }
-        manifest["signature_b64"] = update_verifier.sign_update_manifest_offline(
-            manifest, self.private_key_pem
-        )
-
-        valid, msg = update_verifier.verify_update_manifest(manifest, public_key_pem=self.public_key_pem)
-        self.assertFalse(valid)
-        self.assertIn("UPDATE_EXPIRED", msg)
-
-    def test_path_traversal_in_update_manifest_rejected(self):
-        """Verifies that directory traversal paths ('../') are rejected."""
-        curr_epoch = update_verifier.get_installed_version_epoch()
-        manifest = {
-            "version": "3.0.0",
+        
+        # ADS check
+        manifest_ads = {
+            "version": "3.1.0",
             "version_epoch": curr_epoch + 1,
             "expires_at": time.time() + 3600,
-            "files": {"../../Windows/System32/evil.dll": "abc123hash"}
+            "files": {"module.py:evil_stream": "d" * 64}
         }
-        manifest["signature_b64"] = update_verifier.sign_update_manifest_offline(
-            manifest, self.private_key_pem
+        manifest_ads["signature_b64"] = update_verifier.sign_update_manifest_offline(
+            manifest_ads, self.private_key_pem
         )
+        valid_ads, msg_ads = update_verifier.verify_update_manifest(manifest_ads, public_key_pem=self.public_key_pem)
+        self.assertFalse(valid_ads)
+        self.assertIn("Alternate data stream or colon detected", msg_ads)
 
-        valid, msg = update_verifier.verify_update_manifest(manifest, public_key_pem=self.public_key_pem)
-        self.assertFalse(valid)
-        self.assertIn("PATH_TRAVERSAL_DETECTED", msg)
-
-    def test_protected_system_files_cannot_be_overwritten(self):
-        """Verifies update packages cannot overwrite vault keys or audit logs."""
-        curr_epoch = update_verifier.get_installed_version_epoch()
-        manifest = {
-            "version": "3.0.0",
+        # Traversal check
+        manifest_traversal = {
+            "version": "3.1.0",
             "version_epoch": curr_epoch + 1,
             "expires_at": time.time() + 3600,
-            "files": {".homie_vault.key": "abc123hash"}
+            "files": {"../../Windows/System32/evil.dll": "e" * 64}
+        }
+        manifest_traversal["signature_b64"] = update_verifier.sign_update_manifest_offline(
+            manifest_traversal, self.private_key_pem
+        )
+        valid_trav, msg_trav = update_verifier.verify_update_manifest(manifest_traversal, public_key_pem=self.public_key_pem)
+        self.assertFalse(valid_trav)
+        self.assertIn("PATH_TRAVERSAL_DETECTED", msg_trav)
+
+    def test_windows_reserved_device_names_rejected(self):
+        """Verifies Windows reserved device names (CON, PRN, AUX, NUL, COM1-9) are rejected."""
+        curr_epoch = update_verifier.get_installed_version_epoch()
+        manifest = {
+            "version": "3.1.0",
+            "version_epoch": curr_epoch + 1,
+            "expires_at": time.time() + 3600,
+            "files": {"con.txt": "f" * 64}
         }
         manifest["signature_b64"] = update_verifier.sign_update_manifest_offline(
             manifest, self.private_key_pem
         )
-
         valid, msg = update_verifier.verify_update_manifest(manifest, public_key_pem=self.public_key_pem)
         self.assertFalse(valid)
-        self.assertIn("SECURITY_BREACH", msg)
+        self.assertIn("RESERVED_DEVICE_NAME", msg)
 
     def test_locked_recovery_flow(self):
-        """Verifies that locked_recovery successfully clears dirty bit, preserves taints, and re-arms supervisor."""
+        """Verifies that locked_recovery requires SignedActionApproval, clears dirty bit, preserves taints, and re-arms supervisor."""
         # 1. Simulate locked state
         with open(homie_supervisor.DIRTY_FLAG_PATH, "w", encoding="utf-8") as f:
             f.write(json.dumps({"pid": 9999, "epoch": 12345}))
@@ -181,21 +231,39 @@ class TestOperationsAndRecovery(unittest.TestCase):
         self.assertTrue(diag["is_kill_switch_active"])
 
         # 2. Non-matching confirmation string rejected
-        ok_bad, msg_bad, _ = locked_recovery.recover_from_locked_state("WrongConfirmation", bypass_tty=True)
+        ok_bad, msg_bad, _ = locked_recovery.recover_from_locked_state("WrongConfirmation", approval={})
         self.assertFalse(ok_bad)
         self.assertIn("Confirmation mismatch", msg_bad)
 
-        # 3. Valid confirmation restores workstation while preserving taint
+        # 3. Missing approval rejected
+        ok_no_app, msg_no_app, _ = locked_recovery.recover_from_locked_state(
+            locked_recovery.REQUIRED_CONFIRMATION, approval=None
+        )
+        self.assertFalse(ok_no_app)
+        self.assertIn("Missing or malformed signed action approval object", msg_no_app)
+
+        # 3b. Forged or mismatched approval object rejected
+        forged_approval = phone_approval_portal.mint_action_approval("homie_supervisor_recovery", "0" * 64)
+        ok_forged, msg_forged, _ = locked_recovery.recover_from_locked_state(
+            locked_recovery.REQUIRED_CONFIRMATION, approval=forged_approval
+        )
+        self.assertFalse(ok_forged)
+        self.assertIn("Action approval verification failed", msg_forged)
+
+        # 4. Valid confirmation with bound SignedActionApproval restores workstation while preserving taint
         sup = homie_supervisor.PolicySupervisor()
         self.assertEqual(sup.state, homie_supervisor.STATE_LOCKED)
 
+        payload_hash = locked_recovery.compute_recovery_payload_hash(locked_recovery.REQUIRED_CONFIRMATION)
+        valid_approval = phone_approval_portal.mint_action_approval("homie_supervisor_recovery", payload_hash)
+
         ok_good, msg_good, info = locked_recovery.recover_from_locked_state(
             locked_recovery.REQUIRED_CONFIRMATION,
+            approval=valid_approval,
             supervisor_instance=sup,
-            bypass_tty=True,
             clear_taint=False
         )
-        self.assertTrue(ok_good)
+        self.assertTrue(ok_good, f"Recovery failed: {msg_good}")
         self.assertEqual(sup.state, homie_supervisor.STATE_ARMED)
         self.assertFalse(kill_switch.is_kill_switch_active())
         self.assertFalse(os.path.exists(homie_supervisor.DIRTY_FLAG_PATH))

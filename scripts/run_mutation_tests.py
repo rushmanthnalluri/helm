@@ -91,13 +91,45 @@ MUTATIONS = [
         "target": "if not hmac.compare_digest(signature, expected_sig):",
         "replacement": "if False: # MUTATION BYPASS: signature check skipped",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch18_phone_portal.py::TestBatch18PhonePortal::test_tampered_signature_rejection"]
+    },
+    {
+        "id": "MUTATION_8_ED25519_UPDATE_SIGNATURE_BYPASS",
+        "name": "Bypass Ed25519 Signature Verification in update_verifier.py",
+        "file": os.path.join(BASE_DIR, "update_verifier.py"),
+        "target": "verifier.verify(canonical_data, sig_bytes)",
+        "replacement": "pass # MUTATION BYPASS: Ed25519 signature verification skipped",
+        "test_cmd": [sys.executable, "-m", "unittest", "tests.test_operations_and_recovery.TestOperationsAndRecovery.test_tampered_update_package_rejected"]
+    },
+    {
+        "id": "MUTATION_9_UPDATE_ROLLBACK_EPOCH_BYPASS",
+        "name": "Bypass Monotonic Version Epoch Rollback Check in update_verifier.py",
+        "file": os.path.join(BASE_DIR, "update_verifier.py"),
+        "target": "if new_epoch <= current_epoch:",
+        "replacement": "if False: # MUTATION BYPASS: rollback check disabled",
+        "test_cmd": [sys.executable, "-m", "unittest", "tests.test_operations_and_recovery.TestOperationsAndRecovery.test_rollback_epoch_rejection"]
+    },
+    {
+        "id": "MUTATION_10_MACRO_TAINT_GATE_BYPASS",
+        "name": "Bypass Macro Anti-Taint Laundering Check in skill_compiler.py",
+        "file": os.path.join(BASE_DIR, "skill_compiler.py"),
+        "target": 'if taint_tracker.is_session_tainted("macro_compilation"):',
+        "replacement": "if False: # MUTATION BYPASS: taint laundering check disabled",
+        "test_cmd": [sys.executable, "-m", "unittest", "tests.test_skill_compiler_and_recovery.TestSkillCompilerAndRecovery.test_macro_compilation_denied_when_tainted"]
+    },
+    {
+        "id": "MUTATION_11_LOCKED_RECOVERY_APPROVAL_BYPASS",
+        "name": "Bypass Signed Approval Verification in locked_recovery.py",
+        "file": os.path.join(BASE_DIR, "locked_recovery.py"),
+        "target": "if not app_ok:",
+        "replacement": "if False: # MUTATION BYPASS: approval verification disabled",
+        "test_cmd": [sys.executable, "-m", "unittest", "tests.test_operations_and_recovery.TestOperationsAndRecovery.test_locked_recovery_flow"]
     }
 ]
 
 
 def run_mutation_tests() -> bool:
     print("=" * 75)
-    print("=== BATCH 21 AUTOMATED CI MUTATION TEST HARNESS ===")
+    print("=== BATCH 26 EXPANDED AUTOMATED CI MUTATION TEST HARNESS ===")
     print("=" * 75)
     print(f"Total Security Mutations to Evaluate: {len(MUTATIONS)}\n")
 

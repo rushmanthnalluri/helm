@@ -42,6 +42,7 @@ DEVICE_REGISTRY_PATH = os.path.join(BASE_DIR, ".homie_device_keys.json")
 _ACTIVE_CHALLENGES = {}  # step_up_id -> challenge_metadata
 _LOCAL_ENROLLMENT_SESSIONS = {}  # session_id -> {pairing_code, expiry, failed_attempts}
 _FAILED_ATTEMPTS_LOCKOUT = {}  # session_id -> lockout_timestamp
+_CONSUMED_APPROVAL_NONCES = set()  # Single-use nonce tracker for action approval objects
 MAX_FAILED_ENROLLMENT_ATTEMPTS = 3
 _SUPERVISOR_CHALLENGE_SEQ = 0
 
@@ -310,3 +311,83 @@ def clear_active_challenges():
     """Purges all active pending challenges and enrollment sessions."""
     _ACTIVE_CHALLENGES.clear()
     _LOCAL_ENROLLMENT_SESSIONS.clear()
+
+
+def mint_action_approval(
+    action_name: str,
+    payload_hash: str,
+    device_id: str = "primary_phone",
+    device_key: Optional[str] = None,
+    ttl_seconds: float = 120.0
+) -> Dict[str, Any]:
+    """Generates and cryptographically signs an action approval object bound to action_name and payload_hash."""
+    registry = _load_device_registry()
+    key = device_key or (registry.get(device_id, {}).get("public_key") if registry else None) or get_or_create_device_public_key(device_id)
+    nonce = secrets.token_hex(16)
+    expiry = time.time() + ttl_seconds
+    taint_epoch = taint_tracker.get_taint_epoch()
+
+    challenge_raw = f"ACTION_APPROVAL_V1|{device_id}|{action_name}|{payload_hash.lower()}|{nonce}|{int(expiry)}|{taint_epoch}"
+    challenge_hash = hashlib.sha256(challenge_raw.encode('utf-8')).hexdigest()
+    signature = compute_device_signature(challenge_hash, key)
+
+    return {
+        "version": 1,
+        "device_id": device_id,
+        "action_name": action_name,
+        "payload_hash": payload_hash.lower(),
+        "nonce": nonce,
+        "expiry": expiry,
+        "taint_epoch": taint_epoch,
+        "signature": signature
+    }
+
+
+def verify_action_approval(
+    approval: Dict[str, Any],
+    expected_action: str,
+    expected_payload_hash: str,
+    device_key_override: Optional[str] = None
+) -> Tuple[bool, str]:
+    """Verifies that the signed approval object is cryptographically valid, not expired,
+    bound to the exact expected action and payload_hash, and consumes the nonce single-use."""
+    if not isinstance(approval, dict):
+        return False, "Malformed approval: must be an approval object dictionary"
+
+    for req in ["device_id", "action_name", "payload_hash", "nonce", "expiry", "taint_epoch", "signature"]:
+        if req not in approval:
+            return False, f"Malformed approval: missing required field '{req}'"
+
+    if approval["action_name"] != expected_action:
+        return False, f"ACTION_MISMATCH: Approval signed for '{approval['action_name']}', expected '{expected_action}'"
+
+    if str(approval["payload_hash"]).lower() != str(expected_payload_hash).lower():
+        return False, f"PAYLOAD_MISMATCH: Approval signed for payload {approval['payload_hash']}, expected {expected_payload_hash}"
+
+    now = time.time()
+    if now > float(approval["expiry"]):
+        return False, f"APPROVAL_EXPIRED: Approval expired at {approval['expiry']} (current time {now})"
+
+    # Single-use nonce check
+    nonce = approval["nonce"]
+    if nonce in _CONSUMED_APPROVAL_NONCES:
+        return False, "REPLAY_REJECTED: Approval nonce has already been consumed"
+
+    device_id = approval["device_id"]
+    registry = _load_device_registry()
+    dev_entry = registry.get(device_id)
+    if dev_entry and dev_entry.get("revoked", False):
+        return False, f"DEVICE_REVOKED: Device '{device_id}' has been revoked"
+
+    key = device_key_override or (dev_entry["public_key"] if dev_entry else get_or_create_device_public_key(device_id))
+
+    challenge_raw = f"ACTION_APPROVAL_V1|{device_id}|{approval['action_name']}|{approval['payload_hash'].lower()}|{nonce}|{int(approval['expiry'])}|{approval['taint_epoch']}"
+    challenge_hash = hashlib.sha256(challenge_raw.encode('utf-8')).hexdigest()
+    expected_sig = compute_device_signature(challenge_hash, key)
+
+    if not hmac.compare_digest(str(approval["signature"]), str(expected_sig)):
+        return False, "SIGNATURE_INVALID: Approval cryptographic signature failed verification"
+
+    # Consume nonce single-use
+    _CONSUMED_APPROVAL_NONCES.add(nonce)
+    return True, "Approval signature and action binding verified"

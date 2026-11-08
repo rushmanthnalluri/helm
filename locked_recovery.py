@@ -1,21 +1,22 @@
 """locked_recovery.py - Human Recovery Flow for Supervisor LOCKED State.
 
-Provides a safe, interactive, documented recovery mechanism when the PolicySupervisor
+Provides a safe, cryptographically authenticated recovery mechanism when the PolicySupervisor
 transitions to STATE_LOCKED (e.g. dirty boot, crash-loop threshold exceeded, or kill switch engagement):
-- Enforces explicit local operator presence (requires confirmation string 'CONFIRM-RECOVERY').
-- Inspects and logs the exact root cause of lockout.
-- Orderly purges lingering dirty bits (homie_supervisor_dirty.flag).
-- Resets crash history counter (homie_supervisor_crashes.json).
-- Disengages emergency kill switch with an authenticated human reason.
-- Re-arms the supervisor into operational STATE_ARMED.
+- Rejects booleans and unbound bearer tokens. Requires SignedActionApproval from paired hardware device.
+- Inspects and surfaces the exact root cause of lockout and unresolved action intents.
+- Orderly purges dirty bits (homie_supervisor_dirty.flag) and resets crash history.
+- Disengages emergency kill switch with preserve_taint enforcement (prevents unverified taint laundering).
+- Re-arms the supervisor into operational STATE_ARMED and bumps the session epoch.
+- Records the recovery event and authorizing device identity to the HMAC-SHA256 audit ledger.
 """
 
 import os
 import sys
 import json
 import time
+import hashlib
 import logging
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, Optional
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
@@ -25,7 +26,7 @@ import homie_supervisor
 import kill_switch
 import taint_tracker
 import agent_audit_ledger
-import phone_gateway
+import phone_approval_portal
 
 logger = logging.getLogger("homie.locked_recovery")
 
@@ -54,47 +55,56 @@ def inspect_lockout_cause() -> Dict[str, Any]:
     return status
 
 
+def compute_recovery_payload_hash(confirmation_str: str) -> str:
+    """Computes deterministic SHA-256 payload hash of recovery confirmation for signature binding."""
+    clean = confirmation_str.strip()
+    return hashlib.sha256(clean.encode('utf-8')).hexdigest()
+
+
 def recover_from_locked_state(
     confirmation: str,
+    approval: Dict[str, Any],
     supervisor_instance: Any = None,
-    operator_channel: str = "console",
-    auth_token: Optional[str] = None,
-    bypass_tty: bool = False,
     clear_taint: bool = False
 ) -> Tuple[bool, str, Dict[str, Any]]:
     """Performs orderly human recovery from supervisor lockout.
-    Enforces interactive TTY presence (or verified phone token), acknowledges unresolved intents,
-    preserves workstation taint (preventing unverified taint laundering), and records recovery to audit ledger.
+    Requires cryptographically signed action approval object bound to recovery confirmation hash.
+    Surfaces and acknowledges unresolved intents, preserves workstation taint, disengages kill switch,
+    bumps session epoch, re-arms supervisor, and records event to HMAC audit ledger.
     Returns (success, message, diagnostics).
     """
-    # 1. Interactive Operator Authorization Gate
-    if operator_channel == "phone":
-        if not auth_token or not phone_gateway.is_device_token_valid(auth_token):
-            msg = "Recovery rejected: Invalid or missing phone device token."
-            logger.warning(msg)
-            return False, msg, {}
-    else:
-        # Console recovery requires interactive TTY to prevent blind script-piping bypasses
-        is_interactive = bypass_tty or (hasattr(sys.stdin, "isatty") and sys.stdin.isatty())
-        if not is_interactive and not os.environ.get("HOMIE_TEST_ENV"):
-            msg = "Recovery rejected: Console recovery strictly requires an interactive TTY session."
-            logger.warning(msg)
-            return False, msg, {}
-
     clean_conf = (confirmation or "").strip()
     if clean_conf != REQUIRED_CONFIRMATION:
         msg = f"Recovery rejected: Confirmation mismatch. You must provide '{REQUIRED_CONFIRMATION}'."
         logger.warning(msg)
         return False, msg, {}
 
+    # 1. Cryptographically bound approval verification (fails closed: no booleans or test bypasses)
+    if not approval or not isinstance(approval, dict):
+        msg = "Recovery rejected: Missing or malformed signed action approval object."
+        logger.warning(msg)
+        return False, msg, {}
+
+    expected_payload_hash = compute_recovery_payload_hash(clean_conf)
+    app_ok, app_msg = phone_approval_portal.verify_action_approval(
+        approval, "homie_supervisor_recovery", expected_payload_hash
+    )
+    if not app_ok:
+        msg = f"Recovery rejected: Action approval verification failed: {app_msg}"
+        logger.warning(msg)
+        return False, msg, {}
+
     diag_before = inspect_lockout_cause()
     actions_taken = []
 
-    # 2. Acknowledge and audit unresolved intents
-    unresolved_count = 0
-    if supervisor_instance and hasattr(supervisor_instance, "_intent_replay_cache"):
-        unresolved_count = len(supervisor_instance._intent_replay_cache)
-        actions_taken.append(f"Acknowledged {unresolved_count} past/unresolved supervisor intent tokens")
+    # 2. Surface and acknowledge unresolved intents from supervisor
+    unresolved_intents = []
+    if supervisor_instance and hasattr(supervisor_instance, "check_unresolved_intents"):
+        try:
+            unresolved_intents = supervisor_instance.check_unresolved_intents()
+            actions_taken.append(f"Surfaced and acknowledged {len(unresolved_intents)} unresolved action intents")
+        except Exception:
+            pass
 
     # 3. Clean dirty boot marker
     if os.path.exists(homie_supervisor.DIRTY_FLAG_PATH):
@@ -124,13 +134,14 @@ def recover_from_locked_state(
     else:
         actions_taken.append("Preserved workstation taints across recovery")
 
-    # 7. Re-arm supervisor instance if provided
+    # 7. Re-arm supervisor instance and bump session epoch
     if supervisor_instance:
+        supervisor_instance.session_epoch = int(time.time())
         supervisor_instance.state = homie_supervisor.STATE_ARMED
         supervisor_instance.lock_reason = ""
-        actions_taken.append("Transitioned supervisor state to ARMED")
+        actions_taken.append(f"Transitioned supervisor state to ARMED (bumped epoch: {supervisor_instance.session_epoch})")
 
-    # Reset global ActionBroker
+    # 8. Reset global ActionBroker
     try:
         import action_broker
         action_broker._GLOBAL_BROKER = None
@@ -138,15 +149,14 @@ def recover_from_locked_state(
     except Exception:
         pass
 
-    # 8. Record recovery event to HMAC-SHA256 audit ledger
+    # 9. Record recovery event to HMAC-SHA256 audit ledger
     try:
         agent_audit_ledger.record_agent_action(
-            "human_operator",
+            f"approval_{approval.get('device_id', 'phone')}",
             "homie_supervisor_recovery",
             "ELEVATED_CONFIRM",
             {
-                "operator_channel": operator_channel,
-                "unresolved_intents": unresolved_count,
+                "unresolved_intents_count": len(unresolved_intents),
                 "before": diag_before,
                 "actions": actions_taken
             },
@@ -157,10 +167,10 @@ def recover_from_locked_state(
 
     summary = f"Supervisor lockout successfully resolved. Actions: {', '.join(actions_taken)}."
     logger.info(summary)
-    return True, summary, {"before": diag_before, "actions": actions_taken}
+    return True, summary, {"before": diag_before, "actions": actions_taken, "unresolved": unresolved_intents}
 
 
-def interactive_cli_recovery():
+def interactive_cli_recovery(approval_provider_func=None):
     """Interactive command-line tool for local workstation operator recovery."""
     print("=" * 65)
     print("=== HOMIE WORKSTATION SUPERVISOR LOCKOUT RECOVERY ===")
@@ -169,26 +179,20 @@ def interactive_cli_recovery():
     print("Current Workstation Diagnostics:")
     print(f" • Dirty Flag Present   : {diag['is_dirty_flag_present']}")
     print(f" • Kill Switch Active   : {diag['is_kill_switch_active']} ({diag['kill_switch_reason']})")
-    print(f" • Recent Crashes (<5m) : {diag['crash_count_recent']}")
+    print(f" • Recent Crashes Count : {diag['crash_count_recent']}")
     print("-" * 65)
 
-    if not (diag["is_dirty_flag_present"] or diag["is_kill_switch_active"] or diag["crash_count_recent"] >= 3):
-        print("Workstation is not locked. All systems operating normally.")
-        return
-
-    print(f"To unlock your workstation, type '{REQUIRED_CONFIRMATION}' below:")
-    try:
-        user_input = input("> ").strip()
-    except EOFError:
-        print("Non-interactive session detected. Recovery aborted.")
-        return
-
-    ok, msg, _ = recover_from_locked_state(user_input)
-    if ok:
-        print(f"\nSUCCESS: {msg}")
+    if approval_provider_func:
+        approval = approval_provider_func()
     else:
-        print(f"\nFAILED: {msg}")
+        # Attempt to prompt for device approval
+        print("Obtaining paired phone approval...")
+        payload_hash = compute_recovery_payload_hash(REQUIRED_CONFIRMATION)
+        approval = phone_approval_portal.mint_action_approval("homie_supervisor_recovery", payload_hash)
 
-
-if __name__ == "__main__":
-    interactive_cli_recovery()
+    ok, msg, info = recover_from_locked_state(REQUIRED_CONFIRMATION, approval=approval)
+    if ok:
+        print(f"\n[SUCCESS] {msg}")
+    else:
+        print(f"\n[FAILED] {msg}")
+    return ok

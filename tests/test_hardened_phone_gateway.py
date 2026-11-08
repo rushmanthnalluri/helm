@@ -10,6 +10,7 @@ Verifies:
 
 import os
 import sys
+import time
 import unittest
 import json
 import base64
@@ -104,7 +105,12 @@ class TestHardenedPhoneGateway(unittest.TestCase):
             # Mock request handler
             class MockHandler(phone_gateway.PhoneGatewayHandler):
                 def __init__(self):
-                    self.headers = {"Content-Type": "application/json", "Authorization": "Bearer test"}
+                    self.headers = {
+                        "Content-Type": "application/json",
+                        "Authorization": "Bearer test_device_token",
+                        "X-Homie-Timestamp": str(time.time()),
+                        "X-Homie-Nonce": f"nonce_call_{time.time()}_{os.getpid()}"
+                    }
                     self.sent_code = None
                     self.sent_body = None
 
@@ -144,12 +150,17 @@ class TestHardenedPhoneGateway(unittest.TestCase):
                 self.sent_body = body
 
         import unittest.mock as mock
-        with mock.patch("phone_gateway.is_device_token_valid", return_value=True):
+        with mock.patch("phone_gateway.is_device_token_valid", return_value=True), \
+             mock.patch.object(phone_gateway, "get_shared_voice_engine") as mock_engine, \
+             mock.patch("phone_gateway.execute_phone_instruction", return_value="System ready"):
+            mock_engine.return_value.transcribe.return_value = "hello pc"
+
             # 1. Expired timestamp rejected
             h_expired = MockHandler({
                 "Content-Type": "application/json",
                 "Authorization": "Bearer test",
-                "X-Homie-Timestamp": str(time.time() - 100)
+                "X-Homie-Timestamp": str(time.time() - 100),
+                "X-Homie-Nonce": "nonce_expired_1"
             })
             h_expired._handle_audio_call(json.dumps({"audio_b64": "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA="}))
             self.assertEqual(h_expired.sent_code, 401)
@@ -177,11 +188,50 @@ class TestHardenedPhoneGateway(unittest.TestCase):
             self.assertEqual(h_replay.sent_code, 401)
             self.assertIn("already been consumed", h_replay.sent_body)
 
+    def test_missing_timestamp_or_nonce_rejected(self):
+        """Verifies requests missing mandatory timestamp or nonce are rejected with 400 Bad Request."""
+        class MockHandler(phone_gateway.PhoneGatewayHandler):
+            def __init__(self, headers=None):
+                self.headers = headers or {"Content-Type": "application/json", "Authorization": "Bearer test"}
+                self.sent_code = None
+                self.sent_body = None
+
+            def _send_response(self, code, content_type, body):
+                self.sent_code = code
+                self.sent_body = body
+
+        import unittest.mock as mock
+        with mock.patch("phone_gateway.is_device_token_valid", return_value=True):
+            # Missing nonce
+            h_no_nonce = MockHandler({
+                "Content-Type": "application/json",
+                "Authorization": "Bearer test",
+                "X-Homie-Timestamp": str(time.time())
+            })
+            h_no_nonce._handle_audio_call(json.dumps({"audio_b64": "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA="}))
+            self.assertEqual(h_no_nonce.sent_code, 400)
+            self.assertIn("Missing required nonce", h_no_nonce.sent_body)
+
+            # Missing timestamp
+            h_no_ts = MockHandler({
+                "Content-Type": "application/json",
+                "Authorization": "Bearer test",
+                "X-Homie-Nonce": "nonce_123"
+            })
+            h_no_ts._handle_audio_call(json.dumps({"audio_b64": "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA="}))
+            self.assertEqual(h_no_ts.sent_code, 400)
+            self.assertIn("Missing required timestamp", h_no_ts.sent_body)
+
     def test_audio_call_payload_size_limit(self):
         """Verifies oversized audio payloads (>5MB) are rejected with HTTP 413."""
         class MockHandler(phone_gateway.PhoneGatewayHandler):
             def __init__(self):
-                self.headers = {"Content-Type": "application/octet-stream", "Authorization": "Bearer test"}
+                self.headers = {
+                    "Content-Type": "application/octet-stream",
+                    "Authorization": "Bearer test",
+                    "X-Homie-Timestamp": str(time.time()),
+                    "X-Homie-Nonce": "nonce_size_check"
+                }
                 self.sent_code = None
                 self.sent_body = None
 
@@ -211,6 +261,63 @@ class TestHardenedPhoneGateway(unittest.TestCase):
         )
         self.assertFalse(ok)
         self.assertIn("Phone channel is capped to READ_ONLY and REVERSIBLE tiers", msg)
+
+    def test_unauthenticated_audio_call_fails_closed(self):
+        """Verifies unauthenticated calls fail closed (HTTP 401) without burning nonces."""
+        class MockHandler(phone_gateway.PhoneGatewayHandler):
+            def __init__(self):
+                self.headers = {
+                    "Content-Type": "application/json",
+                    "Authorization": "Bearer invalid_unpaired_token",
+                    "X-Homie-Timestamp": str(time.time()),
+                    "X-Homie-Nonce": "unauth_nonce_1"
+                }
+                self.sent_code = None
+                self.sent_body = None
+
+            def _send_response(self, code, content_type, body):
+                self.sent_code = code
+                self.sent_body = body
+
+        handler = MockHandler()
+        import unittest.mock as mock
+        with mock.patch("phone_gateway.is_device_token_valid", return_value=False):
+            handler._handle_audio_call(json.dumps({"audio_b64": "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA="}))
+
+        self.assertEqual(handler.sent_code, 401)
+        self.assertIn("Unauthorized", handler.sent_body)
+        # Verify nonce was NOT consumed/burned
+        self.assertNotIn("invalid_unpaired_token:unauth_nonce_1", phone_gateway._DEVICE_NONCES)
+
+    def test_empty_transcription_rejected_no_fallback(self):
+        """Verifies failed or silent audio returns 400 and NEVER executes fallback status checks."""
+        class MockHandler(phone_gateway.PhoneGatewayHandler):
+            def __init__(self):
+                self.headers = {
+                    "Content-Type": "application/json",
+                    "Authorization": "Bearer test_token",
+                    "X-Homie-Timestamp": str(time.time()),
+                    "X-Homie-Nonce": f"nonce_silent_{time.time()}"
+                }
+                self.sent_code = None
+                self.sent_body = None
+
+            def _send_response(self, code, content_type, body):
+                self.sent_code = code
+                self.sent_body = body
+
+        handler = MockHandler()
+        import unittest.mock as mock
+        with mock.patch("phone_gateway.is_device_token_valid", return_value=True), \
+             mock.patch.object(phone_gateway, "get_shared_voice_engine") as mock_engine, \
+             mock.patch("phone_gateway.execute_phone_instruction") as mock_exec:
+            mock_engine.return_value.transcribe.return_value = ""  # Silent audio
+            handler._handle_audio_call(json.dumps({"audio_b64": "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA="}))
+
+            self.assertEqual(handler.sent_code, 400)
+            self.assertIn("TRANSCRIPTION_FAILED", handler.sent_body)
+            # Verify execute_phone_instruction was NEVER invoked
+            mock_exec.assert_not_called()
 
 
 

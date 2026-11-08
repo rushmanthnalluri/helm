@@ -1,11 +1,14 @@
 """tests/test_skill_compiler_and_recovery.py - Macro Compiler & Vault Recovery Tests.
 
-Verifies:
+Verifies Batch 26 directives:
 1. Macro Skill Compiler compiles, signs with HMAC-SHA256, stores, and executes multi-step workflows.
-2. Tampered macro definitions fail signature verification and are rejected.
-3. Cryptographic Key Backup and Disaster Recovery: AES-256-GCM + PBKDF2 export and restore.
-4. Tampered backup or wrong passphrase causes immediate hard denial.
-5. Privacy log redactor masks PII, API keys, INTENT tokens, and step-up IDs.
+2. Macro registration requires SignedActionApproval bound to macro_canonical_hash (rejects booleans and bearer tokens).
+3. Anti-Taint Laundering: Macros cannot be registered while session or workstation is tainted.
+4. Macro Name Policy: Regex allowlist (^[a-z0-9_]{1,40}$) and fast-command shadow prevention.
+5. Typed Parameter Schema Validation: Parameter recursion depth limits and string length bounds.
+6. Tampered macro definitions fail signature verification and are rejected.
+7. Cryptographic Key Backup and Disaster Recovery: AES-256-GCM + PBKDF2 export and restore.
+8. Privacy log redactor masks PII, API keys, INTENT tokens, and step-up IDs.
 """
 
 import os
@@ -22,6 +25,7 @@ import skill_compiler
 import key_recovery
 import log_redactor
 import crypto_vault
+import phone_approval_portal
 
 
 class TestSkillCompilerAndRecovery(unittest.TestCase):
@@ -55,20 +59,25 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
         taint_tracker.clear_all_taints()
         action_broker._GLOBAL_BROKER = None
 
+    def _mint_macro_approval(self, name, steps):
+        m_hash = skill_compiler.compute_macro_canonical_hash(name, steps)
+        return phone_approval_portal.mint_action_approval("homie_compile_macro", m_hash)
+
     def test_macro_compilation_signing_and_execution(self):
-        """Verifies macro compilation, cryptographic signing, and multi-step execution."""
+        """Verifies macro compilation, cryptographic signing, and multi-step execution under bound approval."""
         steps = [
             {"tool": "homie_place_window", "arguments": {"app_name": "notepad", "position": "left"}},
             {"tool": "homie_control_media", "arguments": {"action": "play_pause"}}
         ]
+        approval = self._mint_macro_approval("dev_morning_setup", steps)
 
         ok, msg, macro = self.registry.register_macro(
             name="dev_morning_setup",
             description="Places notepad on the left and toggles music",
             steps=steps,
-            human_auth=True
+            approval=approval
         )
-        self.assertTrue(ok)
+        self.assertTrue(ok, f"Registration failed: {msg}")
         self.assertEqual(macro["step_budget"], 2)
         self.assertTrue(bool(macro.get("signature")), "Macro must have cryptographic HMAC signature")
 
@@ -85,7 +94,8 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
     def test_tampered_macro_signature_rejected(self):
         """Verifies that tampering with a macro step causes signature validation failure."""
         steps = [{"tool": "homie_control_media", "arguments": {"action": "volup"}}]
-        ok, msg, macro = self.registry.register_macro("custom_volume_step", "Volume step", steps, human_auth=True)
+        approval = self._mint_macro_approval("custom_volume_step", steps)
+        ok, msg, macro = self.registry.register_macro("custom_volume_step", "Volume step", steps, approval=approval)
         self.assertTrue(ok)
 
         # Tamper with the macro in registry (insert malicious third-party step)
@@ -145,13 +155,12 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
         self.assertIn("***REDACTED_INTENT_TOKEN***", redacted)
         self.assertIn("***REDACTED_EMAIL***", redacted)
 
-
-    def test_macro_compilation_denied_without_human_auth(self):
-        """Verifies macro registration is rejected when human authorization is absent."""
+    def test_macro_compilation_denied_without_approval_object(self):
+        """Verifies macro registration is rejected when signed approval object is absent."""
         steps = [{"tool": "homie_control_media", "arguments": {"action": "volup"}}]
-        ok, msg, _ = self.registry.register_macro("safe_macro", "Safe macro", steps, human_auth=False)
+        ok, msg, _ = self.registry.register_macro("safe_macro", "Safe macro", steps, approval=None)
         self.assertFalse(ok)
-        self.assertIn("strictly requires explicit human authorization", msg)
+        self.assertIn("strictly requires a signed approval object", msg)
 
     def test_macro_compilation_denied_when_tainted(self):
         """Verifies anti-taint laundering: Macros cannot be registered from a tainted session."""
@@ -159,7 +168,8 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
         taint_tracker.set_workstation_tainted(True)
         try:
             steps = [{"tool": "homie_control_media", "arguments": {"action": "volup"}}]
-            ok, msg, _ = self.registry.register_macro("tainted_macro", "Tainted macro", steps, human_auth=True)
+            approval = self._mint_macro_approval("tainted_macro", steps)
+            ok, msg, _ = self.registry.register_macro("tainted_macro", "Tainted macro", steps, approval=approval)
             self.assertFalse(ok)
             self.assertIn("Taint Laundering Detected", msg)
         finally:
@@ -169,16 +179,26 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
         """Verifies macros cannot shadow core deterministic fast commands (mute, pause, pc_status)."""
         steps = [{"tool": "homie_control_media", "arguments": {"action": "volup"}}]
         for forbidden in ["mute", "pause", "pc_status", "volume_up", "clipboard"]:
-            ok, msg, _ = self.registry.register_macro(forbidden, "Shadowing macro", steps, human_auth=True)
+            approval = self._mint_macro_approval(forbidden, steps)
+            ok, msg, _ = self.registry.register_macro(forbidden, "Shadowing macro", steps, approval=approval)
             self.assertFalse(ok, f"Expected forbidden name '{forbidden}' to be rejected")
             self.assertIn("shadows built-in fast command", msg)
 
+    def test_macro_name_regex_allowlist(self):
+        """Verifies macro names must match allowlist regex ^[a-z0-9_]{1,40}$."""
+        steps = [{"tool": "homie_control_media", "arguments": {"action": "volup"}}]
+        bad_name = "invalid-name$cmd"
+        approval = self._mint_macro_approval(bad_name, steps)
+        ok, msg, _ = self.registry.register_macro(bad_name, "Bad name", steps, approval=approval)
+        self.assertFalse(ok)
+        self.assertIn("violates name policy", msg)
+
     def test_macro_parameter_schema_validation(self):
-        """Verifies deeply nested or untyped parameters are rejected."""
-        # Recursive depth > 3
+        """Verifies deeply nested parameters exceeding nesting limit are rejected."""
         deep_args = {"l1": {"l2": {"l3": {"l4": "too_deep"}}}}
         steps = [{"tool": "homie_place_window", "arguments": deep_args}]
-        ok, msg, _ = self.registry.register_macro("deep_param_macro", "Deep", steps, human_auth=True)
+        approval = self._mint_macro_approval("deep_param_macro", steps)
+        ok, msg, _ = self.registry.register_macro("deep_param_macro", "Deep", steps, approval=approval)
         self.assertFalse(ok)
         self.assertIn("Parameter recursion depth exceeded", msg)
 
