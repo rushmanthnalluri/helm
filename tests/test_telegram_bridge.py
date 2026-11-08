@@ -63,5 +63,31 @@ class TestTelegramBridge(unittest.TestCase):
             bridge.handle_command(1001, "/rules")
             self.assertTrue(any("memory" in r.lower() or "no rules" in r.lower() for r in replies))
 
+    def test_control_panel_and_callbacks(self):
+        import unittest.mock as mock
+        bridge = TelegramBridge(token="test", allowed_users=["1001"])
+        
+        # Test control panel markup structure
+        panel = bridge.get_control_panel_markup()
+        self.assertIn("inline_keyboard", panel)
+        self.assertGreaterEqual(len(panel["inline_keyboard"]), 3)
+
+        # Test callback handling
+        replies = []
+        with mock.patch.object(bridge, 'answer_callback_query'), mock.patch.object(bridge, 'send_message', side_effect=lambda cid, text, **kw: replies.append(text)):
+            bridge.handle_callback(1001, "cb_1", "action_mute")
+            self.assertTrue(any("Triggered media key" in r for r in replies))
+
+            # Test confirmation guardrail
+            bridge.request_confirmation(1001, "Test Kill", "close_app", "notepad")
+            self.assertEqual(len(bridge.pending_actions), 1)
+            action_id = list(bridge.pending_actions.keys())[0]
+
+            # Confirm action
+            replies.clear()
+            with mock.patch("windows_tools.close_app", return_value=(True, "Closed notepad.")):
+                bridge.handle_callback(1001, "cb_2", f"confirm_action_{action_id}")
+                self.assertTrue(any("Closed notepad" in r for r in replies))
+
 if __name__ == '__main__':
     unittest.main()

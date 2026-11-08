@@ -64,7 +64,21 @@ class TestFastCommands(unittest.TestCase):
         self.assertTrue(handled)
         self.assertIn("Clipboard", msg)
 
-        # 2. Downloads
+        # 2. Smart Clipboard analysis
+        url_analysis = homie.analyze_clipboard("https://github.com/SaarthurR/atticus-mac")
+        self.assertIn("URL Detected", url_analysis)
+        self.assertIn("github.com", url_analysis)
+
+        json_analysis = homie.analyze_clipboard('{"name": "Homie", "version": 2}')
+        self.assertIn("Valid JSON Detected", json_analysis)
+
+        # 3. Macro execution
+        homie.save_macro("unit_test_macro", [{"action": "media", "action": "mute"}])
+        handled, msg = homie.try_fast_command("run macro unit_test_macro")
+        self.assertTrue(handled)
+        self.assertIn("unit_test_macro", msg)
+
+        # 4. Downloads
         handled, msg = homie.try_fast_command("recent downloads")
         self.assertTrue(handled)
         self.assertTrue("Downloads" in msg or "empty" in msg)

@@ -68,6 +68,9 @@ class TelegramBridge:
         self.running = False
         self._thread = None
         self._voice_lock = threading.Lock()
+        self.pending_actions = {}
+        self._ram_alert_active = False
+        self._battery_alert_active = False
 
     def _api_call(self, method, data=None, files=None, timeout=30):
         if not self.token:
@@ -83,7 +86,7 @@ class TelegramBridge:
             print(f"[Telegram] Request error: {e}")
         return None
 
-    def send_message(self, chat_id, text, parse_mode="Markdown"):
+    def send_message(self, chat_id, text, parse_mode="Markdown", reply_markup=None):
         """Sends a text message to Telegram, automatically chunking messages longer than 4000 chars."""
         if not text:
             return None
@@ -105,10 +108,12 @@ class TelegramBridge:
                 remaining = remaining[split_at:].lstrip()
 
         last_res = None
-        for chunk in chunks:
+        for i, chunk in enumerate(chunks):
             data = {'chat_id': chat_id, 'text': chunk}
             if parse_mode:
                 data['parse_mode'] = parse_mode
+            if reply_markup and i == len(chunks) - 1:
+                data['reply_markup'] = json.dumps(reply_markup) if isinstance(reply_markup, dict) else reply_markup
             res = self._api_call('sendMessage', data=data, timeout=10)
             # If markdown fails due to special characters, retry without parse_mode
             if not res and parse_mode:
@@ -116,6 +121,66 @@ class TelegramBridge:
                 res = self._api_call('sendMessage', data=data, timeout=10)
             last_res = res
         return last_res
+
+    def answer_callback_query(self, callback_query_id, text=None, alert=False):
+        """Acknowledges a button click on Telegram."""
+        data = {'callback_query_id': callback_query_id}
+        if text:
+            data['text'] = text
+        if alert:
+            data['show_alert'] = True
+        return self._api_call('answerCallbackQuery', data=data)
+
+    def get_control_panel_markup(self):
+        """Constructs the interactive inline keyboard control panel."""
+        return {
+            "inline_keyboard": [
+                [
+                    {"text": "⏯ Play / Pause", "callback_data": "action_play_pause"},
+                    {"text": "⏭ Next Track", "callback_data": "action_next"},
+                    {"text": "🔇 Mute", "callback_data": "action_mute"}
+                ],
+                [
+                    {"text": "📸 Screenshot", "callback_data": "action_screen"},
+                    {"text": "👁️ Inspect Screen", "callback_data": "action_inspect"},
+                    {"text": "💻 PC Vitals", "callback_data": "action_vitals"}
+                ],
+                [
+                    {"text": "📋 Read Clipboard", "callback_data": "action_clip_read"},
+                    {"text": "🧠 Smart Copilot", "callback_data": "action_clip_analyze"},
+                    {"text": "📁 Downloads", "callback_data": "action_downloads"}
+                ],
+                [
+                    {"text": "🔒 Lock PC", "callback_data": "action_lock"},
+                    {"text": "📜 Run Macro...", "callback_data": "action_macro_list"}
+                ]
+            ]
+        }
+
+    def request_confirmation(self, chat_id, action_description, action_key, payload):
+        """Enforces a confirm/cancel guardrail before executing risky actions."""
+        import uuid
+        action_id = str(uuid.uuid4())[:8]
+        self.pending_actions[action_id] = {
+            'action': action_key,
+            'payload': payload,
+            'description': action_description,
+            'expires': time.time() + 45
+        }
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "✅ Confirm", "callback_data": f"confirm_action_{action_id}"},
+                    {"text": "❌ Cancel", "callback_data": f"cancel_action_{action_id}"}
+                ]
+            ]
+        }
+        msg = (
+            f"⚠️ **Security Confirmation Required**:\n"
+            f"Are you sure you want to: **{action_description}**?\n"
+            f"_(Expires in 45 seconds)_"
+        )
+        self.send_message(chat_id, msg, reply_markup=keyboard)
 
     def send_photo(self, chat_id, photo_path, caption=None):
         """Sends an image to the Telegram chat."""
@@ -144,6 +209,155 @@ class TelegramBridge:
                 return self._api_call('sendDocument', data=data, files=files, timeout=60)
         except Exception as e:
             return self.send_message(chat_id, f"Failed to send file: {e}")
+
+    def handle_callback(self, chat_id, callback_query_id, data):
+        """Handles interactive inline keyboard button clicks."""
+        self.answer_callback_query(callback_query_id)
+
+        if data == 'action_play_pause':
+            ok, msg = windows_tools.control_media('play_pause')
+            self.send_message(chat_id, f"🎵 {msg}")
+
+        elif data == 'action_next':
+            ok, msg = windows_tools.control_media('next')
+            self.send_message(chat_id, f"🎵 {msg}")
+
+        elif data == 'action_mute':
+            ok, msg = windows_tools.control_media('mute')
+            self.send_message(chat_id, f"🎵 {msg}")
+
+        elif data == 'action_screen':
+            self.send_message(chat_id, "📸 Capturing desktop...")
+            screens = windows_tools.capture_screens()
+            if screens:
+                for idx, sc in enumerate(screens):
+                    self.send_photo(chat_id, sc, caption=f"Display {idx + 1} ({time.strftime('%I:%M:%S %p')})")
+            else:
+                self.send_message(chat_id, "Could not capture display.")
+
+        elif data == 'action_inspect':
+            self.send_message(chat_id, "📸 Capturing desktop and analyzing...")
+            screens = windows_tools.capture_screens()
+            if screens and os.path.exists(screens[0]):
+                self.send_photo(chat_id, screens[0], caption="🖥️ Current Screen")
+                import ai_engine
+                analysis = ai_engine.run_gemini_vision("What is shown on this screen? Explain key windows and status concisely.", screens[0])
+                self.send_message(chat_id, f"👁️ **Screen Analysis**:\n\n{analysis}")
+            else:
+                self.send_message(chat_id, "Could not capture screen.")
+
+        elif data == 'action_vitals':
+            v = windows_tools.get_system_vitals()
+            msg = (
+                f"💻 **PC Health Snapshot**:\n\n"
+                f"• 🧠 **RAM**: {v['ram_pct']}% used ({v['ram_avail_gb']} GB free / {v['ram_total_gb']} GB)\n"
+                f"• 💽 **Disk (C:)**: {v['disk_free_gb']} GB free / {v['disk_total_gb']} GB\n"
+                f"• 🔋 **Power**: {v['battery']}\n"
+                f"• ⏱️ **Uptime**: {v['uptime_hours']} hours\n"
+                f"• 🪟 **Active**: `{v['active_window']}`"
+            )
+            self.send_message(chat_id, msg)
+
+        elif data == 'action_clip_read':
+            clip = windows_tools.get_clipboard_text()
+            if clip:
+                self.send_message(chat_id, f"📋 **PC Clipboard**:\n```\n{clip[:3000]}\n```")
+            else:
+                self.send_message(chat_id, "📋 PC Clipboard is currently empty.")
+
+        elif data == 'action_clip_analyze':
+            analysis = homie.analyze_clipboard()
+            self.send_message(chat_id, analysis)
+
+        elif data == 'action_downloads':
+            dl = windows_tools.list_downloads(limit=8)
+            if not dl:
+                self.send_message(chat_id, "📁 Downloads folder is empty.")
+            else:
+                items = "\n".join(f"• `{d['name']}` ({d['size_mb']} MB, {d['mtime']})" for d in dl)
+                self.send_message(chat_id, f"📁 **Recent Downloads**:\n{items}")
+
+        elif data == 'action_lock':
+            import ctypes
+            ctypes.windll.user32.LockWorkStation()
+            self.send_message(chat_id, "🔒 PC locked successfully.")
+
+        elif data == 'action_macro_list':
+            macros = homie.get_macros()
+            buttons = []
+            for name in list(macros.keys())[:8]:
+                buttons.append([{"text": f"▶️ {name.capitalize()}", "callback_data": f"run_macro_{name}"}])
+            keyboard = {"inline_keyboard": buttons}
+            self.send_message(chat_id, "📜 **Tap a macro to run on PC**:", reply_markup=keyboard)
+
+        elif data.startswith('run_macro_'):
+            macro_name = data[10:]
+            ok, msg = homie.execute_macro(macro_name)
+            self.send_message(chat_id, f"📜 {msg}")
+
+        elif data.startswith('confirm_action_'):
+            action_id = data[15:]
+            item = self.pending_actions.pop(action_id, None)
+            if not item:
+                self.send_message(chat_id, "⚠️ Action expired or already completed.")
+                return
+            if time.time() > item['expires']:
+                self.send_message(chat_id, "⌛ Action confirmation timed out.")
+                return
+            act = item['action']
+            payload = item['payload']
+            if act == 'close_app':
+                ok, msg = windows_tools.close_app(payload)
+                self.send_message(chat_id, f"🛑 {msg}")
+            elif act == 'run_cmd':
+                ok, out = windows_tools.execute_safe_command(payload)
+                self.send_message(chat_id, f"⚡ **Executed**:\n```\n{out}\n```")
+
+        elif data.startswith('cancel_action_'):
+            action_id = data[14:]
+            self.pending_actions.pop(action_id, None)
+            self.send_message(chat_id, "❌ Action cancelled safely.")
+
+    def _vitals_monitor_worker(self):
+        """Background daemon monitoring PC RAM and battery, sending proactive alerts with hysteresis."""
+        time.sleep(15)
+        while self.running:
+            try:
+                if self.allowed_users:
+                    v = windows_tools.get_system_vitals()
+                    ram_pct = v.get('ram_pct', 0)
+
+                    # RAM alert: trigger at >= 92%, clear at < 82%
+                    if ram_pct >= 92 and not self._ram_alert_active:
+                        self._ram_alert_active = True
+                        for uid in self.allowed_users:
+                            self.send_message(
+                                uid,
+                                f"⚠️ **PC Vitals Alert**: High RAM usage ({ram_pct}% used / {v['ram_total_gb']} GB).\nActive Window: `{v['active_window']}`"
+                            )
+                    elif ram_pct < 82:
+                        self._ram_alert_active = False
+
+                    # Battery alert: trigger at <= 15% on battery, clear at >= 25% or plugged in
+                    bat = v.get('battery', '')
+                    if "On battery" in bat:
+                        m = re.search(r'(\d+)%', bat)
+                        if m:
+                            level = int(m.group(1))
+                            if level <= 15 and not self._battery_alert_active:
+                                self._battery_alert_active = True
+                                for uid in self.allowed_users:
+                                    self.send_message(
+                                        uid,
+                                        f"🔋 **Low Battery Warning**: PC is at {level}% on battery. Please plug in power."
+                                    )
+                            elif level >= 25:
+                                self._battery_alert_active = False
+                    else:
+                        self._battery_alert_active = False
+            except Exception:
+                pass
+            time.sleep(45)
 
     def download_file(self, file_id, dest_path):
         """Downloads a voice or media file from Telegram servers."""
@@ -189,7 +403,10 @@ class TelegramBridge:
                 "👋 **Hello! I'm Homie on your PC.**\n\n"
                 "You can talk to me like a walkie-talkie or send commands from anywhere:\n\n"
                 "🎙️ **Voice Notes**: Hold mic button, speak, and release!\n"
-                "🖼️ **Photos**: Send any photo to analyze with Vision AI\n"
+                "🎛️ `/panel` - Interactive 1-tap control buttons\n"
+                "🧠 `/smartclip` - AI analysis of current clipboard\n"
+                "📜 `/macros` / `/macro <name>` - Automated workflows\n"
+                "🖼️ **Photos**: Send photo for instant Vision AI analysis\n"
                 "📸 `/screen` - Take live desktop screenshot\n"
                 "👁️ `/inspect <question>` - Screen capture + Vision answer\n"
                 "💻 `/status` - RAM, Disk, Battery, Uptime, Active Window\n"
@@ -201,13 +418,40 @@ class TelegramBridge:
                 "🎵 `/media <pause|play|next|mute|volup>` - Media control\n"
                 "💬 `/msg <whatsapp|telegram> <contact> <text>` - Send chat\n"
                 "🔒 `/lock` - Lock your Windows PC\n"
-                "🛑 `/close <app>` - Close application\n"
+                "🛑 `/kill <app>` - Kill app with confirmation\n"
                 "🪟 `/snap <left|right|full|center>` - Window placement\n"
                 "🚀 `/open <app>` - Launch application\n"
                 "🧠 `/rules` / `/remember <fact>` - Long-term memory\n\n"
-                "💬 Or just type anything you want me to do or answer!"
+                "💬 Or tap any button below for instant action:"
             )
-            self.send_message(chat_id, msg)
+            self.send_message(chat_id, msg, reply_markup=self.get_control_panel_markup())
+            return
+
+        if cmd == '/panel':
+            self.send_message(
+                chat_id,
+                "🎛️ **Homie Remote Control Panel**\nTap any button below for 1-tap PC control:",
+                reply_markup=self.get_control_panel_markup()
+            )
+            return
+
+        if cmd in ('/smartclip', '/copilot'):
+            analysis = homie.analyze_clipboard()
+            self.send_message(chat_id, analysis)
+            return
+
+        if cmd in ('/macros', '/macro'):
+            if args and cmd == '/macro':
+                macro_name = args[0]
+                ok, msg = homie.execute_macro(macro_name)
+                self.send_message(chat_id, f"📜 {msg}")
+                return
+            macros = homie.get_macros()
+            buttons = []
+            for name in list(macros.keys())[:8]:
+                buttons.append([{"text": f"▶️ Run {name.capitalize()}", "callback_data": f"run_macro_{name}"}])
+            keyboard = {"inline_keyboard": buttons}
+            self.send_message(chat_id, "📜 **Workflow Macros**:\nTap to run or use `/macro <name>`:", reply_markup=keyboard)
             return
 
         if cmd in ('/play', '/yt', '/youtube'):
@@ -261,10 +505,14 @@ class TelegramBridge:
             self.send_message(chat_id, f"🚀 {msg}")
             return
 
-        if cmd == '/close':
-            target = " ".join(args)
+        if cmd in ('/close', '/kill', '/terminate'):
+            target = " ".join(args).strip()
             if not target:
-                self.send_message(chat_id, "Usage: `/close <app_name>`")
+                self.send_message(chat_id, "Usage: `/close <app_name>` or `/kill <app_name>`")
+                return
+            # Safety confirmation guardrail for destructive kill actions
+            if cmd in ('/kill', '/terminate') or 'force' in text.lower():
+                self.request_confirmation(chat_id, f"Terminate process '{target}'", "close_app", target)
                 return
             ok, msg = windows_tools.close_app(target)
             self.send_message(chat_id, f"🛑 {msg}")
@@ -495,21 +743,41 @@ class TelegramBridge:
                     pass
 
     def process_document_message(self, chat_id, doc_file_id, file_name="", caption=""):
-        """Handles documents/files uploaded from phone to PC."""
+        """Smart File Drop Zone: accepts uploaded documents/code/logs and automatically analyzes them."""
         save_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+        if "#desktop" in (caption or "").lower():
+            save_dir = os.path.join(os.path.expanduser("~"), "Desktop")
+
         dest_path = os.path.join(save_dir, file_name or f"file_{int(time.time())}")
         try:
             ok = self.download_file(doc_file_id, dest_path)
-            if ok and os.path.exists(dest_path):
-                size_kb = round(os.path.getsize(dest_path) / 1024, 1)
-                self.send_message(
-                    chat_id,
-                    f"📥 **Saved File to PC**:\n• Name: `{os.path.basename(dest_path)}`\n• Size: {size_kb} KB\n• Path: `{dest_path}`"
-                )
-            else:
+            if not ok or not os.path.exists(dest_path):
                 self.send_message(chat_id, "Failed to download document to PC.")
+                return
+
+            size_kb = round(os.path.getsize(dest_path) / 1024, 1)
+            self.send_message(
+                chat_id,
+                f"📥 **Saved File to PC**:\n• Name: `{os.path.basename(dest_path)}`\n• Size: {size_kb} KB\n• Path: `{dest_path}`"
+            )
+
+            # Auto-analyze code, logs, and tracebacks
+            text_extensions = ('.log', '.txt', '.py', '.js', '.json', '.err', '.cs', '.java', '.cpp', '.md')
+            if dest_path.lower().endswith(text_extensions) or '#analyze' in (caption or "").lower():
+                try:
+                    with open(dest_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read(4000)
+                    if content.strip():
+                        self.send_message(chat_id, "🔍 *Analyzing uploaded code/log file...*")
+                        import ai_engine
+                        prompt = f"Analyze this uploaded file content. Summarize its purpose, and identify any errors, bugs, or anomalies clearly:\n\n```\n{content}\n```"
+                        prefs = homie.get_prefs()
+                        analysis = ai_engine.run_query(prompt, prefs)
+                        self.send_message(chat_id, f"📊 **File Analysis**:\n\n{analysis}")
+                except Exception:
+                    pass
         except Exception as e:
-            self.send_message(chat_id, f"File saving error: {e}")
+            self.send_message(chat_id, f"File handling error: {e}")
 
     def poll_updates(self):
         """Long-polling update loop for Telegram Bot API."""
@@ -524,6 +792,22 @@ class TelegramBridge:
 
                 for u in updates:
                     self.offset = u['update_id'] + 1
+
+                    # 1. Interactive Button Click (Callback Query)
+                    if 'callback_query' in u:
+                        cq = u['callback_query']
+                        cq_id = cq.get('id')
+                        cq_user = cq.get('from', {}).get('id')
+                        cq_chat = cq.get('message', {}).get('chat', {}).get('id')
+                        cq_data = cq.get('data', '')
+
+                        if not self.is_user_authorized(cq_user, cq_chat):
+                            self.answer_callback_query(cq_id, "Access denied.", alert=True)
+                            continue
+
+                        threading.Thread(target=self.handle_callback, args=(cq_chat, cq_id, cq_data), daemon=True).start()
+                        continue
+
                     msg = u.get('message')
                     if not msg:
                         continue
@@ -576,6 +860,9 @@ class TelegramBridge:
         self.running = True
         self._thread = threading.Thread(target=self.poll_updates, daemon=True)
         self._thread.start()
+
+        # Start proactive vitals monitoring in background
+        threading.Thread(target=self._vitals_monitor_worker, daemon=True).start()
         return True
 
     def stop(self):

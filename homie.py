@@ -51,6 +51,7 @@ MEMORY_FILE = os.path.join(CONFIG_DIR, 'memory.md')
 RECENT_FILE = os.path.join(CONFIG_DIR, 'recent.jsonl')
 LOG_FILE = os.path.join(CONFIG_DIR, 'log.jsonl')
 ME_FILE = os.path.join(CONFIG_DIR, 'me.json')
+MACROS_FILE = os.path.join(CONFIG_DIR, 'macros.json')
 
 DEFAULT_PREFS = {
     "hotkey": "ctrl+alt+space",
@@ -121,6 +122,160 @@ def log_event(event_type, details):
             f.write(json.dumps(record) + '\n')
     except Exception:
         pass
+
+# ----------------- Workflow Macro Engine -----------------
+
+DEFAULT_MACROS = {
+    "code": [
+        {"action": "open", "target": "code"},
+        {"action": "snap", "where": "left", "app": "code"}
+    ],
+    "browser": [
+        {"action": "open", "target": "chrome"},
+        {"action": "snap", "where": "right", "app": "chrome"}
+    ],
+    "dev": [
+        {"action": "open", "target": "code"},
+        {"action": "open", "target": "wt"},
+        {"action": "snap", "where": "left", "app": "code"},
+        {"action": "snap", "where": "right", "app": "wt"}
+    ],
+    "relax": [
+        {"action": "play", "query": "lofi hip hop radio"},
+        {"action": "open", "target": "spotify"}
+    ]
+}
+
+def get_macros():
+    """Loads saved workflow macros from disk."""
+    if os.path.exists(MACROS_FILE):
+        try:
+            with open(MACROS_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return DEFAULT_MACROS.copy()
+
+def save_macro(name, steps):
+    """Saves a workflow macro."""
+    macros = get_macros()
+    macros[name.lower().strip()] = steps
+    with open(MACROS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(macros, f, indent=2)
+    return f"Saved macro '{name}' with {len(steps)} steps."
+
+def delete_macro(name):
+    """Deletes a workflow macro."""
+    macros = get_macros()
+    clean_name = name.lower().strip()
+    if clean_name in macros:
+        del macros[clean_name]
+        with open(MACROS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(macros, f, indent=2)
+        return True, f"Deleted macro '{clean_name}'."
+    return False, f"Macro '{clean_name}' not found."
+
+def execute_macro(name):
+    """Executes a workflow macro sequentially."""
+    macros = get_macros()
+    clean_name = name.lower().strip()
+    if clean_name not in macros:
+        return False, f"Macro '{clean_name}' not found. Available macros: {', '.join(macros.keys())}"
+
+    steps = macros[clean_name]
+    executed = 0
+    for step in steps:
+        act = step.get('action', '').lower()
+        if act == 'open':
+            windows_tools.launch_app(step.get('target', ''))
+            executed += 1
+        elif act == 'snap':
+            windows_tools.place_window(step.get('app', ''), step.get('where', 'full'))
+            executed += 1
+        elif act == 'play':
+            windows_tools.play_youtube(step.get('query', ''))
+            executed += 1
+        elif act == 'media':
+            windows_tools.control_media(step.get('action', 'play_pause'))
+            executed += 1
+        elif act == 'cmd':
+            windows_tools.execute_safe_command(step.get('command', ''))
+            executed += 1
+        elif act == 'sleep':
+            time.sleep(float(step.get('seconds', 0.5)))
+        time.sleep(0.3)
+
+    return True, f"Executed macro '{clean_name}' ({executed} steps completed)."
+
+# ----------------- Contextual Smart Clipboard Copilot -----------------
+
+def analyze_clipboard(custom_text=None):
+    """Contextual Smart Clipboard Copilot:
+    Inspects clipboard content, categorizes it (URL, Error/Traceback, Code, JSON, Phone, Text),
+    and generates actionable explanations and suggestions.
+    """
+    text = custom_text if custom_text is not None else windows_tools.get_clipboard_text()
+    if not text or not text.strip():
+        return "📋 Clipboard is currently empty."
+
+    stripped = text.strip()
+
+    # 1. Error / Stack Trace / Exception
+    error_patterns = [
+        r'Traceback \(most recent call last\):',
+        r'(?:SyntaxError|TypeError|ValueError|KeyError|AttributeError|IndexError|NameError|ZeroDivisionError):',
+        r'(?:NullPointerException|ArrayIndexOutOfBoundsException|ClassNotFoundException)',
+        r'FATAL ERROR|UnhandledPromiseRejection|uncaught exception',
+        r'(?:Error|Exception|Fail|FAILED):',
+        r'at [a-zA-Z0-9_$.]+\([a-zA-Z0-9_$.]+:\d+\)'
+    ]
+    if any(re.search(pat, stripped, re.I) for pat in error_patterns):
+        import ai_engine
+        prompt = f"Analyze this programming error/traceback. Explain why it occurred in 2 concise sentences, and provide the exact fix:\n\n```\n{stripped[:2000]}\n```"
+        prefs = get_prefs()
+        analysis = ai_engine.run_query(prompt, prefs)
+        return f"🚨 **Error Detected in Clipboard**:\n\n{analysis}\n\n*Snippet:*\n```\n{stripped[:250]}...\n```"
+
+    # 2. JSON Data
+    if (stripped.startswith('{') and stripped.endswith('}')) or (stripped.startswith('[') and stripped.endswith(']')):
+        try:
+            parsed = json.loads(stripped)
+            formatted = json.dumps(parsed, indent=2)
+            return f"📦 **Valid JSON Detected** ({len(stripped)} chars):\n```json\n{formatted[:1200]}\n```"
+        except Exception as e:
+            return f"⚠️ **Malformed JSON in Clipboard**:\nSyntax error: {e}\n```\n{stripped[:400]}\n```"
+
+    # 3. URL
+    url_match = re.search(r'https?://[^\s]+', stripped)
+    if url_match:
+        url = url_match.group(0)
+        parsed_url = urllib.parse.urlparse(url)
+        domain = parsed_url.netloc
+        return f"🔗 **URL Detected in Clipboard**:\n• Target: `{url}`\n• Domain: **{domain}**\n\nTip: Send `/play {url}` to open, or ask Homie to inspect it."
+
+    # 4. Phone Number
+    clean_phone = re.sub(r'[^\d+]', '', stripped)
+    if re.match(r'^\+?\d{7,15}$', clean_phone) and 7 <= len(clean_phone) <= 15:
+        return f"📞 **Phone Number Detected**:\n`{clean_phone}`\n\nQuick Action: Use `/msg whatsapp {clean_phone} <message>` to chat."
+
+    # 5. Code Snippet
+    code_markers = ('def ', 'class ', 'function', 'import ', 'return ', 'const ', 'let ', 'public static', '<div>', 'SELECT ', 'INSERT ')
+    if any(m in stripped for m in code_markers):
+        import ai_engine
+        prompt = f"Explain what this code does in 2 concise sentences, noting any potential bugs:\n\n```\n{stripped[:1500]}\n```"
+        prefs = get_prefs()
+        explanation = ai_engine.run_query(prompt, prefs)
+        return f"💻 **Code Snippet Detected**:\n\n{explanation}\n\n*Code:*\n```\n{stripped[:300]}...\n```"
+
+    # 6. General Text Note
+    words = len(stripped.split())
+    chars = len(stripped)
+    preview = stripped[:400] + ("..." if len(stripped) > 400 else "")
+    return (
+        f"📋 **Clipboard Content**:\n"
+        f"• Stats: {words} words, {chars} characters\n\n"
+        f"```\n{preview}\n```"
+    )
 
 # ----------------- Fast Local Instant Commands (< 50ms) -----------------
 
@@ -269,6 +424,10 @@ def try_fast_command(text):
         return True, msg
 
     # 9. Clipboard Inspection & Setting
+    if re.search(r'\b(smart\s+clipboard|analyze\s+clipboard|smartclip|check\s+clipboard|explain\s+clipboard)\b', t):
+        analysis = analyze_clipboard()
+        return True, analysis
+
     if re.search(r'\b(what\'?s?\s+in\s+my\s+clipboard|read\s+clipboard|get\s+clipboard|clipboard\s+content|^clipboard$)\b', t):
         clip = windows_tools.get_clipboard_text()
         if clip:
@@ -282,7 +441,18 @@ def try_fast_command(text):
             ok, msg = windows_tools.set_clipboard_text(text_to_copy)
             return True, f"📋 {msg}"
 
-    # 10. Recent Downloads
+    # 10. Workflow Macros
+    macro_m = re.match(r'^(?:run\s+macro|macro|trigger\s+macro)\s+([a-zA-Z0-9_-]+)$', t)
+    if macro_m:
+        ok, msg = execute_macro(macro_m.group(1))
+        return True, msg
+
+    if re.search(r'\b(list\s+macros|show\s+macros|^macros$)\b', t):
+        macros = get_macros()
+        items = "\n".join(f"• `{name}` ({len(steps)} steps)" for name, steps in macros.items())
+        return True, f"📜 **Workflow Macros**:\n{items}\n\nUse 'run macro <name>' or `/macro <name>` to execute."
+
+    # 11. Recent Downloads
     if re.search(r'\b(recent\s+downloads|my\s+downloads|show\s+downloads|^downloads$)\b', t):
         dl = windows_tools.list_downloads(limit=8)
         if not dl:
