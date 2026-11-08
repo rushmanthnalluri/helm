@@ -198,6 +198,17 @@ def execute_mcp_tool(name, arguments, caller_id="mcp_client", client_token=None)
 
     tier = tier_map[name]
 
+    # Emergency Kill Switch Gate: Immediately blocks write actions when kill switch is engaged
+    import kill_switch
+    if kill_switch.is_kill_switch_active() and tier != "READ_ONLY":
+        decision = "DENY_KILL_SWITCH_ACTIVE"
+        output = "Security Gate: Emergency kill switch is active. Workstation actions are halted."
+        try:
+            agent_audit_ledger.record_agent_action(caller_id, name, tier, arguments, decision=decision)
+        except Exception:
+            pass
+        return output
+
     # Scoped Token Gate: Validates client token scope against required capability tier
     if client_token:
         import client_token_auth
