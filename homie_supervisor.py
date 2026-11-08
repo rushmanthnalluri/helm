@@ -127,8 +127,8 @@ class SupervisorActuator:
         tier = allowed_tools.get(tool, "WRITE_EXEC")
 
         if tier in ("WRITE_EXEC", "ELEVATED_CONFIRM"):
-            if not self.supervisor.verify_intent_token(
-                intent_token, tool, caller_id, self.supervisor.last_client_seq
+            if not self.supervisor.verify_and_consume_intent_token(
+                intent_token, tool, args, caller_id, self.supervisor.last_client_seq
             ):
                 raise CompleteMediationBreachError(
                     f"Complete mediation invariant breach: tool '{tool}' actuator invoked without valid supervisor INTENT token!"
@@ -212,6 +212,7 @@ class PolicySupervisor:
         # Complete Mediation Actuator & Cryptographic Key Initialization
         import crypto_vault
         self._supervisor_secret = crypto_vault.derive_subkey("actuator", length=32)
+        self._consumed_intent_tokens = set()
         self.actuator = SupervisorActuator(self)
         
         # Check dirty bit from previous run
@@ -293,21 +294,31 @@ class PolicySupervisor:
         kill_switch.disengage_kill_switch(human_auth_token)
         return True, "Supervisor successfully unlocked by human confirmation."
 
-    def mint_intent_token(self, tool: str, caller_id: str, seq: int) -> str:
+    def mint_intent_token(self, tool: str, args: Dict[str, Any], caller_id: str, seq: int) -> str:
         """Mints an unforgeable HMAC-SHA256 INTENT token inside supervisor private memory."""
         now = time.time()
-        raw = f"INTENT_V1:{self.session_epoch}:{seq}:{int(now)}:{tool}:{caller_id}"
+        clean_args = json.dumps(args, sort_keys=True) if isinstance(args, dict) else str(args)
+        args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()[:16]
+        raw = f"INTENT_V2:{self.session_epoch}:{seq}:{int(now)}:{tool}:{args_hash}:{caller_id}"
         sig = hmac.new(self._supervisor_secret, raw.encode("utf-8"), hashlib.sha256).hexdigest()
         return f"{raw}:{sig}"
 
-    def verify_intent_token(self, token: Optional[str], tool: str, caller_id: str, seq: int) -> bool:
-        """Verifies supervisor INTENT token integrity, freshness (<=30s), and binding."""
-        if not token or not isinstance(token, str) or not token.startswith("INTENT_V1:"):
+    def verify_and_consume_intent_token(
+        self, token: Optional[str], tool: str, args: Dict[str, Any], caller_id: str, seq: int
+    ) -> bool:
+        """Verifies supervisor INTENT token integrity, arguments binding (args_hash),
+        freshness (<=15s), and enforces single-use replay protection."""
+        if not token or not isinstance(token, str) or not token.startswith("INTENT_V2:"):
             return False
+
+        # Replay prevention: check if token was already consumed
+        if token in self._consumed_intent_tokens:
+            return False
+
         parts = token.split(":")
-        if len(parts) != 7:
+        if len(parts) != 8:
             return False
-        v_tag, epoch_str, seq_str, ts_str, tok_tool, tok_caller, sig = parts
+        v_tag, epoch_str, seq_str, ts_str, tok_tool, tok_args_hash, tok_caller, sig = parts
         try:
             epoch = int(epoch_str)
             token_seq = int(seq_str)
@@ -317,25 +328,42 @@ class PolicySupervisor:
 
         if epoch != self.session_epoch:
             return False
-        if abs(time.time() - ts) > 30.0:  # 30-second TTL
+        if abs(time.time() - ts) > 15.0:  # 15-second TTL
             return False
         if tok_tool != tool or tok_caller != caller_id:
             return False
 
-        raw = f"INTENT_V1:{epoch}:{token_seq}:{ts}:{tok_tool}:{tok_caller}"
+        # Verify arguments hash
+        clean_args = json.dumps(args, sort_keys=True) if isinstance(args, dict) else str(args)
+        expected_args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()[:16]
+        if not hmac.compare_digest(tok_args_hash, expected_args_hash):
+            return False
+
+        raw = f"INTENT_V2:{epoch}:{token_seq}:{ts}:{tok_tool}:{tok_args_hash}:{tok_caller}"
         expected_sig = hmac.new(self._supervisor_secret, raw.encode("utf-8"), hashlib.sha256).hexdigest()
-        return hmac.compare_digest(sig, expected_sig)
+        if not hmac.compare_digest(sig, expected_sig):
+            return False
+
+        # Consume token to enforce single-use replay protection
+        self._consumed_intent_tokens.add(token)
+        return True
+
+    def verify_intent_token(self, token: Optional[str], tool: str, caller_id: str, seq: int) -> bool:
+        """Legacy helper for backwards compatibility."""
+        return False
 
     def clear_taint_and_reboot_worker(self, human_auth_token: str) -> Tuple[bool, str]:
         """Supervisor-side taint clearing: Clears workstation taint, bumps session epoch,
-        rotates supervisor secrets, and restarts the worker process with a fresh clean context."""
+        rotates ephemeral actuator session secrets, and restarts the worker process with a fresh clean context.
+        Persistent vault storage keys and audit ledger HMAC keys are strictly preserved."""
         ok, msg = taint_tracker.human_clear_taint(human_auth_token)
         if not ok:
             return False, f"Taint clear denied: {msg}"
 
-        # Bump session epoch and rotate secrets
+        # Bump session epoch and rotate ONLY ephemeral actuator/intent secrets
         self.session_epoch = int(time.time())
         self._supervisor_secret = secrets.token_bytes(32)
+        self._consumed_intent_tokens.clear()
 
         # Record worker context reboot in audit ledger
         agent_audit_ledger.record_agent_action(
@@ -602,7 +630,7 @@ class PolicySupervisor:
 
         # 11. TWO-PHASE ACTION EXECUTION:
         # Phase 1: Supervisor mints unforgeable cryptographic INTENT token & records in audit ledger
-        intent_token = self.mint_intent_token(tool, caller_id, self.last_client_seq)
+        intent_token = self.mint_intent_token(tool, args, caller_id, self.last_client_seq)
         agent_audit_ledger.record_agent_action(
             caller_id, tool, tier, args, decision=f"INTENT:{req_id}:{intent_token[:32]}"
         )

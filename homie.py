@@ -892,6 +892,17 @@ def main():
 
     if cmd in ('--pairing-unlock', 'pairing-unlock'):
         import phone_approval_portal
+        # Interactive confirmation required to ensure automated background processes or agents cannot invoke it
+        force = '--yes' in args or '-y' in args
+        if not force:
+            if sys.stdin.isatty():
+                confirmation = input("Type 'CONFIRM-RESET' to unlock pairing: ").strip()
+                if confirmation != "CONFIRM-RESET":
+                    print("✗ [HOMIE SECURITY] Pairing unlock cancelled: confirmation code mismatch.")
+                    return
+            else:
+                print("✗ [HOMIE SECURITY] Interactive console presence required to unlock pairing.")
+                return
         ok, msg = phone_approval_portal.reset_pairing_lockout()
         print(f"✓ [HOMIE SECURITY] {msg}")
         return

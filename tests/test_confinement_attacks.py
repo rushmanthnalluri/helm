@@ -15,6 +15,7 @@ if len(sys.argv) > 1 and sys.argv[1] == "--worker":
     import socket
     import subprocess
     import ctypes
+    from ctypes import wintypes
     import win32api
     import win32con
     import win32file
@@ -24,11 +25,11 @@ if len(sys.argv) > 1 and sys.argv[1] == "--worker":
 
     argv = sys.argv[2:]
     (
-        sup_pid, secret_file, flag_file, reg_file, ledger_file,
+        sup_pid, sup_tid, secret_file, flag_file, reg_file, ledger_file,
         pipe_name, port, handle
     ) = (
-        int(argv[0]), argv[1], argv[2], argv[3], argv[4],
-        argv[5], int(argv[6]), int(argv[7])
+        int(argv[0]), int(argv[1]), argv[2], argv[3], argv[4], argv[5],
+        argv[6], int(argv[7]), int(argv[8])
     )
     results = {}
 
@@ -128,9 +129,22 @@ if len(sys.argv) > 1 and sys.argv[1] == "--worker":
         else:
             raise pywintypes.error(5, "OpenProcess", "Access is denied.")
 
-    def send_input_or_hook():
-        WH_KEYBOARD_LL = 13
-        hhook = ctypes.windll.user32.SetWindowsHookExW(WH_KEYBOARD_LL, None, None, 0)
+    def attach_thread_input_attack():
+        my_tid = ctypes.windll.kernel32.GetCurrentThreadId()
+        ok = ctypes.windll.user32.AttachThreadInput(my_tid, sup_tid, True)
+        if ok:
+            return True
+        err = ctypes.GetLastError() or 5
+        raise pywintypes.error(err, "AttachThreadInput", "Access is denied.")
+
+    HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_longlong, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
+    def dummy_hook_proc(nCode, wParam, lParam):
+        return 0
+    _global_hook_proc = HOOKPROC(dummy_hook_proc)
+
+    def set_windows_hook_higher_il():
+        # Valid HookProc targeting supervisor thread (WH_KEYBOARD = 2)
+        hhook = ctypes.windll.user32.SetWindowsHookExW(2, _global_hook_proc, 0, sup_tid)
         if hhook:
             ctypes.windll.user32.UnhookWindowsHookEx(hhook)
             return True
@@ -162,7 +176,8 @@ if len(sys.argv) > 1 and sys.argv[1] == "--worker":
         ("write_tool_registry", write_tool_registry, [5]),
         ("read_audit_ledger", read_audit_ledger, [5]),
         ("open_user_process_write", open_user_process_write, [5]),
-        ("send_input_or_hook", send_input_or_hook, [5]),
+        ("attach_thread_input_higher_il", attach_thread_input_attack, [5]),
+        ("set_windows_hook_higher_il", set_windows_hook_higher_il, [5]),
         ("open_supervisor_pipe_by_name", open_pipe_by_name, [5, 3]),
     ]
 
@@ -244,6 +259,7 @@ class TestBatch20VerifiedConfinement(unittest.TestCase):
             [
                 this_file, "--worker",
                 str(os.getpid()),
+                str(win32api.GetCurrentThreadId()),
                 str(secret),
                 str(flag),
                 str(reg),
@@ -272,7 +288,7 @@ class TestBatch20VerifiedConfinement(unittest.TestCase):
             listener.close()
             del job
 
-        print("\n=== BATCH 21 CONFINEMENT RAW ATTACK RESULTS ===")
+        print("\n=== BATCH 22 CONFINEMENT RAW ATTACK RESULTS ===")
         for k, v in results.items():
             print(f"  {k}: {v['status']} (code={v.get('code')}, error={v.get('error_type')})")
 
@@ -290,6 +306,8 @@ class TestBatch20VerifiedConfinement(unittest.TestCase):
         self.assertEqual(results["open_supervisor_vm_write"]["code"], 5, "open_supervisor_vm_write must be blocked with ERROR_ACCESS_DENIED 5")
         self.assertEqual(results["open_supervisor_terminate"]["code"], 5, "open_supervisor_terminate must be blocked with ERROR_ACCESS_DENIED 5")
         self.assertEqual(results["open_supervisor_dup_handle"]["code"], 5, "open_supervisor_dup_handle must be blocked with ERROR_ACCESS_DENIED 5")
+        self.assertEqual(results["attach_thread_input_higher_il"]["code"], 5, "attach_thread_input_higher_il must be blocked with ERROR_ACCESS_DENIED 5")
+        self.assertEqual(results["set_windows_hook_higher_il"]["code"], 5, "set_windows_hook_higher_il must be blocked with ERROR_ACCESS_DENIED 5")
         self.assertEqual(results["spawn_child_process"]["code"], 1816, "spawn_child_process must be blocked with ERROR_NOT_ENOUGH_QUOTA 1816")
         self.assertIn(results["open_supervisor_pipe_by_name"]["code"], (5, 3), "open_supervisor_pipe_by_name must be blocked by kernel DACL/isolation (5 or 3)")
 

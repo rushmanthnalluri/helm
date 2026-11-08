@@ -126,34 +126,52 @@ class TestBatch20CompleteMediationAndRedTeam(unittest.TestCase):
         self.assertEqual(asr, 0.0, f"Red team attack success rate must be 0.0%: compromised={compromised}")
 
     def test_supervisor_actuator_requires_cryptographic_intent_token(self):
-        """Batch 21 Directive: Actuator inside supervisor process strictly enforces unforgeable HMAC INTENT token."""
+        """Batch 21 & 22 Directive: Actuator strictly enforces INTENT_V2 with args_hash, 15s TTL, and replay protection."""
         supervisor = homie_supervisor.PolicySupervisor()
         supervisor.state = homie_supervisor.STATE_ARMED
         actuator = supervisor.actuator
 
+        args = {"app_name": "notepad"}
+        seq = 42
+
         # 1. Invocation without intent token -> raises CompleteMediationBreachError
         with self.assertRaises(homie_supervisor.CompleteMediationBreachError):
             actuator.execute_actuator(
-                "homie_snap_window", {"app_name": "notepad"},
+                "homie_snap_window", args,
                 caller_id="worker", intent_token=None
             )
 
         # 2. Invocation with forged intent token -> raises CompleteMediationBreachError
         with self.assertRaises(homie_supervisor.CompleteMediationBreachError):
             actuator.execute_actuator(
-                "homie_snap_window", {"app_name": "notepad"},
-                caller_id="worker", intent_token="INTENT_V1:1:1:1700000000:homie_snap_window:worker:bad_signature"
+                "homie_snap_window", args,
+                caller_id="worker", intent_token="INTENT_V2:1:1:1700000000:homie_snap_window:badhash:worker:badsig"
             )
 
         # 3. Invocation with valid supervisor-minted token -> succeeds
-        seq = 42
-        valid_token = supervisor.mint_intent_token("homie_snap_window", "worker", seq)
+        valid_token = supervisor.mint_intent_token("homie_snap_window", args, "worker", seq)
         supervisor.last_client_seq = seq
         res = actuator.execute_actuator(
-            "homie_snap_window", {"app_name": "notepad"},
+            "homie_snap_window", args,
             caller_id="worker", intent_token=valid_token
         )
         self.assertIn("Success:", res)
+
+        # 4. Batch 22: Replay attack with same token -> raises CompleteMediationBreachError (single-use consumption)
+        with self.assertRaises(homie_supervisor.CompleteMediationBreachError):
+            actuator.execute_actuator(
+                "homie_snap_window", args,
+                caller_id="worker", intent_token=valid_token
+            )
+
+        # 5. Batch 22: Parameter tampering attack (minted for notepad, submitted for calc)
+        token_tamper = supervisor.mint_intent_token("homie_snap_window", {"app_name": "notepad"}, "worker", seq)
+        with self.assertRaises(homie_supervisor.CompleteMediationBreachError):
+            actuator.execute_actuator(
+                "homie_snap_window", {"app_name": "calc"},
+                caller_id="worker", intent_token=token_tamper
+            )
+
         supervisor.clean_shutdown()
 
     def test_worker_forged_intent_frame_rejected_by_supervisor(self):
@@ -185,19 +203,30 @@ class TestBatch20CompleteMediationAndRedTeam(unittest.TestCase):
         supervisor.clean_shutdown()
 
     def test_supervisor_taint_clearing_reboots_worker_context(self):
-        """Batch 21 Directive: Supervisor-side taint clearing bumps epoch, rotates keys, and refreshes worker."""
+        """Batch 21 & 22: Taint clearing bumps epoch, rotates ephemeral session key, but preserves persistent keys."""
+        import crypto_vault
         supervisor = homie_supervisor.PolicySupervisor()
         supervisor.state = homie_supervisor.STATE_ARMED
         initial_epoch = supervisor.session_epoch
         initial_secret = supervisor._supervisor_secret
+        storage_key_before = crypto_vault.derive_subkey("storage")
+
+        # 1. Unauthorized attempt (invalid token) is rejected
+        ok_fail, _ = supervisor.clear_taint_and_reboot_worker("unauthorized_bogus_token")
+        self.assertFalse(ok_fail)
 
         taint_tracker.mark_session_tainted("worker", source="tool_provenance:homie_read_screen_memory")
         self.assertTrue(taint_tracker.is_session_tainted("worker"))
 
+        # 2. Authorized clear succeeds
         ok, msg = supervisor.clear_taint_and_reboot_worker("human_approved_stepup_override")
         self.assertTrue(ok)
         self.assertFalse(taint_tracker.is_session_tainted("worker"))
         self.assertNotEqual(supervisor._supervisor_secret, initial_secret)
+        
+        # 3. Persistent vault storage subkey remains stable and uncorrupted
+        storage_key_after = crypto_vault.derive_subkey("storage")
+        self.assertEqual(storage_key_before, storage_key_after)
         supervisor.clean_shutdown()
 
 
