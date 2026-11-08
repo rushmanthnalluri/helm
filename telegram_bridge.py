@@ -1285,7 +1285,7 @@ class TelegramBridge:
     def process_homie_task(self, chat_id, text):
         """Runs the query through instant local commands or AI."""
         # 1. Fast local command check
-        handled, fast_msg = homie.try_fast_command(text)
+        handled, fast_msg = homie.try_fast_command(text, caller_id="telegram_remote")
         if handled:
             self.send_message(chat_id, f"✓ {fast_msg}")
             return

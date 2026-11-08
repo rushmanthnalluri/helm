@@ -232,76 +232,15 @@ def get_active_provider(prefs):
         'api_key': api_key or 'none'
     }
 
-def execute_tool(name, args):
-    """Actually performs the action on the Windows PC and returns the real result."""
+def execute_tool(name, args, caller_id="ai_engine"):
+    """Performs action through the unified ActionBroker with full complete mediation and security gates."""
+    import action_broker
     try:
-        if name == "play_youtube":
-            query = args.get('query', '').strip()
-            ok, msg = windows_tools.play_youtube(query)
-            return msg
-
-        elif name == "open_app_or_url":
-            target = args.get('target', '').strip()
-            if target.startswith(('http://', 'https://')):
-                webbrowser.open(target)
-                return f"Opened webpage '{target}'"
-            ok, msg = windows_tools.launch_app(target)
-            return msg
-
-        elif name == "place_window":
-            app = args.get('app_or_title', '')
-            where = args.get('where', 'full')
-            ok, msg = windows_tools.place_window(app, where)
-            return msg
-
-        elif name == "media_control":
-            action = args.get('action', 'play_pause')
-            ok, msg = windows_tools.control_media(action)
-            return msg
-
-        elif name == "web_search":
-            import homie
-            return homie.web_search(args.get('query', ''))
-
-        elif name == "send_chat_message":
-            app = args.get('app_name', 'whatsapp')
-            rec = args.get('recipient', '')
-            msg = args.get('message', 'hi')
-            ok, output = windows_tools.send_chat_message(app, rec, msg)
-            return output
-
-        elif name == "lock_pc":
-            import ctypes
-            ctypes.windll.user32.LockWorkStation()
-            return "Windows workstation locked."
-
-        elif name == "get_clipboard":
-            text = windows_tools.get_clipboard_text()
-            return f"Clipboard text: {text}" if text else "(Clipboard is empty or contains non-text data)"
-
-        elif name == "set_clipboard":
-            text = args.get('text', '')
-            ok, msg = windows_tools.set_clipboard_text(text)
-            return msg
-
-        elif name == "list_downloads":
-            items = windows_tools.list_downloads(limit=10)
-            if not items:
-                return "Downloads folder is empty."
-            return "Recent downloads:\n" + "\n".join(f"• {x['name']} ({x['size_mb']} MB, {x['mtime']})" for x in items)
-
-        elif name == "get_system_vitals":
-            v = windows_tools.get_system_vitals()
-            return (
-                f"RAM: {v['ram_pct']}% used ({v['ram_avail_gb']} GB free / {v['ram_total_gb']} GB), "
-                f"Disk (C:): {v['disk_free_gb']} GB free / {v['disk_total_gb']} GB, "
-                f"Battery: {v['battery']}, Uptime: {v['uptime_hours']} hours, "
-                f"Active window: {v['active_window']}"
-            )
-
+        ok, msg, res = action_broker.execute_action(name, args, caller_id=caller_id)
+        return msg
     except Exception as e:
+        logger.error("ActionBroker error executing %s: %s", name, e)
         return f"Error executing tool {name}: {e}"
-    return f"Unknown tool: {name}"
 
 def check_and_execute_fallback(prompt_text, reply_text):
     """
@@ -491,8 +430,97 @@ def run_gemini(prompt_text, api_key, model='gemini-flash-lite-latest', step_call
 
 # ----------------- OpenAI-Compatible Implementation (NVIDIA NIM / Groq / Ollama) -----------------
 
+OPENAI_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "play_youtube",
+            "description": "Plays music, songs, or videos on YouTube in the browser.",
+            "parameters": {
+                "type": "object",
+                "properties": {"query": {"type": "string", "description": "Song, artist, or video name"}},
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "open_app_or_url",
+            "description": "Opens an approved application (e.g. spotify, notepad) or website URL.",
+            "parameters": {
+                "type": "object",
+                "properties": {"target": {"type": "string", "description": "App name or URL"}},
+                "required": ["target"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "place_window",
+            "description": "Snaps or arranges windows on the desktop (left, right, full, center, etc.).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "app_or_title": {"type": "string"},
+                    "where": {"type": "string", "enum": ["left", "right", "full", "center", "minimize", "maximize"]}
+                },
+                "required": ["where"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "media_control",
+            "description": "Controls Windows media hardware playback keys.",
+            "parameters": {
+                "type": "object",
+                "properties": {"action": {"type": "string", "enum": ["play", "pause", "play_pause", "next", "prev", "volup", "voldown", "mute"]}},
+                "required": ["action"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_chat_message",
+            "description": "Sends messages on WhatsApp or Telegram.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "app_name": {"type": "string"},
+                    "recipient": {"type": "string"},
+                    "message": {"type": "string"}
+                },
+                "required": ["app_name", "message"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_system_vitals",
+            "description": "Returns Windows CPU, RAM, battery, disk, and active window vitals.",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "assistant_timeline",
+            "description": "Queries the assistant timeline for what happened or 'what did I miss?'.",
+            "parameters": {
+                "type": "object",
+                "properties": {"hours": {"type": "integer", "description": "Hours to look back"}}
+            }
+        }
+    }
+]
+
 def run_openai_compat(prompt_text, prov, step_callback=None):
-    """Executes requests via OpenAI-compatible endpoints (NVIDIA NIM, Groq, Ollama)."""
+    """Executes requests via OpenAI-compatible endpoints with structured tool-calling loop."""
     url = f"{prov['base_url']}/chat/completions"
     headers = {
         'Content-Type': 'application/json',
@@ -514,19 +542,59 @@ def run_openai_compat(prompt_text, prov, step_callback=None):
         "model": prov['model'],
         "messages": messages,
         "temperature": 0.4,
-        "max_tokens": 1024
+        "max_tokens": 1024,
+        "tools": OPENAI_TOOLS,
+        "tool_choice": "auto"
     }
 
-    try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=30)
-        if resp.status_code == 200:
-            data = resp.json()
-            raw_reply = data.get('choices', [{}])[0].get('message', {}).get('content', '').strip()
-            return check_and_execute_fallback(prompt_text, raw_reply)
-        else:
-            return f"Error from {prov['name']} ({resp.status_code}): {resp.text}"
-    except Exception as e:
-        return f"Error contacting {prov['name']}: {e}"
+    max_steps = 4
+    for step in range(max_steps):
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=30)
+            if resp.status_code == 200:
+                data = resp.json()
+                choice = data.get('choices', [{}])[0]
+                msg = choice.get('message', {})
+                tool_calls = msg.get('tool_calls', [])
+
+                if not tool_calls:
+                    raw_reply = msg.get('content', '').strip()
+                    return check_and_execute_fallback(prompt_text, raw_reply)
+
+                # Execute tool calls mediated by ActionBroker
+                messages.append(msg)
+                for tc in tool_calls:
+                    fn = tc.get('function', {})
+                    fn_name = fn.get('name', '')
+                    try:
+                        fn_args = json.loads(fn.get('arguments', '{}'))
+                    except Exception:
+                        fn_args = {}
+
+                    if step_callback:
+                        step_callback(f"▸ Executing {fn_name}: {fn_args}")
+
+                    tool_output = execute_tool(fn_name, fn_args, caller_id=f"ai_{prov['provider']}")
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.get('id', f'call_{step}'),
+                        "content": str(tool_output)
+                    })
+
+                payload['messages'] = messages
+                continue
+
+            elif "tools" in payload:
+                # Fallback to plain prompt if provider does not support tools parameter
+                del payload["tools"]
+                del payload["tool_choice"]
+                continue
+            else:
+                return f"Error from {prov['name']} ({resp.status_code}): {resp.text}"
+        except Exception as e:
+            return f"Error contacting {prov['name']}: {e}"
+
+    return "Task completed."
 
 # ----------------- Multimodal Vision Engine -----------------
 

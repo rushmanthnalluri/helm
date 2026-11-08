@@ -24,5 +24,15 @@ wheels/
 .pytest_cache/
 *.log
 *.key
+*.bin
 claude_*.png
 *.jsonl
+
+# Autonomous Claude in Chrome loop artifacts & batch scripts
+submit_batch*.py
+extract_claude_response.py
+claude_extracted_text.txt
+.homie_device_keys.json
+.homie_vault.key
+scratch_*.py
+_update_*.py

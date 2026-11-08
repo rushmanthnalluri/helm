@@ -610,12 +610,25 @@ class PolicySupervisor:
             caller_id, tier, tool, args
         )
         if not allowed and requires_step_up:
-            return self._encode_reply(MSG_DECISION, {
-                "req_id": req_id,
-                "status": "NEEDS_HUMAN",
-                "reason_code": REASON_TAINTED_STEPUP,
-                "reason": taint_reason
-            })
+            if step_up_token:
+                valid_step_up, step_up_msg = taint_tracker.verify_and_consume_step_up_token(
+                    step_up_token, tool, args
+                )
+                if not valid_step_up:
+                    return self._encode_reply(MSG_DECISION, {
+                        "req_id": req_id,
+                        "status": "DENY",
+                        "reason_code": REASON_UNAUTHORIZED_TOKEN,
+                        "reason": f"Step-up token rejected: {step_up_msg}"
+                    })
+                logger.info("Supervisor authorized action '%s' via consumed step-up token for caller '%s'", tool, caller_id)
+            else:
+                return self._encode_reply(MSG_DECISION, {
+                    "req_id": req_id,
+                    "status": "NEEDS_HUMAN",
+                    "reason_code": REASON_TAINTED_STEPUP,
+                    "reason": taint_reason
+                })
 
         # 10. Shadow Mode Simulation check
         if shadow_mode.is_shadow_mode_active():

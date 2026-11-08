@@ -26,6 +26,8 @@ if BASE_DIR not in sys.path:
 
 import homie
 import windows_tools
+import task_manager
+import assistant_timeline
 from voice import VoiceEngine
 
 class HomieApi:
@@ -45,7 +47,7 @@ class HomieApi:
         if 'send' in message:
             text = str(message['send']).strip()
             if text:
-                threading.Thread(target=self._app.handle_user_ask, args=(text,), daemon=True).start()
+                self._app.tasks.submit_task('user_typed_ask', self._app.handle_user_ask, text, caller_id='desktop_user')
 
         # 2. Copy answer
         elif 'copy' in message:
@@ -85,8 +87,8 @@ class HomieApp:
             language=self.prefs.get('whisperLanguage', 'en')
         )
         self.api = HomieApi(self)
+        self.tasks = task_manager.get_task_manager()
         self.is_recording = False
-        self.is_processing = False
         self.paused = False
         self.held_keys = set()
         self.hotkey_listener = None
@@ -148,6 +150,14 @@ class HomieApp:
 
         self.voice.start_recording(level_callback=on_level)
 
+    @property
+    def is_processing(self) -> bool:
+        return self.tasks.is_busy()
+
+    @is_processing.setter
+    def is_processing(self, val: bool):
+        pass
+
     def stop_listening(self):
         """Stops voice recording and begins processing on hotkey release."""
         if not self.is_recording:
@@ -159,8 +169,8 @@ class HomieApp:
         # Stop audio capture
         audio_data = self.voice.stop_recording()
 
-        # Process in background thread to keep UI completely fluid
-        threading.Thread(target=self._process_audio, args=(audio_data,), daemon=True).start()
+        # Process via durable TaskManager with bounded workers and cancellation
+        self.tasks.submit_task('voice_audio_transcription', self._process_audio, audio_data)
 
     def toggle_listening(self):
         """Toggles recording for press-to-talk mode."""
@@ -183,7 +193,7 @@ class HomieApp:
         finally:
             self.is_processing = False
 
-    def handle_user_ask(self, text):
+    def handle_user_ask(self, text, caller_id='desktop_voice'):
         """Handles an ask either from voice or typing."""
         self.is_processing = True
         try:
@@ -191,7 +201,7 @@ class HomieApp:
             self.eval_js("window.ui.think()")
 
             # 1. Try instant command (<50ms, $0)
-            handled, fast_msg = homie.try_fast_command(text)
+            handled, fast_msg = homie.try_fast_command(text, caller_id=caller_id)
             if handled:
                 time.sleep(0.05)
                 self.eval_js(f"window.ui.line({json.dumps('✓ ' + fast_msg)})")
@@ -298,6 +308,9 @@ class HomieApp:
 
     def run(self):
         """Launches Homie's GUI and services."""
+        # 0. Start unified Assistant Timeline monitor & retention pruner
+        assistant_timeline.start_timeline_monitor()
+
         # 1. Start global hotkey listener
         self.start_hotkey_listener()
 

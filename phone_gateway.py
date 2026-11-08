@@ -27,8 +27,9 @@ logger = logging.getLogger("homie.phone_gateway")
 # Default gateway configuration
 DEFAULT_PHONE_CONFIG = {
     "enabled": True,
+    "host": "127.0.0.1", # Bound to loopback by default
     "port": 5055,
-    "pin": "1234",
+    "pin": "",            # Cryptographically generated on first setup
     "require_pin": True,
     "allowed_numbers": [],
     "twilio_account_sid": "",
@@ -38,6 +39,20 @@ DEFAULT_PHONE_CONFIG = {
     "voice_greeting": "Homie workstation online. How can I assist you?",
     "voice_name": "Polly.Danielle"
 }
+
+def validate_twilio_signature(url: str, params: dict, signature: str, auth_token: str) -> bool:
+    """Validates X-Twilio-Signature header using HMAC-SHA1 according to Twilio webhook specs."""
+    if not auth_token or not signature:
+        return False
+    import hmac, hashlib, base64
+    data = url
+    for k in sorted(params.keys()):
+        val = params[k]
+        data += f"{k}{val if isinstance(val, str) else val[0]}"
+    expected_sig = base64.b64encode(
+        hmac.new(auth_token.encode("utf-8"), data.encode("utf-8"), hashlib.sha1).digest()
+    ).decode("utf-8")
+    return hmac.compare_digest(expected_sig, signature)
 
 _server_instance = None
 _server_thread = None
@@ -136,16 +151,21 @@ def get_phone_config_path():
 
 def load_phone_config():
     path = get_phone_config_path()
+    conf = DEFAULT_PHONE_CONFIG.copy()
     if path.exists():
         try:
             with open(path, "r", encoding="utf-8") as f:
                 saved = json.load(f)
-                conf = DEFAULT_PHONE_CONFIG.copy()
                 conf.update(saved)
-                return conf
         except Exception as e:
             logger.error("Failed to load phone config: %s", e)
-    return DEFAULT_PHONE_CONFIG.copy()
+    
+    # Ensure PIN is not default 1234 or empty
+    if not conf.get("pin") or conf.get("pin") == "1234":
+        conf["pin"] = secrets.token_hex(3).upper() # 6 hex chars
+        save_phone_config(conf)
+        logger.info("Generated fresh cryptographically secure phone PIN.")
+    return conf
 
 def save_phone_config(conf):
     path = get_phone_config_path()
@@ -176,12 +196,11 @@ def execute_phone_instruction(speech_text, session_id="call"):
     except Exception as e:
         logger.warning("Fast command check failed: %s", e)
 
-    # 2. Try AI Engine tool execution or general prompt
+    # 2. Try AI Engine tool execution through shared broker
     try:
         import ai_engine
         import homie
         prefs = homie.get_prefs()
-        provider = ai_engine.get_active_provider(prefs)
         
         system_prompt = (
             "You are Homie, speaking over a live telephone call to your user about their Windows PC. "
@@ -190,7 +209,6 @@ def execute_phone_instruction(speech_text, session_id="call"):
         )
         reply = ai_engine.run_query(
             prompt_text=f"{system_prompt}\nUser says: {speech}",
-            provider=provider,
             prefs=prefs
         )
         if reply:
@@ -265,11 +283,9 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
         else:
             self._send_response(404, "text/plain", "Endpoint not found")
 
-    def _serve_web_phone_portal(self):
-        conf = load_phone_config()
-        pin_required = conf.get("require_pin", True)
-        
-        html = f"""<!DOCTYPE html>
+def _get_call_page_html() -> str:
+    conf = load_phone_config()
+    return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -369,10 +385,12 @@ function initSpeech() {{
       callStatus.textContent = 'Processing with Homie...';
       
       try {{
+        const urlParams = new URLSearchParams(window.location.search);
+        const token = urlParams.get('token') || sessionStorage.getItem('homie_token') || '';
         const resp = await fetch('/api/web-call', {{
           method: 'POST',
           headers: {{ 'Content-Type': 'application/json' }},
-          body: JSON.stringify({{ speech: userText, pin: '{conf.get("pin", "1234")}' }})
+          body: JSON.stringify({{ speech: userText, token: token }})
         }});
         const data = await resp.json();
         addBubble(data.reply, 'assistant');
@@ -420,17 +438,51 @@ function toggleCall() {{
 </script>
 </body>
 </html>"""
+
+
+    def _serve_web_phone_portal(self):
+        html = _get_call_page_html()
         self._send_response(200, "text/html; charset=utf-8", html)
 
     def _handle_twilio_incoming(self, form_body):
-        """Generates TwiML response for incoming PSTN call."""
+        """Generates TwiML response for incoming PSTN call with signature & allowlist verification."""
         params = urllib.parse.parse_qs(form_body)
         caller = params.get("From", ["Unknown"])[0]
         logger.info("Incoming phone call from: %s", caller)
 
         conf = load_phone_config()
-        greeting = conf.get("voice_greeting", "Homie workstation online. How can I assist you?")
         voice = conf.get("voice_name", "Polly.Danielle")
+
+        # 1. Twilio Webhook Signature Validation
+        auth_token = conf.get("twilio_auth_token", "").strip()
+        if auth_token:
+            sig = self.headers.get("X-Twilio-Signature", "")
+            host = self.headers.get("Host", "localhost")
+            proto = "https" if self.headers.get("X-Forwarded-Proto") == "https" else "http"
+            url = f"{proto}://{host}{self.path}"
+            flat_params = {k: v[0] for k, v in params.items()}
+            if not validate_twilio_signature(url, flat_params, sig, auth_token):
+                logger.warning("Rejected Twilio webhook: invalid X-Twilio-Signature")
+                self._send_response(403, "text/plain", "Forbidden: Invalid Twilio signature")
+                return
+
+        # 2. Caller Allowlist Enforcement
+        allowed_numbers = conf.get("allowed_numbers", [])
+        if allowed_numbers:
+            import re
+            clean_caller = re.sub(r'[\s\-\(\)]', '', caller)
+            clean_allowed = [re.sub(r'[\s\-\(\)]', '', num) for num in allowed_numbers]
+            if clean_caller not in clean_allowed:
+                logger.warning("Rejected incoming call from unauthorized number: %s", caller)
+                twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+    <Say voice="{voice}">Access denied. Your phone number is not authorized.</Say>
+    <Hangup/>
+</Response>"""
+                self._send_response(200, "application/xml", twiml)
+                return
+
+        greeting = conf.get("voice_greeting", "Homie workstation online. How can I assist you?")
 
         # TwiML response with Gather
         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -501,7 +553,7 @@ function toggleCall() {{
         conf = load_phone_config()
 
         # Check cryptographic token or fallback PIN
-        is_auth = is_device_token_valid(token) or (conf.get("require_pin", True) and str(pin) == str(conf.get("pin", "1234")))
+        is_auth = is_device_token_valid(token) or (conf.get("require_pin", True) and bool(pin) and str(pin) == str(conf.get("pin", "")))
 
         if not is_auth:
             self._send_response(401, "application/json", json.dumps({"reply": "Unauthorized: Device pairing token or PIN required."}))
@@ -511,7 +563,7 @@ function toggleCall() {{
         self._send_response(200, "application/json", json.dumps({"reply": reply}))
 
     def _handle_remote_action(self, json_body):
-        """Handles remote trackpad or presentation clicker action."""
+        """Handles remote trackpad or presentation clicker action mediated by ActionBroker."""
         try:
             data = json.loads(json_body) if json_body else {}
         except Exception:
@@ -521,42 +573,17 @@ function toggleCall() {{
         pin = data.get("pin", "")
         conf = load_phone_config()
 
-        is_auth = is_device_token_valid(token) or (conf.get("require_pin", True) and str(pin) == str(conf.get("pin", "1234")))
+        is_auth = is_device_token_valid(token) or (conf.get("require_pin", True) and bool(pin) and str(pin) == str(conf.get("pin", "")))
         if not is_auth:
             self._send_response(401, "application/json", json.dumps({"success": False, "error": "Unauthorized"}))
             return
 
         action = data.get("action", "")
-        result = {"success": True, "action": action}
-
-        import pyautogui
-        pyautogui.FAILSAFE = False
-
-        if action == "move":
-            dx = int(data.get("dx", 0))
-            dy = int(data.get("dy", 0))
-            pyautogui.moveRel(dx, dy)
-        elif action == "click":
-            btn = data.get("button", "left")
-            pyautogui.click(button=btn)
-        elif action == "scroll":
-            dy = int(data.get("dy", 0))
-            pyautogui.scroll(dy)
-        elif action == "key":
-            k = data.get("key", "")
-            if k:
-                pyautogui.press(k)
-        elif action == "type":
-            txt = data.get("text", "")
-            if txt:
-                import pyperclip
-                pyperclip.copy(txt)
-                pyautogui.hotkey("ctrl", "v")
-        elif action == "media":
-            cmd = data.get("command", "")
-            windows_tools.send_media_key(cmd)
-        else:
-            result = {"success": False, "error": "unknown action"}
+        import action_broker
+        ok, msg, res = action_broker.execute_action(
+            "homie_remote_trackpad", data, caller_id="phone_remote"
+        )
+        result = {"success": ok, "action": action, "message": msg}
 
         self._send_response(200, "application/json", json.dumps(result))
 
@@ -568,8 +595,9 @@ def start_phone_gateway(port=5055):
 
     try:
         conf = load_phone_config()
+        target_host = conf.get("host", "127.0.0.1")
         target_port = port or conf.get("port", 5055)
-        _server_instance = HTTPServer(("0.0.0.0", target_port), PhoneGatewayHandler)
+        _server_instance = HTTPServer((target_host, target_port), PhoneGatewayHandler)
         _server_thread = threading.Thread(target=_server_instance.serve_forever, daemon=True)
         _server_thread.start()
         logger.info("Phone Gateway successfully started on port %s", target_port)

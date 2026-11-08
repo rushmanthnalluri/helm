@@ -82,3 +82,10 @@ def delete_note(note_id: int, db_path=None) -> bool:
         cur = conn.execute("DELETE FROM quick_notes WHERE id = ?", (int(note_id),))
         conn.commit()
         return cur.rowcount > 0
+
+def get_all_notes(db_path=None) -> list[dict]:
+    """Retrieves all notes up to 100 recent entries."""
+    return get_recent_notes(limit=100, db_path=db_path)
+
+add_note = save_quick_note
+

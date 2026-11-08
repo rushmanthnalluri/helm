@@ -279,7 +279,8 @@ def analyze_clipboard(custom_text=None):
 
 # ----------------- Fast Local Instant Commands (< 50ms) -----------------
 
-def try_fast_command(text):
+def try_fast_command(text, caller_id="desktop_user"):
+    import action_broker
     """
     Attempts to execute simple commands locally without invoking AI.
     Returns (handled, output_string).
@@ -305,7 +306,7 @@ def try_fast_command(text):
     }
     for pat, action in media_patterns.items():
         if re.search(pat, t):
-            ok, msg = windows_tools.control_media(action)
+            ok, msg, _ = action_broker.execute_action('homie_control_media', {'action': action}, caller_id=caller_id)
             return True, msg
 
     # 3. YouTube Search & Playback (e.g. "open youtube and play the loose songs", "open yt and play telugu music")
@@ -346,7 +347,7 @@ def try_fast_command(text):
             yt_query = m5.group(1).strip()
 
     if yt_matched:
-        ok, msg = windows_tools.play_youtube(yt_query)
+        ok, msg, _ = action_broker.execute_action('homie_play_youtube', {'query': yt_query}, caller_id=caller_id)
         return True, msg
 
     # 4. Generic Song Playback (e.g. "play bohemian rhapsody", "play loose songs", "play telugu songs")
@@ -354,7 +355,7 @@ def try_fast_command(text):
     if play_match:
         target_song = play_match.group(1).strip()
         if target_song not in ('music', 'song', 'audio', 'sound', 'track', 'media', 'it'):
-            ok, msg = windows_tools.play_youtube(target_song)
+            ok, msg, _ = action_broker.execute_action('homie_play_youtube', {'query': target_song}, caller_id=caller_id)
             return True, msg
 
     # 5. Window Placement (e.g. "put this on left", "window right", "maximize")
@@ -365,7 +366,7 @@ def try_fast_command(text):
         (r'\b(center|middle)\b', 'center'),
         (r'\b(minimize|hide window)\b', 'minimize'),
     ]
-    if any(k in t for k in ('window', 'put this', 'snap', 'move this', 'place', 'screen')):
+    if any(k in t for k in ('window', 'put', 'snap', 'move', 'place', 'screen')) and any(re.search(pat, t) for pat, _ in place_patterns):
         for pat, where in place_patterns:
             if re.search(pat, t):
                 app = ""
@@ -373,7 +374,7 @@ def try_fast_command(text):
                     if candidate in t:
                         app = candidate
                         break
-                ok, msg = windows_tools.place_window(app_or_title=app, where=where)
+                ok, msg, _ = action_broker.execute_action('homie_place_window', {'app_name': app, 'position': where}, caller_id=caller_id)
                 return True, msg
 
     # 6. Messaging: WhatsApp & Telegram ("open whatsapp and say hi to Rusman", "open whatsapp and say hi to amma❤️")
@@ -382,32 +383,32 @@ def try_fast_command(text):
     # A. "open <app> and say/send <text> to <recipient>"
     msg_m1 = re.search(r'^(?:open\s+)?(whatsapp|telegram)\s+(?:and\s+|to\s+)?(?:say|send|text|message)\s+(.+?)\s+to\s+(.+)$', clean_msg_text, re.I)
     if msg_m1:
-        ok, res = windows_tools.send_chat_message(msg_m1.group(1), recipient=msg_m1.group(3).strip(), message=msg_m1.group(2).strip())
+        ok, res, _ = action_broker.execute_action('homie_send_chat', {'app': msg_m1.group(1), 'recipient': msg_m1.group(3).strip(), 'message': msg_m1.group(2).strip()}, caller_id=caller_id)
         return True, res
 
     # B. "open <app> and say/send [to] <recipient> <text>"
     msg_m2 = re.search(r'^(?:open\s+)?(whatsapp|telegram)\s+(?:and\s+|to\s+)?(?:say|send|text|message)\s+(?:to\s+)?([a-zA-Z0-9_\u0080-\uffff]+)\s+(.+)$', clean_msg_text, re.I)
     if msg_m2:
-        ok, res = windows_tools.send_chat_message(msg_m2.group(1), recipient=msg_m2.group(2).strip(), message=msg_m2.group(3).strip())
+        ok, res, _ = action_broker.execute_action('homie_send_chat', {'app': msg_m2.group(1), 'recipient': msg_m2.group(2).strip(), 'message': msg_m2.group(3).strip()}, caller_id=caller_id)
         return True, res
 
     # C. "say/send <text> to <recipient> on <app>"
     msg_m3 = re.search(r'^(?:say|send|text|message)\s+(.+?)\s+to\s+(.+?)\s+(?:on|via|in)\s+(whatsapp|telegram)$', clean_msg_text, re.I)
     if msg_m3:
-        ok, res = windows_tools.send_chat_message(msg_m3.group(3), recipient=msg_m3.group(2).strip(), message=msg_m3.group(1).strip())
+        ok, res, _ = action_broker.execute_action('homie_send_chat', {'app': msg_m3.group(3), 'recipient': msg_m3.group(2).strip(), 'message': msg_m3.group(1).strip()}, caller_id=caller_id)
         return True, res
 
     # D. "open <app> and say/type/send <text>" (active chat)
     msg_m4 = re.search(r'^(?:open\s+)?(whatsapp|telegram)\s+(?:and\s+|to\s+)?(?:say|type|send)\s+(.+)$', clean_msg_text, re.I)
     if msg_m4:
-        ok, res = windows_tools.send_chat_message(msg_m4.group(1), recipient="", message=msg_m4.group(2).strip())
+        ok, res, _ = action_broker.execute_action('homie_send_chat', {'app': msg_m4.group(1), 'recipient': '', 'message': msg_m4.group(2).strip()}, caller_id=caller_id)
         return True, res
 
     # 7. Close App ("close whatsapp", "close notepad", "exit chrome")
     close_m = re.match(r'^(?:close|quit|kill|exit)\s+([a-zA-Z0-9\s._-]+)$', t)
     if close_m:
         target = close_m.group(1).strip()
-        ok, msg = windows_tools.close_app(target)
+        ok, msg, _ = action_broker.execute_action('homie_close_app', {'app_name': target}, caller_id=caller_id)
         return True, msg
 
     # 8. PC Vitals ("pc status", "system status", "vitals", "how is my pc", "is my pc ok")
@@ -438,7 +439,7 @@ def try_fast_command(text):
     if clip_set_m and 'to clipboard' in t:
         text_to_copy = re.sub(r'\s+to\s+clipboard.*$', '', clip_set_m.group(1)).strip()
         if text_to_copy:
-            ok, msg = windows_tools.set_clipboard_text(text_to_copy)
+            ok, msg, _ = action_broker.execute_action('homie_set_clipboard', {'text': text_to_copy}, caller_id=caller_id)
             return True, f"📋 {msg}"
 
     # 10. Workflow Macros
@@ -530,7 +531,12 @@ def try_fast_command(text):
             return True, f"⚠️ {res}"
         return True, res['summary']
 
-    # 18. Workspace Layout Presets
+    # 18. Assistant Timeline Summary ("what did i miss", "timeline summary", "catch me up")
+    if re.search(r'\b(what\s+did\s+i\s+miss|catch\s+me\s+up|timeline\s+summary|assistant\s+timeline)\b', t):
+        import assistant_timeline
+        return True, assistant_timeline.get_what_did_i_miss_summary(lookback_hours=4)
+
+    # 19. Workspace Layout Presets
     ws_save_m = re.match(r'^(?:save\s+workspace\s+(?:as\s+)?|save\s+layout\s+(?:as\s+)?)([a-zA-Z0-9_-]+)$', t)
     if ws_save_m:
         import workspace_manager
@@ -569,7 +575,7 @@ def try_fast_command(text):
     if m:
         target = m.group(1).strip()
         if target not in ('the', 'a', 'this', 'that', 'it'):
-            ok, msg = windows_tools.launch_app(target)
+            ok, msg, _ = action_broker.execute_action('homie_launch_app', {'app_name': target}, caller_id=caller_id)
             if ok:
                 return True, msg
             else:

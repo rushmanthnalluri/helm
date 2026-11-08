@@ -1,11 +1,10 @@
-"""Homie Cryptographic Vault (Batch 21 Hardened).
+"""Homie Cryptographic Vault (Production Hardened AEAD).
 Provides authenticated encryption for sensitive at-rest data (screen memory, tokens, credentials)
-with domain-separated subkeys, version byte encapsulation, and strict 256-bit key length checks:
-- Authenticated CTR-mode stream cipher via HMAC-SHA256
-- Explicit Format Version Byte (0x01)
-- HKDF-SHA256 Domain Subkey Separation (storage, audit, session, actuator)
-- 16-byte cryptographically secure random IV per encryption
-- HMAC-SHA256 authentication tag over (Version + IV + Context + Ciphertext) to defeat bit-flipping
+with domain-separated subkeys, Windows DPAPI key protection, and strict 256-bit key length checks:
+- Standard AEAD: AES-256-GCM (via pycryptodome) with 12-byte random nonces and 16-byte authentication tags
+- Backward-compatible decryption for V1 (HMAC-CTR) and legacy tokens
+- Windows DPAPI (CryptProtectData / CryptUnprotectData) master key storage failing closed
+- HKDF-SHA256 Domain Subkey Separation (storage, audit, session, actuator, tokens)
 - Minimum 32-byte (256-bit) key length validation
 """
 
@@ -16,12 +15,14 @@ import hashlib
 import hmac
 import secrets
 from typing import Optional, Union, Tuple
+from Crypto.Cipher import AES
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 VAULT_VERSION_V1 = 0x01
+VAULT_VERSION_V2 = 0x02
 MIN_KEY_LENGTH_BYTES = 32
 
 _KEY_CACHE = None
@@ -71,7 +72,8 @@ def derive_subkey(domain: str, master_key: Optional[bytes] = None, length: int =
 
 
 def get_vault_key() -> bytes:
-    """Retrieves or derives a persistent local vault key anchored to machine entropy."""
+    """Retrieves or derives a persistent local vault key anchored to machine entropy via Windows DPAPI.
+    Fails closed if secure key retrieval or generation fails."""
     global _KEY_CACHE
     if _KEY_CACHE and len(_KEY_CACHE) >= MIN_KEY_LENGTH_BYTES:
         return _KEY_CACHE
@@ -81,26 +83,59 @@ def get_vault_key() -> bytes:
         try:
             with open(key_file, "rb") as f:
                 raw = f.read()
+
+            if sys.platform == "win32":
+                try:
+                    import win32crypt
+                    unprotected = win32crypt.CryptUnprotectData(raw, None, None, None, 0)[1]
+                    if len(unprotected) >= MIN_KEY_LENGTH_BYTES:
+                        _KEY_CACHE = unprotected
+                        return _KEY_CACHE
+                except Exception:
+                    # Legacy raw key on disk -> migrate to DPAPI protection
+                    if len(raw) >= MIN_KEY_LENGTH_BYTES:
+                        try:
+                            import win32crypt
+                            protected = win32crypt.CryptProtectData(raw, "homie_vault_master_key", None, None, None, 0)
+                            with open(key_file, "wb") as wf:
+                                wf.write(protected)
+                        except Exception:
+                            pass
+                        _KEY_CACHE = raw
+                        return _KEY_CACHE
+            else:
                 if len(raw) >= MIN_KEY_LENGTH_BYTES:
                     _KEY_CACHE = raw
                     return _KEY_CACHE
+        except Exception as e:
+            raise RuntimeError(f"Cryptographic Vault Error: Failed reading vault key file {key_file}: {e}")
+
+    # Generate fresh 32-byte master key and protect with Windows DPAPI
+    new_key = secrets.token_bytes(32)
+    try:
+        to_write = new_key
+        if sys.platform == "win32":
+            import win32crypt
+            to_write = win32crypt.CryptProtectData(new_key, "homie_vault_master_key", None, None, None, 0)
+
+        with open(key_file, "wb") as f:
+            f.write(to_write)
+
+        try:
+            import homie_confinement
+            homie_confinement.harden_path(key_file)
         except Exception:
             pass
 
-    # Generate fresh 32-byte master key
-    new_key = secrets.token_bytes(32)
-    try:
-        with open(key_file, "wb") as f:
-            f.write(new_key)
         _KEY_CACHE = new_key
-    except Exception:
-        _KEY_CACHE = hashlib.sha256(b"homie_default_fallback_secret_key_32b_fixed").digest()
-
-    return _KEY_CACHE
+        return _KEY_CACHE
+    except Exception as e:
+        # FAIL CLOSED: Never fall back to source-known fixed keys
+        raise RuntimeError(f"Cryptographic Vault Error: Failed to securely initialize DPAPI-protected vault master key: {e}")
 
 
 def _derive_keystream(key: bytes, iv: bytes, length: int) -> bytes:
-    """Generates a keystream of required length using HMAC-SHA256 in counter mode."""
+    """Generates a keystream of required length using HMAC-SHA256 in counter mode (for V1 backwards compatibility)."""
     keystream = bytearray()
     counter = 0
     while len(keystream) < length:
@@ -111,9 +146,14 @@ def _derive_keystream(key: bytes, iv: bytes, length: int) -> bytes:
     return bytes(keystream[:length])
 
 
-def encrypt(plaintext: Union[str, bytes], key: Optional[bytes] = None, context: Optional[str] = None, domain: str = "storage") -> Optional[str]:
-    """Encrypts a plaintext string and returns a self-contained authenticated token.
-    Payload format: [Version (1 byte: 0x01)] + [IV (16 bytes)] + [Tag (32 bytes)] + [Ciphertext].
+def encrypt(
+    plaintext: Union[str, bytes],
+    key: Optional[bytes] = None,
+    context: Optional[str] = None,
+    domain: str = "storage"
+) -> Optional[str]:
+    """Encrypts a plaintext string and returns a self-contained authenticated token using AES-256-GCM (AEAD).
+    Payload format: [Version (1 byte: 0x02)] + [Nonce (12 bytes)] + [Tag (16 bytes)] + [Ciphertext].
     Supports domain separation ('storage', 'audit', 'session', 'actuator') and Associated Authenticated Data (context).
     """
     if plaintext is None:
@@ -127,30 +167,30 @@ def encrypt(plaintext: Union[str, bytes], key: Optional[bytes] = None, context: 
     validate_key_length(base_k)
     k = derive_subkey(domain, base_k)
 
-    iv = secrets.token_bytes(16)
-    keystream = _derive_keystream(k, iv, len(data))
-    
-    # XOR plaintext with keystream
-    ciphertext = bytes(a ^ b for a, b in zip(data, keystream))
-    
-    # Compute authentication tag over (Version + IV + Context + Ciphertext)
-    version_byte = bytes([VAULT_VERSION_V1])
+    nonce = secrets.token_bytes(12)
+    cipher = AES.new(k, AES.MODE_GCM, nonce=nonce)
     ctx_bytes = (str(context).encode("utf-8") if context is not None else b"")
-    tag = hmac.new(k, version_byte + iv + ctx_bytes + ciphertext, hashlib.sha256).digest()
-    
-    # Payload format: Version (1) + IV (16) + Tag (32) + Ciphertext
-    payload = version_byte + iv + tag + ciphertext
+    if ctx_bytes:
+        cipher.update(ctx_bytes)
+    ciphertext, tag = cipher.encrypt_and_digest(data)
+
+    payload = bytes([VAULT_VERSION_V2]) + nonce + tag + ciphertext
     return "vault:" + base64.urlsafe_b64encode(payload).decode("ascii")
 
 
-def decrypt(token: Optional[str], key: Optional[bytes] = None, context: Optional[str] = None, domain: str = "storage") -> Optional[str]:
-    """Decrypts a vault token string after verifying HMAC authenticity against key, domain, and context.
-    Supports both V1 format (with 0x01 version byte) and legacy format gracefully.
+def decrypt(
+    token: Optional[str],
+    key: Optional[bytes] = None,
+    context: Optional[str] = None,
+    domain: str = "storage"
+) -> Optional[str]:
+    """Decrypts a vault token string after verifying AES-GCM (V2) or HMAC authenticity (V1/legacy).
+    Fails closed on tampering or context mismatch.
     """
     if token is None:
         return None
     if not isinstance(token, str) or not token.startswith("vault:"):
-        return token  # Return unencrypted raw strings transparently
+        return token
 
     raw_b64 = token[len("vault:"):]
     try:
@@ -161,17 +201,30 @@ def decrypt(token: Optional[str], key: Optional[bytes] = None, context: Optional
     base_k = key if key is not None else get_vault_key()
     validate_key_length(base_k)
     k = derive_subkey(domain, base_k)
+    ctx_bytes = (str(context).encode("utf-8") if context is not None else b"")
 
-    # Check for V1 format (starts with version byte 0x01)
-    if len(payload) >= 49 and payload[0] == VAULT_VERSION_V1:
+    # V2 format: Standard AES-256-GCM AEAD
+    if len(payload) >= 29 and payload[0] == VAULT_VERSION_V2:
+        nonce = payload[1:13]
+        tag = payload[13:29]
+        ciphertext = payload[29:]
+        try:
+            cipher = AES.new(k, AES.MODE_GCM, nonce=nonce)
+            if ctx_bytes:
+                cipher.update(ctx_bytes)
+            plaintext_bytes = cipher.decrypt_and_verify(ciphertext, tag)
+            return plaintext_bytes.decode("utf-8", errors="replace")
+        except Exception as e:
+            raise ValueError(f"Tampering detected: AES-GCM tag verification failed (or context mismatch): {e}")
+
+    # V1 format: HMAC-CTR format
+    elif len(payload) >= 49 and payload[0] == VAULT_VERSION_V1:
         version_byte = bytes([payload[0]])
         iv = payload[1:17]
         expected_tag = payload[17:49]
         ciphertext = payload[49:]
 
-        ctx_bytes = (str(context).encode("utf-8") if context is not None else b"")
         computed_tag = hmac.new(k, version_byte + iv + ctx_bytes + ciphertext, hashlib.sha256).digest()
-
         if not hmac.compare_digest(computed_tag, expected_tag):
             raise ValueError("Tampering detected: HMAC authentication tag does not match (or domain/context mismatch)")
 
@@ -179,15 +232,13 @@ def decrypt(token: Optional[str], key: Optional[bytes] = None, context: Optional
         plaintext_bytes = bytes(a ^ b for a, b in zip(ciphertext, keystream))
         return plaintext_bytes.decode("utf-8", errors="replace")
 
+    # Legacy fallback (without version byte)
     elif len(payload) >= 48:
-        # Legacy fallback (without version byte)
         iv = payload[:16]
         expected_tag = payload[16:48]
         ciphertext = payload[48:]
 
-        # Try with domain subkey first, fallback to base key for backward compatibility
         for trial_k in [k, base_k]:
-            ctx_bytes = (str(context).encode("utf-8") if context is not None else b"")
             computed_tag = hmac.new(trial_k, iv + ctx_bytes + ciphertext, hashlib.sha256).digest()
             if hmac.compare_digest(computed_tag, expected_tag):
                 keystream = _derive_keystream(trial_k, iv, len(ciphertext))
@@ -197,4 +248,4 @@ def decrypt(token: Optional[str], key: Optional[bytes] = None, context: Optional
         raise ValueError("Tampering detected: HMAC authentication tag does not match legacy payload")
 
     else:
-        raise ValueError("Corrupted vault token: insufficient length for IV and auth tag")
+        raise ValueError("Corrupted vault token: insufficient length for IV/nonce and auth tag")

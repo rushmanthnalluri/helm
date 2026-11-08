@@ -248,3 +248,12 @@ def format_audit_report(limit=10):
         icon = tier_icons.get(a["tier"], "⚙️")
         lines.append(f"• [{a['time_str']}] {icon} **{a['tool']}** by `{a['caller']}` ({a['decision']})\n  ↳ `{a['args']}` `[{a['hash_prefix']}]`")
     return "\n".join(lines)
+
+def query_audit_entries(limit=15):
+    """Queries recent audit entries with standardized dictionary keys."""
+    items = get_recent_agent_actions(limit=limit)
+    for it in items:
+        it["caller_id"] = it.get("caller")
+        it["tool_name"] = it.get("tool")
+    return items
+

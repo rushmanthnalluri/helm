@@ -174,6 +174,113 @@ MCP_TOOLS = [
             },
             "required": ["text"]
         }
+    },
+    {
+        "name": "homie_play_youtube",
+        "description": "Plays music, videos, or songs on YouTube in the browser.",
+        "capabilityTier": "WRITE_EXEC",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "homie_place_window",
+        "description": "Positions, docks, or snaps windows on the desktop (left, right, full, center, etc.).",
+        "capabilityTier": "WRITE_EXEC",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "app_name": {"type": "string"},
+                "position": {"type": "string"}
+            },
+            "required": ["app_name", "position"]
+        }
+    },
+    {
+        "name": "homie_control_media",
+        "description": "Controls Windows media playback (play, pause, next, prev, mute, volup, voldown).",
+        "capabilityTier": "WRITE_EXEC",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"action": {"type": "string"}},
+            "required": ["action"]
+        }
+    },
+    {
+        "name": "homie_send_chat",
+        "description": "Sends messages on WhatsApp, Slack, Telegram, or Discord.",
+        "capabilityTier": "ELEVATED_CONFIRM",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "app": {"type": "string"},
+                "recipient": {"type": "string"},
+                "message": {"type": "string"}
+            },
+            "required": ["message"]
+        }
+    },
+    {
+        "name": "homie_close_app",
+        "description": "Terminates or closes an application window by title or process name.",
+        "capabilityTier": "WRITE_EXEC",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"app_name": {"type": "string"}},
+            "required": ["app_name"]
+        }
+    },
+    {
+        "name": "homie_list_downloads",
+        "description": "Lists recent files in the Windows Downloads directory.",
+        "capabilityTier": "READ_ONLY",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"limit": {"type": "integer"}},
+            "required": []
+        }
+    },
+    {
+        "name": "homie_get_top_processes",
+        "description": "Returns top resource-consuming processes by CPU and memory.",
+        "capabilityTier": "READ_ONLY",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"limit": {"type": "integer"}},
+            "required": []
+        }
+    },
+    {
+        "name": "homie_remote_trackpad",
+        "description": "Controls mouse move, click, scroll, and key actions from phone remote.",
+        "capabilityTier": "WRITE_EXEC",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"action": {"type": "string"}},
+            "required": ["action"]
+        }
+    },
+    {
+        "name": "homie_assistant_timeline",
+        "description": "Retrieves the unified assistant timeline and 'what did I miss?' summary.",
+        "capabilityTier": "READ_ONLY",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"hours": {"type": "integer"}},
+            "required": []
+        }
+    },
+    {
+        "name": "homie_safe_command",
+        "description": "Executes an approved, safe Windows command.",
+        "capabilityTier": "WRITE_EXEC",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"]
+        }
     }
 ]
 
@@ -246,16 +353,18 @@ def execute_mcp_tool(name, arguments, caller_id="mcp_client", client_token=None)
         return output
 
     # Taint Tracking Gate: Blocks write tools if caller session has ingested untrusted content
-    import taint_tracker
-    allowed, requires_step_up, reason = taint_tracker.check_action_privilege(caller_id, tier, name, arguments)
-    if not allowed:
-        decision = "DENY_TAINT_STEP_UP_REQUIRED" if requires_step_up else "DENY_PRIVILEGE"
-        output = f"Security Gate: {reason}"
-        try:
-            agent_audit_ledger.record_agent_action(caller_id, name, tier, arguments, decision=decision)
-        except Exception:
-            pass
-        return output
+    # If executed under a verified supervisor INTENT token, taint gate has already been mediated
+    if not _ACTIVE_SUPERVISOR_INTENT_TOKEN:
+        import taint_tracker
+        allowed, requires_step_up, reason = taint_tracker.check_action_privilege(caller_id, tier, name, arguments)
+        if not allowed:
+            decision = "DENY_TAINT_STEP_UP_REQUIRED" if requires_step_up else "DENY_PRIVILEGE"
+            output = f"Security Gate: {reason}"
+            try:
+                agent_audit_ledger.record_agent_action(caller_id, name, tier, arguments, decision=decision)
+            except Exception:
+                pass
+            return output
 
     # Multi-Channel Canary Gate: Scans egress arguments for canary leak attempts
     import canary_monitor
@@ -419,6 +528,68 @@ def execute_mcp_tool(name, arguments, caller_id="mcp_client", client_token=None)
                 pyperclip.copy(txt)
                 pyautogui.hotkey("ctrl", "v")
                 output = f"Agent typed {len(txt)} chars into '{elem_name}'"
+
+        elif name in ("homie_play_youtube", "play_youtube"):
+            q = arguments.get("query", "")
+            ok, msg = windows_tools.play_youtube(q)
+            output = msg
+
+        elif name in ("homie_place_window", "place_window"):
+            app = arguments.get("app_name", "") or arguments.get("app_or_title", "")
+            where = arguments.get("position", "") or arguments.get("where", "full")
+            ok, msg = windows_tools.place_window(app, where)
+            output = msg
+
+        elif name in ("homie_control_media", "control_media"):
+            act = arguments.get("action", "play_pause")
+            ok, msg = windows_tools.control_media(act)
+            output = msg
+
+        elif name in ("homie_send_chat", "send_chat_message"):
+            app = arguments.get("app", "whatsapp")
+            rec = arguments.get("recipient", "")
+            msg = arguments.get("message", "")
+            ok, res = windows_tools.send_chat_message(app, recipient=rec, message=msg)
+            output = res
+
+        elif name in ("homie_close_app", "close_app"):
+            app = arguments.get("app_name", "") or arguments.get("target", "")
+            ok, msg = windows_tools.close_app(app)
+            output = msg
+
+        elif name in ("homie_list_downloads", "list_downloads"):
+            lim = int(arguments.get("limit", 10))
+            items = windows_tools.list_downloads(limit=lim)
+            output = json.dumps(items, indent=2)
+
+        elif name in ("homie_get_top_processes", "get_top_processes"):
+            lim = int(arguments.get("limit", 5))
+            procs = windows_tools.get_top_processes(limit=lim)
+            output = json.dumps(procs, indent=2)
+
+        elif name in ("homie_remote_trackpad", "remote_trackpad"):
+            action = arguments.get("action", "")
+            import pyautogui
+            pyautogui.FAILSAFE = False
+            if action == "move":
+                pyautogui.moveRel(int(arguments.get("dx", 0)), int(arguments.get("dy", 0)))
+            elif action == "click":
+                pyautogui.click(button=arguments.get("button", "left"))
+            elif action == "scroll":
+                pyautogui.scroll(int(arguments.get("dy", 0)))
+            elif action == "key":
+                pyautogui.press(arguments.get("key", ""))
+            output = f"Trackpad action '{action}' executed"
+
+        elif name in ("homie_assistant_timeline", "assistant_timeline"):
+            import assistant_timeline
+            h = int(arguments.get("hours", 4))
+            output = assistant_timeline.get_what_did_i_miss_summary(lookback_hours=h)
+
+        elif name in ("homie_safe_command", "execute_safe_command"):
+            cmd = arguments.get("command", "")
+            ok, msg = windows_tools.execute_safe_command(cmd)
+            output = msg
 
         else:
             decision = "DENY_UNKNOWN"
