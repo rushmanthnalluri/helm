@@ -880,3 +880,65 @@ def execute_safe_command(command, timeout=20):
         return False, f"Command timed out after {timeout} seconds."
     except Exception as e:
         return False, f"Execution failed: {e}"
+
+PROTECTED_PROCESS_NAMES = {
+    'winlogon.exe', 'csrss.exe', 'wininit.exe', 'services.exe', 'lsass.exe',
+    'explorer.exe', 'smss.exe', 'svchost.exe', 'system', 'registry', 'fontdrvhost.exe'
+}
+
+def get_top_processes(sort_by="memory", limit=8):
+    """Retrieves top resource-consuming processes on Windows."""
+    import psutil
+    proc_list = []
+    for proc in psutil.process_iter(['pid', 'name', 'memory_percent', 'cpu_percent', 'memory_info']):
+        try:
+            info = proc.info
+            mem_pct = info.get('memory_percent') or 0.0
+            cpu_pct = info.get('cpu_percent') or 0.0
+            mem_info = info.get('memory_info')
+            mem_mb = round(mem_info.rss / (1024 * 1024), 1) if mem_info else 0.0
+            proc_list.append({
+                'pid': info['pid'],
+                'name': info.get('name') or 'unknown',
+                'mem_pct': round(mem_pct, 1),
+                'mem_mb': mem_mb,
+                'cpu_pct': round(cpu_pct, 1)
+            })
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    sort_key = 'mem_pct' if sort_by == 'memory' else 'cpu_pct'
+    proc_list.sort(key=lambda p: p[sort_key], reverse=True)
+    return proc_list[:limit]
+
+def kill_process_by_pid(pid):
+    """Safely terminates a process by PID with OS protected process guardrails."""
+    import psutil
+    try:
+        proc = psutil.Process(int(pid))
+        pname = proc.name().lower()
+        if pname in PROTECTED_PROCESS_NAMES:
+            return False, f"Blocked: '{pname}' is a critical Windows system process and cannot be terminated."
+        proc.terminate()
+        return True, f"Terminated process '{pname}' (PID {pid})."
+    except psutil.NoSuchProcess:
+        return False, f"No running process found with PID {pid}."
+    except psutil.AccessDenied:
+        return False, f"Access denied terminating process PID {pid} (requires elevation)."
+    except Exception as e:
+        return False, f"Failed to terminate PID {pid}: {e}"
+
+def get_idle_seconds():
+    """Returns the number of seconds the user has been idle (no keyboard/mouse input)."""
+    import ctypes
+    from ctypes import wintypes
+    class LASTINPUTINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.UINT), ("dwTime", wintypes.DWORD)]
+
+    lii = LASTINPUTINFO()
+    lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
+    if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
+        tick_count = ctypes.windll.kernel32.GetTickCount()
+        idle_ms = max(0, tick_count - lii.dwTime)
+        return round(idle_ms / 1000.0, 1)
+    return 0.0

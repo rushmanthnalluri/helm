@@ -151,7 +151,11 @@ class TelegramBridge:
                     {"text": "📁 Downloads", "callback_data": "action_downloads"}
                 ],
                 [
-                    {"text": "🔒 Lock PC", "callback_data": "action_lock"},
+                    {"text": "📊 Top Tasks", "callback_data": "action_top"},
+                    {"text": "⏰ Timer 5m", "callback_data": "action_timer_5m"},
+                    {"text": "🔒 Lock PC", "callback_data": "action_lock"}
+                ],
+                [
                     {"text": "📜 Run Macro...", "callback_data": "action_macro_list"}
                 ]
             ]
@@ -209,6 +213,28 @@ class TelegramBridge:
                 return self._api_call('sendDocument', data=data, files=files, timeout=60)
         except Exception as e:
             return self.send_message(chat_id, f"Failed to send file: {e}")
+
+    def send_voice(self, chat_id, audio_path, caption=None):
+        """Sends a spoken voice note or audio reply to Telegram."""
+        if not os.path.exists(audio_path):
+            return None
+        try:
+            with open(audio_path, 'rb') as f:
+                data = {'chat_id': chat_id}
+                if caption:
+                    data['caption'] = caption
+                files = {'voice': f}
+                res = self._api_call('sendVoice', data=data, files=files, timeout=30)
+                if not res:
+                    f.seek(0)
+                    files = {'audio': f}
+                    data['title'] = 'Homie Spoken Reply'
+                    data['performer'] = 'Homie'
+                    res = self._api_call('sendAudio', data=data, files=files, timeout=30)
+                return res
+        except Exception as e:
+            print(f"[Telegram] Failed to send voice message: {e}")
+            return None
 
     def handle_callback(self, chat_id, callback_query_id, data):
         """Handles interactive inline keyboard button clicks."""
@@ -277,6 +303,12 @@ class TelegramBridge:
                 items = "\n".join(f"• `{d['name']}` ({d['size_mb']} MB, {d['mtime']})" for d in dl)
                 self.send_message(chat_id, f"📁 **Recent Downloads**:\n{items}")
 
+        elif data == 'action_top':
+            self.handle_command(chat_id, '/top')
+
+        elif data == 'action_timer_5m':
+            self.handle_command(chat_id, '/timer 5m Timer finished!')
+
         elif data == 'action_lock':
             import ctypes
             ctypes.windll.user32.LockWorkStation()
@@ -295,6 +327,10 @@ class TelegramBridge:
             ok, msg = homie.execute_macro(macro_name)
             self.send_message(chat_id, f"📜 {msg}")
 
+        elif data.startswith('kill_pid_'):
+            pid = data[9:]
+            self.request_confirmation(chat_id, f"Terminate process PID {pid}", "kill_pid", pid)
+
         elif data.startswith('confirm_action_'):
             action_id = data[15:]
             item = self.pending_actions.pop(action_id, None)
@@ -308,6 +344,9 @@ class TelegramBridge:
             payload = item['payload']
             if act == 'close_app':
                 ok, msg = windows_tools.close_app(payload)
+                self.send_message(chat_id, f"🛑 {msg}")
+            elif act == 'kill_pid':
+                ok, msg = windows_tools.kill_process_by_pid(payload)
                 self.send_message(chat_id, f"🛑 {msg}")
             elif act == 'run_cmd':
                 ok, out = windows_tools.execute_safe_command(payload)
@@ -358,6 +397,33 @@ class TelegramBridge:
             except Exception:
                 pass
             time.sleep(45)
+
+    def _reminder_monitor_worker(self):
+        """Background daemon checking for due reminders and timers."""
+        import reminder_scheduler
+        while self.running:
+            try:
+                due = reminder_scheduler.get_due_reminders()
+                for it in due:
+                    reminder_scheduler.mark_reminder_fired(it['id'])
+                    cid = it['chat_id']
+                    msg = f"⏰ **Timer / Reminder Alert**:\n\n{it['message']}"
+                    self.send_message(cid, msg)
+
+                    # If voice replies are enabled, synthesize audio alert
+                    if self.prefs.get('voiceReplies', False):
+                        try:
+                            import voice
+                            tmp_wav = os.path.join(tempfile.gettempdir(), f"reminder_{it['id']}.wav")
+                            voice.synthesize_speech_to_wav(f"Reminder: {it['message']}", tmp_wav)
+                            self.send_voice(cid, tmp_wav)
+                            if os.path.exists(tmp_wav):
+                                os.remove(tmp_wav)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            time.sleep(3)
 
     def download_file(self, file_id, dest_path):
         """Downloads a voice or media file from Telegram servers."""
@@ -516,6 +582,80 @@ class TelegramBridge:
                 return
             ok, msg = windows_tools.close_app(target)
             self.send_message(chat_id, f"🛑 {msg}")
+            return
+
+        if cmd in ('/top', '/ps', '/processes'):
+            procs = windows_tools.get_top_processes(sort_by='memory', limit=8)
+            if not procs:
+                self.send_message(chat_id, "No process metrics available.")
+                return
+            lines = ["📊 **Top Resource Consumers (by RAM)**:\n"]
+            buttons = []
+            for p in procs:
+                lines.append(f"• `{p['name']}` (PID {p['pid']}): {p['mem_pct']}% ({p['mem_mb']} MB) | CPU: {p['cpu_pct']}%")
+                if p['name'].lower() not in windows_tools.PROTECTED_PROCESS_NAMES:
+                    buttons.append([{"text": f"🛑 Kill {p['name']} ({p['pid']})", "callback_data": f"kill_pid_{p['pid']}"}])
+            keyboard = {"inline_keyboard": buttons[:5]} if buttons else None
+            self.send_message(chat_id, "\n".join(lines), reply_markup=keyboard)
+            return
+
+        if cmd in ('/remind', '/timer'):
+            if not args:
+                self.send_message(chat_id, "Usage: `/remind <10m|1h|30s> <message>` (e.g. `/remind 10m check laundry`)")
+                return
+            dur = args[0]
+            remind_msg = " ".join(args[1:]) if len(args) > 1 else "Timer finished!"
+            try:
+                import reminder_scheduler
+                reminder_scheduler.add_reminder(chat_id, dur, remind_msg)
+                self.send_message(chat_id, f"⏰ **Timer Set**!\nI will alert you in **{dur}**: \"{remind_msg}\"")
+            except Exception as e:
+                self.send_message(chat_id, f"Failed to set reminder: {e}")
+            return
+
+        if cmd in ('/reminders', '/timers'):
+            import reminder_scheduler
+            active = reminder_scheduler.list_active_reminders(chat_id)
+            if not active:
+                self.send_message(chat_id, "⏰ No active timers. Set one with `/remind 10m <message>`.")
+            else:
+                lines = ["⏰ **Active Scheduled Reminders**:"]
+                for a in active:
+                    rem_sec = max(0, int(a['fire_at'] - time.time()))
+                    rem_min = round(rem_sec / 60, 1)
+                    lines.append(f"• \"{a['message']}\" (in {rem_min} min)")
+                self.send_message(chat_id, "\n".join(lines))
+            return
+
+        if cmd in ('/speak', '/tts'):
+            text_to_speak = " ".join(args).strip()
+            if not text_to_speak:
+                self.send_message(chat_id, "Usage: `/speak <text to synthesize>`")
+                return
+            try:
+                import voice
+                tmp_wav = os.path.join(tempfile.gettempdir(), f"speak_{int(time.time())}.wav")
+                voice.synthesize_speech_to_wav(text_to_speak, tmp_wav)
+                self.send_voice(chat_id, tmp_wav, caption=f"🗣️ \"{text_to_speak[:100]}\"")
+                if os.path.exists(tmp_wav):
+                    os.remove(tmp_wav)
+            except Exception as e:
+                self.send_message(chat_id, f"TTS synthesis error: {e}")
+            return
+
+        if cmd == '/voicereply':
+            arg = args[0].lower() if args else ""
+            if arg in ('on', 'enable', 'true'):
+                self.prefs['voiceReplies'] = True
+                homie.save_pref('voiceReplies', True)
+                self.send_message(chat_id, "🎙️ Voice replies enabled! Homie will speak back.")
+            elif arg in ('off', 'disable', 'false'):
+                self.prefs['voiceReplies'] = False
+                homie.save_pref('voiceReplies', False)
+                self.send_message(chat_id, "🔇 Voice replies disabled (text only).")
+            else:
+                curr = "ON" if self.prefs.get('voiceReplies', False) else "OFF"
+                self.send_message(chat_id, f"Voice replies are currently **{curr}**. Use `/voicereply on` or `/voicereply off`.")
             return
 
         if cmd in ('/status', '/pc', '/vitals', '/health'):
@@ -863,6 +1003,8 @@ class TelegramBridge:
 
         # Start proactive vitals monitoring in background
         threading.Thread(target=self._vitals_monitor_worker, daemon=True).start()
+        # Start reminders and timers monitor in background
+        threading.Thread(target=self._reminder_monitor_worker, daemon=True).start()
         return True
 
     def stop(self):
