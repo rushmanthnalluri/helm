@@ -268,7 +268,38 @@ def try_fast_command(text):
         )
         return True, msg
 
-    # 9. Quick App / Website Launch (e.g. "open notepad", "launch chrome", "open spotify", "open github")
+    # 9. Clipboard Inspection & Setting
+    if re.search(r'\b(what\'?s?\s+in\s+my\s+clipboard|read\s+clipboard|get\s+clipboard|clipboard\s+content|^clipboard$)\b', t):
+        clip = windows_tools.get_clipboard_text()
+        if clip:
+            return True, f"📋 **PC Clipboard**:\n```\n{clip[:1000]}\n```"
+        return True, "📋 Clipboard is currently empty."
+
+    clip_set_m = re.match(r'^(?:copy|set\s+clipboard)\s+(?:this\s+)?(?:to\s+clipboard\s+)?(.+)$', t)
+    if clip_set_m and 'to clipboard' in t:
+        text_to_copy = re.sub(r'\s+to\s+clipboard.*$', '', clip_set_m.group(1)).strip()
+        if text_to_copy:
+            ok, msg = windows_tools.set_clipboard_text(text_to_copy)
+            return True, f"📋 {msg}"
+
+    # 10. Recent Downloads
+    if re.search(r'\b(recent\s+downloads|my\s+downloads|show\s+downloads|^downloads$)\b', t):
+        dl = windows_tools.list_downloads(limit=8)
+        if not dl:
+            return True, "📁 Downloads folder is empty."
+        items = "\n".join(f"• `{d['name']}` ({d['size_mb']} MB, {d['mtime']})" for d in dl)
+        return True, f"📁 **Recent Downloads**:\n{items}"
+
+    # 11. Screen Inspection ("what's on my screen", "inspect screen", "look at my screen")
+    if re.search(r'\b(what\'?s?\s+on\s+my\s+screen|inspect\s+(?:my\s+)?screen|look\s+at\s+(?:my\s+)?screen|describe\s+(?:my\s+)?screen|read\s+(?:my\s+)?screen)\b', t):
+        screens = windows_tools.capture_screens()
+        if screens and os.path.exists(screens[0]):
+            import ai_engine
+            analysis = ai_engine.run_gemini_vision("Describe what is shown on this screen, noting any open windows, applications, errors, or active tasks.", screens[0])
+            return True, f"🖥️ **Screen Analysis**:\n{analysis}"
+        return True, "Could not capture display for screen analysis."
+
+    # 12. Quick App / Website Launch (e.g. "open notepad", "launch chrome", "open spotify", "open github")
     m = re.match(r'^(?:open|launch|start|run)\s+([a-zA-Z0-9\s._-]+)$', t)
     if m:
         target = m.group(1).strip()

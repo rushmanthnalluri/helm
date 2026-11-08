@@ -131,6 +131,20 @@ class TelegramBridge:
         except Exception as e:
             return self.send_message(chat_id, f"Failed to send image: {e}")
 
+    def send_document(self, chat_id, file_path, caption=None):
+        """Sends a file document to the Telegram chat."""
+        if not os.path.exists(file_path):
+            return self.send_message(chat_id, f"File not found: {file_path}")
+        try:
+            with open(file_path, 'rb') as f:
+                data = {'chat_id': chat_id}
+                if caption:
+                    data['caption'] = caption
+                files = {'document': f}
+                return self._api_call('sendDocument', data=data, files=files, timeout=60)
+        except Exception as e:
+            return self.send_message(chat_id, f"Failed to send file: {e}")
+
     def download_file(self, file_id, dest_path):
         """Downloads a voice or media file from Telegram servers."""
         file_info = self._api_call('getFile', data={'file_id': file_id})
@@ -174,15 +188,23 @@ class TelegramBridge:
             msg = (
                 "👋 **Hello! I'm Homie on your PC.**\n\n"
                 "You can talk to me like a walkie-talkie or send commands from anywhere:\n\n"
-                "🎙️ **Voice Messages**: Hold Telegram mic button, speak, and release!\n"
-                "📸 `/screen` - Take a live screenshot of your PC\n"
-                "💻 `/status` - Check PC RAM, Disk, Battery, and Uptime\n"
-                "▶️ `/play <song>` - Instantly play music/video on YouTube\n"
+                "🎙️ **Voice Notes**: Hold mic button, speak, and release!\n"
+                "🖼️ **Photos**: Send any photo to analyze with Vision AI\n"
+                "📸 `/screen` - Take live desktop screenshot\n"
+                "👁️ `/inspect <question>` - Screen capture + Vision answer\n"
+                "💻 `/status` - RAM, Disk, Battery, Uptime, Active Window\n"
+                "📋 `/clip [text]` - Read or set PC clipboard\n"
+                "⚡ `/cmd <command>` - Execute safe Windows shell command\n"
+                "📁 `/downloads` - List recent files in Downloads folder\n"
+                "📤 `/get <filename>` - Send file from PC to Telegram\n"
+                "▶️ `/play <song>` - Autoplay YouTube music/video\n"
+                "🎵 `/media <pause|play|next|mute|volup>` - Media control\n"
+                "💬 `/msg <whatsapp|telegram> <contact> <text>` - Send chat\n"
                 "🔒 `/lock` - Lock your Windows PC\n"
-                "🛑 `/close <app>` - Close an app (e.g. `/close whatsapp`)\n"
-                "🪟 `/snap <left|right|full|center>` - Arrange windows\n"
-                "🎵 `/media <pause|play|next|mute>` - Control music\n"
-                "🚀 `/open <app>` - Launch an app (e.g. `/open spotify`)\n"
+                "🛑 `/close <app>` - Close application\n"
+                "🪟 `/snap <left|right|full|center>` - Window placement\n"
+                "🚀 `/open <app>` - Launch application\n"
+                "🧠 `/rules` / `/remember <fact>` - Long-term memory\n\n"
                 "💬 Or just type anything you want me to do or answer!"
             )
             self.send_message(chat_id, msg)
@@ -265,6 +287,119 @@ class TelegramBridge:
             self.send_message(chat_id, f"👤 **Telegram Identity**:\n• Chat ID: `{chat_id}`\n• Authorized Users: `{self.allowed_users}`")
             return
 
+        if cmd in ('/clip', '/clipboard'):
+            if args:
+                to_copy = " ".join(args)
+                ok, msg = windows_tools.set_clipboard_text(to_copy)
+                self.send_message(chat_id, f"📋 {msg}")
+            else:
+                clip = windows_tools.get_clipboard_text()
+                if clip:
+                    self.send_message(chat_id, f"📋 **PC Clipboard**:\n```\n{clip[:3000]}\n```")
+                else:
+                    self.send_message(chat_id, "📋 PC Clipboard is currently empty.")
+            return
+
+        if cmd == '/cmd':
+            command = " ".join(args)
+            if not command:
+                self.send_message(chat_id, "Usage: `/cmd <windows command>` (e.g. `/cmd git status` or `/cmd ipconfig`)")
+                return
+            self.send_message(chat_id, f"⚡ Executing: `{command}`...")
+            ok, out = windows_tools.execute_safe_command(command)
+            prefix = "✓" if ok else "⚠️"
+            self.send_message(chat_id, f"{prefix} **Output**:\n```\n{out}\n```")
+            return
+
+        if cmd == '/get':
+            target = " ".join(args).strip()
+            if not target:
+                self.send_message(chat_id, "Usage: `/get <path_or_filename>` (e.g. `/get notes.txt`)")
+                return
+            resolved_path = None
+            candidates = [
+                target,
+                os.path.join(os.getcwd(), target),
+                os.path.join(os.path.expanduser("~"), "Downloads", target),
+                os.path.join(os.path.expanduser("~"), "Desktop", target),
+                os.path.join(os.path.expanduser("~"), "Documents", target)
+            ]
+            for c in candidates:
+                if os.path.isfile(c):
+                    resolved_path = c
+                    break
+            if resolved_path:
+                self.send_message(chat_id, f"📤 Sending `{os.path.basename(resolved_path)}`...")
+                self.send_document(chat_id, resolved_path, caption=f"📄 {os.path.basename(resolved_path)}")
+            else:
+                self.send_message(chat_id, f"File not found: '{target}' across common folders.")
+            return
+
+        if cmd in ('/downloads', '/dl'):
+            dl = windows_tools.list_downloads(limit=10)
+            if not dl:
+                self.send_message(chat_id, "📁 Downloads folder is empty.")
+                return
+            items = "\n".join(f"• `{d['name']}` ({d['size_mb']} MB, {d['mtime']})" for d in dl)
+            self.send_message(chat_id, f"📁 **Recent PC Downloads**:\n{items}\n\nUse `/get <filename>` to send any file here.")
+            return
+
+        if cmd == '/inspect':
+            question = " ".join(args) or "What is currently on the screen?"
+            self.send_message(chat_id, f"📸 Capturing desktop and analyzing: \"{question}\"...")
+            screens = windows_tools.capture_screens()
+            if screens and os.path.exists(screens[0]):
+                self.send_photo(chat_id, screens[0], caption="🖥️ Current Screen")
+                import ai_engine
+                analysis = ai_engine.run_gemini_vision(question, screens[0])
+                self.send_message(chat_id, f"👁️ **Screen Analysis**:\n\n{analysis}")
+            else:
+                self.send_message(chat_id, "Could not capture screen for analysis.")
+            return
+
+        if cmd in ('/rules', '/memory'):
+            rules = homie.get_rules()
+            if not rules:
+                self.send_message(chat_id, "🧠 No rules stored yet. Use `/remember <rule>` to teach Homie facts or habits.")
+            else:
+                formatted = "\n".join(f"• {r}" for r in rules)
+                self.send_message(chat_id, f"🧠 **Homie Long-Term Memory**:\n{formatted}")
+            return
+
+        if cmd == '/remember':
+            rule = " ".join(args).strip()
+            if not rule:
+                self.send_message(chat_id, "Usage: `/remember <rule or fact>`")
+                return
+            msg = homie.add_rule(rule)
+            self.send_message(chat_id, f"🧠 {msg}")
+            return
+
+        if cmd == '/forget':
+            words = " ".join(args).strip()
+            if not words:
+                self.send_message(chat_id, "Usage: `/forget <words>`")
+                return
+            msg = homie.remove_rule(words)
+            self.send_message(chat_id, f"🧠 {msg}")
+            return
+
+        if cmd in ('/msg', '/say', '/send'):
+            if len(args) < 2:
+                self.send_message(chat_id, "Usage: `/msg <whatsapp|telegram> [recipient] <message>`")
+                return
+            app = args[0].lower()
+            if app not in ('whatsapp', 'telegram'):
+                app = 'whatsapp'
+                recipient = args[0]
+                message = " ".join(args[1:])
+            else:
+                recipient = args[1] if len(args) > 2 else ""
+                message = " ".join(args[2:]) if len(args) > 2 else args[1]
+            ok, res = windows_tools.send_chat_message(app, recipient=recipient, message=message)
+            self.send_message(chat_id, f"💬 {res}")
+            return
+
         # Regular prompt -> Run through Homie
         self.process_homie_task(chat_id, text)
 
@@ -336,6 +471,46 @@ class TelegramBridge:
                 except Exception:
                     pass
 
+    def process_photo_message(self, chat_id, photo_file_id, caption=""):
+        """Downloads photo sent from phone, passes to Gemini Vision, and replies with analysis."""
+        self.send_message(chat_id, "🖼️ *Inspecting photo with Vision AI...*")
+        tmp_path = os.path.join(tempfile.gettempdir(), f"telegram_photo_{int(time.time())}.jpg")
+        try:
+            ok = self.download_file(photo_file_id, tmp_path)
+            if not ok or not os.path.exists(tmp_path):
+                self.send_message(chat_id, "Failed to download image from Telegram.")
+                return
+
+            import ai_engine
+            prompt = caption or "What is in this image? Explain key details, text, and any errors clearly."
+            analysis = ai_engine.run_gemini_vision(prompt, tmp_path)
+            self.send_message(chat_id, f"👁️ **Vision Analysis**:\n\n{analysis}")
+        except Exception as e:
+            self.send_message(chat_id, f"Vision inspection error: {e}")
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+
+    def process_document_message(self, chat_id, doc_file_id, file_name="", caption=""):
+        """Handles documents/files uploaded from phone to PC."""
+        save_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+        dest_path = os.path.join(save_dir, file_name or f"file_{int(time.time())}")
+        try:
+            ok = self.download_file(doc_file_id, dest_path)
+            if ok and os.path.exists(dest_path):
+                size_kb = round(os.path.getsize(dest_path) / 1024, 1)
+                self.send_message(
+                    chat_id,
+                    f"📥 **Saved File to PC**:\n• Name: `{os.path.basename(dest_path)}`\n• Size: {size_kb} KB\n• Path: `{dest_path}`"
+                )
+            else:
+                self.send_message(chat_id, "Failed to download document to PC.")
+        except Exception as e:
+            self.send_message(chat_id, f"File saving error: {e}")
+
     def poll_updates(self):
         """Long-polling update loop for Telegram Bot API."""
         print("[Telegram] Bridge started. Listening for remote messages from your phone...", flush=True)
@@ -370,6 +545,18 @@ class TelegramBridge:
                     elif 'audio' in msg:
                         audio_id = msg['audio']['file_id']
                         threading.Thread(target=self.process_voice_message, args=(chat_id, audio_id), daemon=True).start()
+                    # Photo from Phone (multimodal vision inspection)
+                    elif 'photo' in msg:
+                        photo_id = msg['photo'][-1]['file_id']  # Highest resolution
+                        caption = msg.get('caption', '')
+                        threading.Thread(target=self.process_photo_message, args=(chat_id, photo_id, caption), daemon=True).start()
+                    # Document / File from Phone
+                    elif 'document' in msg:
+                        doc = msg['document']
+                        doc_id = doc['file_id']
+                        file_name = doc.get('file_name', '')
+                        caption = msg.get('caption', '')
+                        threading.Thread(target=self.process_document_message, args=(chat_id, doc_id, file_name, caption), daemon=True).start()
                     # Text Message or Command
                     elif 'text' in msg:
                         text = msg['text']

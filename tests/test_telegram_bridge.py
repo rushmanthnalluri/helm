@@ -44,5 +44,24 @@ class TestTelegramBridge(unittest.TestCase):
             for c in sent_chunks:
                 self.assertLessEqual(len(c), 4000)
 
+    def test_command_routing(self):
+        import unittest.mock as mock
+        bridge = TelegramBridge(token="test", allowed_users=["1001"])
+        replies = []
+        with mock.patch.object(bridge, 'send_message', side_effect=lambda cid, text: replies.append(text)):
+            # 1. /clip
+            bridge.handle_command(1001, "/clip HelloClipboardFromTest")
+            self.assertTrue(any("clipboard" in r.lower() for r in replies))
+
+            # 2. /cmd
+            replies.clear()
+            bridge.handle_command(1001, "/cmd echo HomieCmdTest")
+            self.assertTrue(any("homiecmdtest" in r.lower() for r in replies))
+
+            # 3. /rules
+            replies.clear()
+            bridge.handle_command(1001, "/rules")
+            self.assertTrue(any("memory" in r.lower() or "no rules" in r.lower() for r in replies))
+
 if __name__ == '__main__':
     unittest.main()

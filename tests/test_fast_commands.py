@@ -58,6 +58,17 @@ class TestFastCommands(unittest.TestCase):
         self.assertTrue(handled)
         self.assertIn("WhatsApp", msg)
 
+    def test_clipboard_and_downloads_fast_commands(self):
+        # 1. Clipboard
+        handled, msg = homie.try_fast_command("what's in my clipboard")
+        self.assertTrue(handled)
+        self.assertIn("Clipboard", msg)
+
+        # 2. Downloads
+        handled, msg = homie.try_fast_command("recent downloads")
+        self.assertTrue(handled)
+        self.assertTrue("Downloads" in msg or "empty" in msg)
+
     def test_non_fast_command_delegates_to_ai(self):
         handled, msg = homie.try_fast_command("explain quantum computing in detail")
         self.assertFalse(handled)

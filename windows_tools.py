@@ -635,12 +635,12 @@ def send_chat_message(app_name, recipient="", message=""):
 
     # Poll for window handle up to 3 seconds
     target_hwnd = None
-    for _ in range(10):
+    for _ in range(12):
         wins = find_windows(app_lower)
         if wins:
             target_hwnd = wins[0]['hwnd']
             break
-        time.sleep(0.3)
+        time.sleep(0.25)
 
     if target_hwnd:
         force_foreground_window(target_hwnd)
@@ -669,19 +669,26 @@ def send_chat_message(app_name, recipient="", message=""):
             time.sleep(0.2)
 
             if recipient:
-                # Ctrl+N is "New Chat" in modern WhatsApp Desktop
-                pyautogui.hotkey('ctrl', 'n')
-                time.sleep(0.5)
+                # Ctrl+F is universal Search Chats / Contacts in WhatsApp Desktop
+                pyautogui.hotkey('ctrl', 'f')
+                time.sleep(0.3)
+                pyautogui.hotkey('ctrl', 'a')
+                time.sleep(0.1)
+                pyautogui.press('backspace')
+                time.sleep(0.1)
 
                 pyperclip.copy(recipient)
                 pyautogui.hotkey('ctrl', 'v')
-                time.sleep(1.2)  # Wait for contact search results to load
+                time.sleep(1.0)  # Wait for contact search results to load
 
                 # Down arrow to first match, then Enter to open conversation
                 pyautogui.press('down')
                 time.sleep(0.2)
                 pyautogui.press('enter')
                 time.sleep(0.8)
+
+            if target_hwnd:
+                force_foreground_window(target_hwnd)
 
             if message:
                 pyperclip.copy(message)
@@ -701,7 +708,12 @@ def send_chat_message(app_name, recipient="", message=""):
             if recipient:
                 # Ctrl+K is universal Telegram contact / chat search
                 pyautogui.hotkey('ctrl', 'k')
-                time.sleep(0.4)
+                time.sleep(0.3)
+                pyautogui.hotkey('ctrl', 'a')
+                time.sleep(0.1)
+                pyautogui.press('backspace')
+                time.sleep(0.1)
+
                 pyperclip.copy(recipient)
                 pyautogui.hotkey('ctrl', 'v')
                 time.sleep(0.8)
@@ -709,6 +721,9 @@ def send_chat_message(app_name, recipient="", message=""):
                 time.sleep(0.2)
                 pyautogui.press('enter')
                 time.sleep(0.6)
+
+            if target_hwnd:
+                force_foreground_window(target_hwnd)
 
             if message:
                 pyperclip.copy(message)
@@ -789,3 +804,79 @@ def get_system_vitals():
         'uptime_hours': round(uptime_hours, 1),
         'active_window': fg_title
     }
+
+def get_clipboard_text():
+    """Reads text from the Windows clipboard safely."""
+    try:
+        import pyperclip
+        return pyperclip.paste() or ""
+    except Exception:
+        return ""
+
+def set_clipboard_text(text):
+    """Writes text to the Windows clipboard."""
+    try:
+        import pyperclip
+        pyperclip.copy(str(text))
+        return True, f"Copied {len(str(text))} characters to Windows clipboard."
+    except Exception as e:
+        return False, f"Failed to copy to clipboard: {e}"
+
+def list_downloads(limit=10):
+    """Returns recent files in the user's Downloads folder."""
+    dl_path = os.path.join(os.path.expanduser("~"), "Downloads")
+    if not os.path.exists(dl_path):
+        return []
+    entries = []
+    try:
+        for name in os.listdir(dl_path):
+            full = os.path.join(dl_path, name)
+            if os.path.isfile(full):
+                stat = os.stat(full)
+                size_mb = stat.st_size / (1024 * 1024)
+                mtime = time.strftime('%Y-%m-%d %H:%M', time.localtime(stat.st_mtime))
+                entries.append({
+                    'name': name,
+                    'path': full,
+                    'size_mb': round(size_mb, 2),
+                    'mtime': mtime,
+                    'raw_mtime': stat.st_mtime
+                })
+        entries.sort(key=lambda x: x['raw_mtime'], reverse=True)
+    except Exception:
+        pass
+    return entries[:limit]
+
+def execute_safe_command(command, timeout=20):
+    """Executes a system shell command safely with guardrails against destructive commands."""
+    cmd = (command or "").strip()
+    if not cmd:
+        return False, "No command provided."
+
+    blocked = [
+        r'rmdir\s+/[sS]',
+        r'del\s+/[fF]?[sS]?[qQ]?\s+[cC]:\\',
+        r'format\s+[a-zA-Z]:',
+        r'bcdedit',
+        r'diskpart',
+        r'reg\s+delete\s+hklm',
+        r'shutdown\s+/[sS]'
+    ]
+    import re
+    for pattern in blocked:
+        if re.search(pattern, cmd, re.I):
+            return False, f"Blocked unsafe command matching security guardrail: '{pattern}'"
+
+    try:
+        proc = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout, cwd=os.path.expanduser("~"))
+        stdout = proc.stdout.strip()
+        stderr = proc.stderr.strip()
+        out = stdout or stderr or "(Command completed with no output)"
+        if len(out) > 3500:
+            out = out[:3500] + "\n... [Remaining output truncated]"
+        ok = (proc.returncode == 0)
+        return ok, out
+    except subprocess.TimeoutExpired:
+        return False, f"Command timed out after {timeout} seconds."
+    except Exception as e:
+        return False, f"Execution failed: {e}"

@@ -50,10 +50,9 @@ PROVIDER_CONFIGS = {
 
 GEMINI_MODELS_POOL = [
     'gemini-flash-lite-latest',
-    'gemini-3.5-flash-lite',
+    'gemini-2.5-flash-lite',
     'gemini-flash-latest',
-    'gemini-2.5-flash',
-    'gemini-3.5-flash'
+    'gemini-2.5-flash'
 ]
 
 GEMINI_TOOLS = [
@@ -163,6 +162,44 @@ GEMINI_TOOLS = [
                     "type": "OBJECT",
                     "properties": {}
                 }
+            },
+            {
+                "name": "get_clipboard",
+                "description": "Reads the current text content from the Windows clipboard.",
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "set_clipboard",
+                "description": "Copies a given string of text to the user's Windows clipboard.",
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "text": {
+                            "type": "STRING",
+                            "description": "The text to put onto the clipboard"
+                        }
+                    },
+                    "required": ["text"]
+                }
+            },
+            {
+                "name": "list_downloads",
+                "description": "Lists the most recent files downloaded in the user's Downloads folder.",
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "get_system_vitals",
+                "description": "Gets real-time RAM, Disk, Battery, and Uptime health vitals of the Windows PC.",
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {}
+                }
             }
         ]
     }
@@ -237,6 +274,30 @@ def execute_tool(name, args):
             import ctypes
             ctypes.windll.user32.LockWorkStation()
             return "Windows workstation locked."
+
+        elif name == "get_clipboard":
+            text = windows_tools.get_clipboard_text()
+            return f"Clipboard text: {text}" if text else "(Clipboard is empty or contains non-text data)"
+
+        elif name == "set_clipboard":
+            text = args.get('text', '')
+            ok, msg = windows_tools.set_clipboard_text(text)
+            return msg
+
+        elif name == "list_downloads":
+            items = windows_tools.list_downloads(limit=10)
+            if not items:
+                return "Downloads folder is empty."
+            return "Recent downloads:\n" + "\n".join(f"• {x['name']} ({x['size_mb']} MB, {x['mtime']})" for x in items)
+
+        elif name == "get_system_vitals":
+            v = windows_tools.get_system_vitals()
+            return (
+                f"RAM: {v['ram_pct']}% used ({v['ram_avail_gb']} GB free / {v['ram_total_gb']} GB), "
+                f"Disk (C:): {v['disk_free_gb']} GB free / {v['disk_total_gb']} GB, "
+                f"Battery: {v['battery']}, Uptime: {v['uptime_hours']} hours, "
+                f"Active window: {v['active_window']}"
+            )
 
     except Exception as e:
         return f"Error executing tool {name}: {e}"
@@ -467,6 +528,77 @@ def run_openai_compat(prompt_text, prov, step_callback=None):
     except Exception as e:
         return f"Error contacting {prov['name']}: {e}"
 
+# ----------------- Multimodal Vision Engine -----------------
+
+def run_gemini_vision(prompt_text, image_source, api_key=None, step_callback=None):
+    """Multimodal Vision inference using Google Gemini 2.5/Flash-Lite models."""
+    if not api_key:
+        import homie
+        prefs = homie.get_prefs()
+        api_key = prefs.get('geminiKey') or os.environ.get('GEMINI_API_KEY')
+
+    if not api_key:
+        return "Error: No Gemini API key found for vision analysis."
+
+    b64_data = ""
+    mime_type = "image/png"
+    if isinstance(image_source, bytes):
+        b64_data = base64.b64encode(image_source).decode('utf-8')
+    elif isinstance(image_source, str) and os.path.exists(image_source):
+        if image_source.lower().endswith(('.jpg', '.jpeg')):
+            mime_type = "image/jpeg"
+        with open(image_source, 'rb') as f:
+            b64_data = base64.b64encode(f.read()).decode('utf-8')
+    else:
+        return "Invalid or missing image source."
+
+    prompt = prompt_text or "What is in this image? Explain what you see clearly and concisely."
+
+    contents = [{
+        "role": "user",
+        "parts": [
+            {"text": prompt},
+            {
+                "inlineData": {
+                    "mimeType": mime_type,
+                    "data": b64_data
+                }
+            }
+        ]
+    }]
+
+    payload = {
+        "contents": contents,
+        "systemInstruction": {
+            "parts": [{
+                "text": (
+                    "You are Homie Vision, inspecting a screen capture or photo sent by the user from their phone or PC. "
+                    "Be direct, accurate, and concise. Point out key details, errors, or elements clearly."
+                )
+            }]
+        },
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": 1024
+        }
+    }
+
+    for model in ['gemini-flash-lite-latest', 'gemini-2.5-flash-lite', 'gemini-2.5-flash']:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        try:
+            resp = requests.post(url, headers={'Content-Type': 'application/json'}, json=payload, timeout=25)
+            if resp.status_code == 200:
+                candidates = resp.json().get('candidates', [])
+                if candidates:
+                    parts = candidates[0].get('content', {}).get('parts', [])
+                    texts = [p.get('text', '') for p in parts if 'text' in p]
+                    if texts:
+                        return "".join(texts).strip()
+        except Exception:
+            pass
+
+    return "Could not analyze the image (models currently unavailable)."
+
 # ----------------- Main Query Dispatcher -----------------
 
 def run_query(prompt_text, prefs, step_callback=None):
@@ -485,11 +617,13 @@ def run_query(prompt_text, prefs, step_callback=None):
 
     if prov['provider'] == 'gemini':
         res = run_gemini(prompt_text, prov['api_key'], model=prov['model'], step_callback=step_callback)
-        if "temporarily unavailable" in res and (prefs.get('nvidiaKey') or os.environ.get('NVIDIA_API_KEY')):
+        if any(err in res.lower() for err in ('rate-limited', 'temporarily unavailable', '429', 'resource_exhausted', 'error (')) and (prefs.get('nvidiaKey') or os.environ.get('NVIDIA_API_KEY')):
             if step_callback:
-                step_callback("· All Gemini models rate-limited, failing over to NVIDIA NIM...")
+                step_callback("· Gemini unavailable, failing over to NVIDIA NIM...")
             nv_prov = get_active_provider({**prefs, 'provider': 'nvidia'})
-            return run_openai_compat(prompt_text, nv_prov, step_callback=step_callback)
+            nv_res = run_openai_compat(prompt_text, nv_prov, step_callback=step_callback)
+            if not nv_res.startswith("Error"):
+                return nv_res
         return res
     else:
         return run_openai_compat(prompt_text, prov, step_callback=step_callback)

@@ -46,5 +46,26 @@ class TestWindowsTools(unittest.TestCase):
         # Should execute safely without raising
         windows_tools.ensure_desktop_attached()
 
+    def test_clipboard_operations(self):
+        ok, msg = windows_tools.set_clipboard_text("HomieTestClipboardValue")
+        self.assertTrue(ok)
+        val = windows_tools.get_clipboard_text()
+        self.assertEqual(val, "HomieTestClipboardValue")
+
+    def test_safe_command_execution(self):
+        # Safe command should succeed
+        ok, out = windows_tools.execute_safe_command("echo HomieOnline")
+        self.assertTrue(ok)
+        self.assertIn("HomieOnline", out)
+
+        # Destructive command should be blocked by guardrails
+        ok_blocked, out_blocked = windows_tools.execute_safe_command("rmdir /s /q C:\\Windows")
+        self.assertFalse(ok_blocked)
+        self.assertIn("guardrail", out_blocked.lower())
+
+    def test_list_downloads(self):
+        items = windows_tools.list_downloads(limit=5)
+        self.assertIsInstance(items, list)
+
 if __name__ == '__main__':
     unittest.main()
