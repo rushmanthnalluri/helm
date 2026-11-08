@@ -530,7 +530,41 @@ def try_fast_command(text):
             return True, f"⚠️ {res}"
         return True, res['summary']
 
-    # 18. Quick App / Website Launch (e.g. "open notepad", "launch chrome", "open spotify", "open github")
+    # 18. Workspace Layout Presets
+    ws_save_m = re.match(r'^(?:save\s+workspace\s+(?:as\s+)?|save\s+layout\s+(?:as\s+)?)([a-zA-Z0-9_-]+)$', t)
+    if ws_save_m:
+        import workspace_manager
+        pname = ws_save_m.group(1).strip()
+        ok, msg, _ = workspace_manager.save_workspace_preset(pname)
+        return True, msg
+
+    ws_restore_m = re.match(r'^(?:switch\s+to\s+([a-zA-Z0-9_-]+)\s+workspace|(?:restore|load)\s+(?:workspace\s+)?([a-zA-Z0-9_-]+))$', t)
+    if ws_restore_m:
+        import workspace_manager
+        pname = (ws_restore_m.group(1) or ws_restore_m.group(2)).strip()
+        ok, msg, _ = workspace_manager.restore_workspace_preset(pname)
+        return True, msg
+
+    # 19. Quick Notes & Scratchpad
+    note_add_m = re.match(r'^(?:take\s+note|quick\s+note|save\s+note|add\s+note)\s+(.+)$', t)
+    if note_add_m:
+        import quick_notes
+        text = note_add_m.group(1).strip()
+        nid = quick_notes.save_quick_note(text)
+        return True, f"📝 Saved note #{nid}: \"{text}\""
+
+    if re.search(r'\b(show\s+notes|list\s+notes|my\s+notes|scratchpad)\b', t):
+        import quick_notes
+        notes = quick_notes.get_recent_notes(limit=6)
+        if not notes:
+            return True, "📝 No notes in scratchpad. Use 'take note <text>' to save one."
+        lines = ["📝 **Recent Scratchpad Notes**:"]
+        for n in notes:
+            pin_icon = "📌 " if n['is_pinned'] else ""
+            lines.append(f"• {pin_icon}`#{n['id']}`: {n['note_text']}")
+        return True, "\n".join(lines)
+
+    # 20. Quick App / Website Launch (e.g. "open notepad", "launch chrome", "open spotify", "open github")
     m = re.match(r'^(?:open|launch|start|run)\s+([a-zA-Z0-9\s._-]+)$', t)
     if m:
         target = m.group(1).strip()

@@ -387,6 +387,16 @@ class TelegramBridge:
             except Exception as e:
                 self.send_message(chat_id, f"Failed to retrieve file: {e}")
 
+        elif data.startswith('pinnote_'):
+            import quick_notes
+            try:
+                nid = int(data[8:])
+                is_pinned = quick_notes.toggle_pin(nid)
+                status_str = "pinned 📌" if is_pinned else "unpinned"
+                self.send_message(chat_id, f"Note #{nid} is now {status_str}.")
+            except Exception as e:
+                self.send_message(chat_id, f"Failed to toggle note pin: {e}")
+
         elif data == 'action_focus_report':
             self.handle_command(chat_id, '/focus')
 
@@ -555,6 +565,8 @@ class TelegramBridge:
                 "📋 `/catchup [hours]` - Timeline of what happened while away\n"
                 "🖥️ `/focus` - Daily application screen-time & focus report\n"
                 "🎙️ `/meeting <start|stop>` - System audio loopback notes & brief\n"
+                "🪟 `/workspace <save|list|name>` - Multi-window layout presets\n"
+                "📝 `/note <text>` / `/notes` - Quick scratchpad with mobile & desktop pin\n"
                 "🔍 `/find <query>` - Instant file search across Desktop & Downloads\n"
                 "🔔 `/mirror <on|off>` - Mirror Windows toast notifications\n"
                 "🧠 `/smartclip` - AI analysis & action pill for current clipboard\n"
@@ -761,6 +773,67 @@ class TelegramBridge:
                 lines.append(f"• **{m['title']}** ({dur_m}m) - `{t_str}`")
             self.send_message(chat_id, "\n".join(lines))
             return
+
+        if cmd == '/note':
+            text_to_save = " ".join(args).strip()
+            if not text_to_save:
+                self.send_message(chat_id, "Usage: `/note <text to save>`")
+                return
+            import quick_notes
+            nid = quick_notes.save_quick_note(text_to_save)
+            self.send_message(chat_id, f"📝 Saved note **#{nid}**:\n\"{text_to_save}\"")
+            return
+
+        if cmd == '/notes':
+            import quick_notes
+            notes = quick_notes.get_recent_notes(limit=8)
+            if not notes:
+                self.send_message(chat_id, "📝 No notes in scratchpad. Save one with `/note <text>`.")
+                return
+            lines = ["📝 **Recent Scratchpad Notes**:\n"]
+            buttons = []
+            for n in notes:
+                pin_icon = "📌 " if n['is_pinned'] else ""
+                lines.append(f"• {pin_icon}`#{n['id']}`: {n['note_text']}")
+                btn_label = f"📍 Unpin #{n['id']}" if n['is_pinned'] else f"📌 Pin #{n['id']}"
+                buttons.append([{"text": btn_label, "callback_data": f"pinnote_{n['id']}"}])
+            keyboard = {"inline_keyboard": buttons}
+            self.send_message(chat_id, "\n".join(lines), reply_markup=keyboard)
+            return
+
+        if cmd in ('/workspace', '/workspaces'):
+            import workspace_manager
+            sub = args[0].lower() if args else "list"
+            if sub == 'save':
+                pname = args[1].lower() if len(args) > 1 else "default"
+                ok, msg, _ = workspace_manager.save_workspace_preset(pname)
+                self.send_message(chat_id, f"🖥 {msg}")
+                return
+            elif sub == 'list':
+                presets = workspace_manager.get_all_presets()
+                if not presets:
+                    self.send_message(chat_id, "🖥 No saved workspaces. Save current layout with `/workspace save <name>`.")
+                else:
+                    lines = ["🖥 **Saved Workspace Presets**:\n"]
+                    for p in presets:
+                        lines.append(f"• `{p}`")
+                    lines.append("\nUse `/workspace <name>` to restore.")
+                    self.send_message(chat_id, "\n".join(lines))
+                return
+            elif sub == 'delete':
+                pname = args[1].lower() if len(args) > 1 else ""
+                if not pname:
+                    self.send_message(chat_id, "Usage: `/workspace delete <name>`")
+                    return
+                ok = workspace_manager.delete_preset(pname)
+                msg = f"Deleted workspace '{pname}'." if ok else f"Preset '{pname}' not found."
+                self.send_message(chat_id, f"🖥 {msg}")
+                return
+            else:
+                pname = sub
+                ok, msg, _ = workspace_manager.restore_workspace_preset(pname)
+                self.send_message(chat_id, f"🖥 {msg}")
+                return
 
         if cmd in ('/macros', '/macro'):
             if args and cmd == '/macro':
