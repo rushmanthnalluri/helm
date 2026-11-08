@@ -133,6 +133,31 @@ def get_vault_key() -> bytes:
         # FAIL CLOSED: Never fall back to source-known fixed keys
         raise RuntimeError(f"Cryptographic Vault Error: Failed to securely initialize DPAPI-protected vault master key: {e}")
 
+def save_master_key_dpapi(key_bytes: bytes, key_path: Optional[str] = None) -> bool:
+    """Saves given master key protected by Windows DPAPI."""
+    global _KEY_CACHE
+    if len(key_bytes) < MIN_KEY_LENGTH_BYTES:
+        raise ValueError(f"Key length must be at least {MIN_KEY_LENGTH_BYTES} bytes")
+    kf = key_path or os.path.join(BASE_DIR, ".homie_vault.key")
+    to_write = key_bytes
+    if sys.platform == "win32":
+        import win32crypt
+        to_write = win32crypt.CryptProtectData(key_bytes, "homie_vault_master_key", None, None, None, 0)
+    with open(kf, "wb") as f:
+        f.write(to_write)
+    try:
+        import homie_confinement
+        homie_confinement.harden_path(kf)
+    except Exception:
+        pass
+    _KEY_CACHE = key_bytes
+    return True
+
+_save_master_key_dpapi = save_master_key_dpapi
+get_master_key = get_vault_key
+
+
+
 
 def _derive_keystream(key: bytes, iv: bytes, length: int) -> bytes:
     """Generates a keystream of required length using HMAC-SHA256 in counter mode (for V1 backwards compatibility)."""

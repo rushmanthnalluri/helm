@@ -177,3 +177,16 @@ def get_taint_status(session_id="default"):
         "source": info.get("source"),
         "pending_step_ups": len(_PENDING_STEP_UPS)
     }
+
+_CURRENT_TAINT_EPOCH: int = 1
+
+def get_taint_epoch() -> int:
+    """Returns current workstation taint epoch."""
+    return _CURRENT_TAINT_EPOCH
+
+def bump_taint_epoch() -> int:
+    """Increments taint epoch, immediately invalidating all active policy envelopes."""
+    global _CURRENT_TAINT_EPOCH
+    _CURRENT_TAINT_EPOCH += 1
+    return _CURRENT_TAINT_EPOCH
+

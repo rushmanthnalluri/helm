@@ -32,6 +32,7 @@ claude_*.png
 submit_batch*.py
 extract_claude_response.py
 claude_extracted_text.txt
+claude_post_refresh.txt
 .homie_device_keys.json
 .homie_vault.key
 scratch_*.py

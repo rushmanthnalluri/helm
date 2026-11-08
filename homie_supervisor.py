@@ -315,10 +315,15 @@ class PolicySupervisor:
         if token in self._consumed_intent_tokens:
             return False
 
-        parts = token.split(":")
-        if len(parts) != 8:
+        if ":" not in token:
             return False
-        v_tag, epoch_str, seq_str, ts_str, tok_tool, tok_args_hash, tok_caller, sig = parts
+
+        raw, sig = token.rsplit(":", 1)
+        parts = raw.split(":", 6)
+        if len(parts) != 7:
+            return False
+
+        v_tag, epoch_str, seq_str, ts_str, tok_tool, tok_args_hash, tok_caller = parts
         try:
             epoch = int(epoch_str)
             token_seq = int(seq_str)
@@ -339,7 +344,6 @@ class PolicySupervisor:
         if not hmac.compare_digest(tok_args_hash, expected_args_hash):
             return False
 
-        raw = f"INTENT_V2:{epoch}:{token_seq}:{ts}:{tok_tool}:{tok_args_hash}:{tok_caller}"
         expected_sig = hmac.new(self._supervisor_secret, raw.encode("utf-8"), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(sig, expected_sig):
             return False
