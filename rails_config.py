@@ -21,6 +21,22 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("homie.rails_config")
 
+# Immutable compiled-in safety floor: cannot be weakened or bypassed by disk config
+COMPILED_IN_CONSEQUENTIAL_TOOLS: frozenset[str] = frozenset({
+    "homie_set_clipboard",
+    "homie_launch_app",
+    "homie_send_chat",
+    "homie_close_app",
+    "homie_kill_process",
+    "homie_safe_command",
+    "homie_agent_click",
+    "homie_agent_type",
+    "homie_agent_mouse_move",
+    "homie_send_hotkey",
+    "homie_execute_cmd",
+    "homie_delete_file",
+})
+
 DEFAULT_CONFIG: Dict[str, Any] = {
     "model": {
         "provider": "openrouter",
@@ -146,7 +162,12 @@ class RailsConfig:
     # =========================================================================
 
     def is_confirmation_required(self, tool_name: str) -> bool:
-        """Checks if a tool is on the consequential confirmation list."""
+        """Checks if a tool is on the consequential confirmation list.
+        The compiled-in safety floor CANNOT be removed or bypassed by disk config.
+        Disk config may only ADD additional tools to require confirmation.
+        """
+        if tool_name in COMPILED_IN_CONSEQUENTIAL_TOOLS:
+            return True
         self._reload_if_needed()
         with self._lock:
             safety = self._cached_config.get("safety", {})

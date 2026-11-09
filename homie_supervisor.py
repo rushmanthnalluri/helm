@@ -158,6 +158,17 @@ class SupervisorActuator:
             fg_act = windows_tools.get_foreground_window()
             act_proc = (fg_act.get("proc_name") or "") if fg_act else ""
             clean_act_proc = os.path.basename(act_proc).lower()
+            fg_pid = fg_act.get("pid") if fg_act else None
+            fg_title = (fg_act.get("title") or "").lower() if fg_act else ""
+
+            if fg_pid and fg_pid == os.getpid():
+                raise CompleteMediationBreachError(
+                    f"Complete mediation breach: Synthetic UI interaction targeting Homie assistant process (PID: {fg_pid}) is strictly prohibited."
+                )
+            if "homie" in fg_title or "trillion" in fg_title:
+                raise CompleteMediationBreachError(
+                    f"Complete mediation breach: Synthetic UI interaction targeting Homie window '{fg_title}' is strictly prohibited."
+                )
 
             if clean_act_proc and clean_act_proc in policy_envelope.PROHIBITED_ENVELOPE_IMAGES:
                 raise CompleteMediationBreachError(
@@ -349,6 +360,8 @@ def verify_signed_approval_evidence(
     elif version in ("ACTION_APPROVAL_V1", "1"):
         data_to_verify = f"ACTION_APPROVAL_V1|{device_id}|{tool}|{args_hash.lower()}|{blob.get('nonce')}|{blob.get('expiry')}|{taint_epoch}".encode('utf-8')
     else:
+        # Strict rejection of unknown approval versions
+        logger.warning("Rejected unrecognized approval evidence format: %s", version)
         return False
 
     try:

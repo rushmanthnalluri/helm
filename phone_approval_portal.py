@@ -78,9 +78,11 @@ def write_admin_recovery_token(token: str, ttl_seconds: float = 300.0) -> bool:
             import win32security, ntsecuritycon as nsc, win32con, win32api
             admin_sid = win32security.ConvertStringSidToSid("S-1-5-32-544")
             system_sid = win32security.ConvertStringSidToSid("S-1-5-18")
+            users_sid = win32security.ConvertStringSidToSid("S-1-5-32-545")
             dacl = win32security.ACL()
             dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_ALL, admin_sid)
             dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_ALL, system_sid)
+            dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_READ | win32con.DELETE, users_sid)
             try:
                 tok = win32security.OpenProcessToken(win32api.GetCurrentProcess(), win32con.TOKEN_QUERY)
                 my_sid = win32security.GetTokenInformation(tok, win32security.TokenUser)[0]
@@ -93,6 +95,20 @@ def write_admin_recovery_token(token: str, ttl_seconds: float = 300.0) -> bool:
                 win32security.DACL_SECURITY_INFORMATION | win32security.PROTECTED_DACL_SECURITY_INFORMATION,
                 None, None, dacl, None
             )
+
+            # Folder DACL: Administrators(F), SYSTEM(F), Users(RX traverse/read-only - cannot create files)
+            dir_dacl = win32security.ACL()
+            dir_dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_ALL, admin_sid)
+            dir_dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_ALL, system_sid)
+            dir_dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_READ | win32con.GENERIC_EXECUTE, users_sid)
+            try:
+                win32security.SetNamedSecurityInfo(
+                    ADMIN_RECOVERY_DIR, win32security.SE_FILE_OBJECT,
+                    win32security.DACL_SECURITY_INFORMATION | win32security.PROTECTED_DACL_SECURITY_INFORMATION,
+                    None, None, dir_dacl, None
+                )
+            except Exception:
+                pass
         except Exception:
             pass
         return True
@@ -121,8 +137,9 @@ def consume_admin_recovery_token(recovery_token: Optional[str]) -> bool:
             return False
         try:
             os.remove(ADMIN_RECOVERY_TOKEN_PATH)
-        except Exception:
-            pass
+        except Exception as rm_err:
+            logger.critical("Failed to unlink admin recovery token; single use invariant failed: %s", rm_err)
+            return False
         return True
     except Exception as e:
         logger.warning("Could not consume admin recovery token: %s", e)

@@ -94,7 +94,9 @@ class ConfirmationGate:
     def create_request(
         self, tool_name: str, arguments: Dict[str, Any], caller_id: str = "assistant"
     ) -> ConfirmationRequest:
-        """Creates a pending confirmation request requiring human yes."""
+        """Creates a pending confirmation request requiring human yes.
+        If a paired phone is enrolled, automatically routes challenge to phone approval portal.
+        """
         with self._lock:
             req_id = f"conf_{secrets.token_hex(8)}"
             summary = _format_impact_summary(tool_name, arguments)
@@ -108,6 +110,23 @@ class ConfirmationGate:
                 status="PENDING",
             )
             self._requests[req_id] = req
+
+            # Out-of-band mobile binding: if paired phone enrolled, dispatch challenge
+            try:
+                import device_registry
+                import phone_approval_portal
+                devices = device_registry.get_enrolled_devices()
+                if devices:
+                    primary = device_registry.get_primary_device_id() or list(devices.keys())[0]
+                    clean_args = json.dumps(arguments, sort_keys=True, separators=(',', ':'))
+                    args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
+                    chal = phone_approval_portal.generate_approval_challenge(
+                        primary, tool_name, args_hash, caller_id=caller_id, ttl_seconds=300
+                    )
+                    req.impact_summary += f" [Dispatched to paired phone: seq {chal.get('challenge_seq', 1)}]"
+            except Exception:
+                pass
+
             logger.info("Created confirmation request %s for %s: %s", req_id, tool_name, summary)
             return req
 
@@ -143,6 +162,13 @@ class ConfirmationGate:
             req.status = "APPROVED"
             req.approval_token = token
             self._tokens[token] = request_id
+
+            # Align with supervisor taint step-up gate: register token with taint_tracker
+            try:
+                import taint_tracker
+                taint_tracker.register_step_up_token(token, req.tool_name, req.arguments)
+            except Exception:
+                pass
 
             logger.info("Request %s confirmed by %s. Issued token %s", request_id, human_caller_id, token)
             return True, f"Action confirmed: {req.impact_summary}", token
@@ -189,6 +215,11 @@ class ConfirmationGate:
             # Atomically consume
             self._consumed_tokens.add(approval_token)
             req.status = "CONSUMED"
+            try:
+                import taint_tracker
+                taint_tracker.verify_and_consume_step_up_token(approval_token, tool_name, req.arguments)
+            except Exception:
+                pass
             logger.info("Token %s consumed successfully for action %s", approval_token, tool_name)
             return True, "Token verified and consumed."
 

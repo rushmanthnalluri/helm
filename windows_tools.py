@@ -23,7 +23,7 @@ VK_MAP: Dict[str, int] = {
     "ctrl": 17, "control": 17, "lctrl": 162, "rctrl": 163,
     "alt": 18, "menu": 18, "lalt": 164, "ralt": 165,
     "shift": 16, "lshift": 160, "rshift": 161,
-    "win": 91, "windows": 91, "lwin": 91, "rwin": 92,
+    "win": 91, "windows": 91, "lwin": 91, "rwin": 92, "meta": 91, "lmeta": 91, "rmeta": 92, "super": 91, "cmd": 91,
     # Letters
     **{chr(c).lower(): c for c in range(ord('A'), ord('Z') + 1)},
     # Digits
@@ -48,7 +48,8 @@ def canonicalize_keyboard_arguments(arguments: Dict[str, Any]) -> Tuple[bool, bo
     """
     KEY_FIELDS = (
         "key", "keys", "hotkey", "shortcut", "sequence",
-        "vk", "keycode", "key_code", "keys_to_press", "chars", "input"
+        "modifiers", "modifier", "mod", "mods",
+        "vk", "keycode", "key_code", "keys_to_press"
     )
 
     def _flatten(v) -> List[Any]:
@@ -90,7 +91,7 @@ def canonicalize_keyboard_arguments(arguments: Dict[str, Any]) -> Tuple[bool, bo
     # Free-form string prose ONLY checks for literal newlines (indicates form submit)
     # If text is a list/tuple: treat elements as individual key events / tokens
     # Avoid parsing numeric integer strings in free-form prose (e.g. typing "13" or "80" in text should not look like Enter or P).
-    text_val = arguments.get("text")
+    text_val = arguments.get("text") if arguments.get("text") is not None else (arguments.get("chars") if arguments.get("chars") is not None else arguments.get("input"))
     if text_val is not None:
         if isinstance(text_val, str):
             if "\n" in text_val or "\r" in text_val:
@@ -180,20 +181,26 @@ def detect_blocked_system_chords(detected_vks: List[int], tokens: List[str]) -> 
     - Alt+Tab, Alt+Space, Alt+F4
     - Ctrl+Shift+Esc, Ctrl+Alt+Del, Ctrl+Esc, Ctrl+Shift+Enter
     """
-    token_set = set(t.lower() for t in tokens)
+    # Decompose compound chords into discrete atomic tokens without substring ambiguity
+    atomic_tokens: Set[str] = set()
+    for t in tokens:
+        for p in re.split(r'[\+,\s\-]+', str(t).strip().lower()):
+            if p:
+                atomic_tokens.add(p)
+    token_set = atomic_tokens
 
-    has_win = any(vk in detected_vks for vk in (91, 92)) or bool({"win", "windows", "lwin", "rwin", "super", "cmd"}.intersection(token_set))
-    has_alt = any(vk in detected_vks for vk in (18, 164, 165)) or bool({"alt", "menu", "lalt", "ralt"}.intersection(token_set))
-    has_ctrl = any(vk in detected_vks for vk in (17, 162, 163)) or bool({"ctrl", "control", "lctrl", "rctrl"}.intersection(token_set))
-    has_shift = any(vk in detected_vks for vk in (16, 160, 161)) or bool({"shift", "lshift", "rshift"}.intersection(token_set))
-    has_r = (82 in detected_vks) or bool({"r"}.intersection(token_set)) or any("+r" in t for t in token_set)
-    has_x = (88 in detected_vks) or bool({"x"}.intersection(token_set)) or any("+x" in t for t in token_set)
-    has_f4 = (115 in detected_vks) or bool({"f4"}.intersection(token_set)) or any("+f4" in t for t in token_set)
-    has_esc = (27 in detected_vks) or bool({"esc", "escape"}.intersection(token_set)) or any("+esc" in t for t in token_set)
-    has_del = (46 in detected_vks) or bool({"del", "delete"}.intersection(token_set)) or any("+del" in t for t in token_set)
-    has_tab = (9 in detected_vks) or bool({"tab"}.intersection(token_set)) or any("+tab" in t for t in token_set)
-    has_space = (32 in detected_vks) or bool({"space"}.intersection(token_set)) or any("+space" in t for t in token_set)
-    has_enter = (13 in detected_vks) or bool({"enter", "return"}.intersection(token_set)) or any("+enter" in t for t in token_set)
+    has_win = any(vk in detected_vks for vk in (91, 92)) or bool({"win", "windows", "lwin", "rwin", "super", "cmd", "meta", "lmeta", "rmeta"}.intersection(atomic_tokens))
+    has_alt = any(vk in detected_vks for vk in (18, 164, 165)) or bool({"alt", "menu", "lalt", "ralt"}.intersection(atomic_tokens))
+    has_ctrl = any(vk in detected_vks for vk in (17, 162, 163)) or bool({"ctrl", "control", "lctrl", "rctrl"}.intersection(atomic_tokens))
+    has_shift = any(vk in detected_vks for vk in (16, 160, 161)) or bool({"shift", "lshift", "rshift"}.intersection(atomic_tokens))
+    has_r = (82 in detected_vks) or ("r" in atomic_tokens)
+    has_x = (88 in detected_vks) or ("x" in atomic_tokens)
+    has_f4 = (115 in detected_vks) or ("f4" in atomic_tokens)
+    has_esc = (27 in detected_vks) or bool({"esc", "escape"}.intersection(atomic_tokens))
+    has_del = (46 in detected_vks) or bool({"del", "delete"}.intersection(atomic_tokens))
+    has_tab = (9 in detected_vks) or ("tab" in atomic_tokens)
+    has_space = (32 in detected_vks) or ("space" in atomic_tokens)
+    has_enter = (13 in detected_vks) or bool({"enter", "return"}.intersection(atomic_tokens))
 
     # 1. Explicit high-risk chords
     if has_win and has_r:
@@ -218,7 +225,7 @@ def detect_blocked_system_chords(detected_vks: List[int], tokens: List[str]) -> 
     # 2. Total Win-Key Chord Denial: Deny ANY chord containing a Windows key
     if has_win:
         win_vks = {91, 92}
-        win_tokens = {"win", "windows", "lwin", "rwin", "super", "cmd"}
+        win_tokens = {"win", "windows", "lwin", "rwin", "super", "cmd", "meta", "lmeta", "rmeta"}
         other_vks = [vk for vk in detected_vks if vk not in win_vks]
         sub_tokens = set()
         for t in token_set:
@@ -475,6 +482,12 @@ def is_prohibited_target_process(hwnd=None):
 
     info = get_window_process_info(target_hwnd)
     proc_name = (info.get("proc_name") or "").lower()
+    pid = info.get("pid")
+    title = (info.get("title") or "").lower()
+    if pid and pid == os.getpid():
+        return True, f"Prohibited self-targeting: synthetic input into Homie assistant process (PID: {pid}) is barred"
+    if "homie" in title or "trillion" in title:
+        return True, f"Prohibited self-targeting: synthetic input into Homie window is barred"
 
     if proc_name in PROHIBITED_PROCESS_IMAGES:
         return True, f"Prohibited process image: '{proc_name}'"

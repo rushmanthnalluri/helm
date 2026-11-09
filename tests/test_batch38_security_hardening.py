@@ -220,6 +220,11 @@ class TestBatch38SecurityHardening(unittest.TestCase):
             ({"hotkey": "win+1"}, "Win+1"),
             ({"hotkey": "win+i"}, "Win+I"),
             ({"hotkey": "win+r"}, "Win+R"),
+            ({"hotkey": "Win + R"}, "Win+R"),
+            ({"hotkey": "meta+r"}, "Win+R"),
+            ({"hotkey": "super+r"}, "Win+R"),
+            ({"keys": "lwin r"}, "Win+R"),
+            ({"keycode": [91, 82]}, "Win+R"),
             ({"hotkey": "win+x"}, "Win+X"),
         ]
         for arg, expected in win_chords:

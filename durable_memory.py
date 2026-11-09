@@ -80,7 +80,13 @@ class DurableMemoryStore:
     def set_fact(self, key: str, fact: str) -> Tuple[bool, str]:
         """Validates and persists a durable fact.
         Bounds: key length <= 64, fact length <= 500, total count <= 50.
+        Anti-taint memory laundering gate: Denies fact mutation when workstation is tainted.
         """
+        import taint_tracker
+        if taint_tracker.is_workstation_tainted():
+            logger.warning("Denied fact update '%s': workstation is tainted (memory-laundering defense)", key)
+            return False, "Security Denial: Durable memory cannot be modified while workstation or session is tainted."
+
         clean_key = str(key).strip()
         clean_fact = str(fact).strip()
 
@@ -106,7 +112,14 @@ class DurableMemoryStore:
             return True, f"Durable fact '{clean_key}' successfully saved."
 
     def delete_fact(self, key: str) -> Tuple[bool, str]:
-        """Removes a durable fact from the store."""
+        """Removes a durable fact from the store.
+        Anti-taint memory laundering gate: Denies deletion when workstation is tainted.
+        """
+        import taint_tracker
+        if taint_tracker.is_workstation_tainted():
+            logger.warning("Denied fact deletion '%s': workstation is tainted (memory-laundering defense)", key)
+            return False, "Security Denial: Durable memory cannot be modified while workstation or session is tainted."
+
         clean_key = str(key).strip()
         with self._lock:
             facts = self.list_facts()
