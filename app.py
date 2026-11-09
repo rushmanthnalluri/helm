@@ -290,6 +290,14 @@ class HomieApp:
                             self.eval_js("window.ui.notice('Quick Note scratchpad active')")
                         time.sleep(0.4)
 
+                    # Phone Pairing Ceremony trigger: Ctrl + Alt + P (physical console presence only)
+                    if ctrl and alt and is_down(0x50): # VK_P
+                        import phone_approval_portal
+                        sess_id = phone_approval_portal.start_local_enrollment(ttl_seconds=120.0)
+                        if sess_id:
+                            self.eval_js(f"window.ui.notice('Pairing ceremony active: {sess_id[:8]}')")
+                        time.sleep(0.4)
+
                 except Exception:
                     pass
 

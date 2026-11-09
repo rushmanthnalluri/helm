@@ -43,6 +43,7 @@ logger = logging.getLogger("homie.update_verifier")
 PINNED_PUBLISHER_KEY_PEM = """-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAwT684SVS8poYYWfnKvF+wYMEyy1ZIQSVJWbOoUzqYug=
 -----END PUBLIC KEY-----"""
+PINNED_PUBLISHER_PUBLIC_KEY = PINNED_PUBLISHER_KEY_PEM
 
 PROTECTED_SYSTEM_FILES = {
     ".homie_vault.key",

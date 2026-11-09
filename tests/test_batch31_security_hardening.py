@@ -268,7 +268,8 @@ class TestBatch31SecurityHardening(unittest.TestCase):
         sec_key, sec_pub = generate_test_phone_keypair()
 
         # Primary signs V2 approval
-        sig = sign_enrollment_approval(self.priv_key, sess_id, "secondary_phone", sec_pub, expiry=int(time.time() + 60))
+        exp1 = int(time.time() + 60)
+        sig = sign_enrollment_approval(self.priv_key, sess_id, "secondary_phone", sec_pub, expiry=exp1)
 
         # Complete enrollment with named approver -> SUCCESS
         ok, msg = phone_approval_portal.complete_device_enrollment(
@@ -277,7 +278,8 @@ class TestBatch31SecurityHardening(unittest.TestCase):
             device_id="secondary_phone",
             public_key_pem=sec_pub,
             primary_approval_sig=sig,
-            approver_device_id="primary_phone"
+            approver_device_id="primary_phone",
+            approval_expiry=exp1
         )
         self.assertTrue(ok, f"Legitimate second device enrollment should succeed: {msg}")
 
@@ -288,7 +290,8 @@ class TestBatch31SecurityHardening(unittest.TestCase):
         sess_3 = phone_approval_portal.start_local_enrollment(ttl_seconds=60)
         code_3 = get_test_pairing_code(sess_3)
         third_key, third_pub = generate_test_phone_keypair()
-        sig_revoked = sign_enrollment_approval(self.priv_key, sess_3, "third_phone", third_pub, expiry=int(time.time() + 60))
+        exp3 = int(time.time() + 60)
+        sig_revoked = sign_enrollment_approval(self.priv_key, sess_3, "third_phone", third_pub, expiry=exp3)
 
         ok_rev, msg_rev = phone_approval_portal.complete_device_enrollment(
             session_id=sess_3,
@@ -296,7 +299,8 @@ class TestBatch31SecurityHardening(unittest.TestCase):
             device_id="third_phone",
             public_key_pem=third_pub,
             primary_approval_sig=sig_revoked,
-            approver_device_id="primary_phone"
+            approver_device_id="primary_phone",
+            approval_expiry=exp3
         )
         self.assertFalse(ok_rev, "Enrollment with revoked approver MUST fail closed")
 

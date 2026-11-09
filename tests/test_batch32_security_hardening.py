@@ -169,12 +169,23 @@ class TestBatch32SecurityHardening(unittest.TestCase):
         self.assertFalse(ok_past)
         self.assertIn("expired", msg_past.lower())
 
+        valid_expiry = int(time.time() + 120)
+
+        # Attempt V2 signature with tampered/forged signature -> MUST FAIL
+        captured.clear()
+        sess_id4 = phone_approval_portal.start_local_enrollment(ttl_seconds=60)
+        code4 = captured[0]
+        ok_forged, msg_forged = phone_approval_portal.complete_device_enrollment(
+            sess_id4, code4, "second_phone", pub2, primary_approval_sig="aa" * 64, approval_expiry=valid_expiry
+        )
+        self.assertFalse(ok_forged)
+        self.assertIn("invalid", msg_forged.lower())
+
         # Valid V2 signature with unexpired expiry (within 300s cap) -> SUCCEEDS
         captured.clear()
         sess_id3 = phone_approval_portal.start_local_enrollment(ttl_seconds=60)
         code3 = captured[0]
 
-        valid_expiry = int(time.time() + 120)
         v2_valid_sig = sign_enrollment_approval(priv1, sess_id3, "second_phone", pub2, valid_expiry)
 
         ok_v2, msg_v2 = phone_approval_portal.complete_device_enrollment(
@@ -187,15 +198,14 @@ class TestBatch32SecurityHardening(unittest.TestCase):
         self.assertFalse(hasattr(phone_approval_portal, "get_session_pairing_code_for_testing"),
                          "Production module phone_approval_portal must not contain get_session_pairing_code_for_testing helper")
 
-    def test_5_fast_command_pair_phone_triggers_enrollment(self):
-        """Directive 5: Fast command 'pair phone' triggers physical enrollment ceremony."""
+    def test_5_fast_command_pair_phone_disabled_against_acoustic_injection(self):
+        """Directive 5 (Refined in Batch 33): Fast command 'pair phone' must NOT trigger enrollment due to acoustic injection risk."""
         captured = []
         phone_approval_portal.set_display_driver(lambda code: captured.append(code) or True)
 
         handled, msg = homie.try_fast_command("pair phone")
-        self.assertTrue(handled)
-        self.assertIn("pairing", msg.lower())
-        self.assertTrue(len(captured) > 0)
+        self.assertFalse(handled, "Acoustic injection prevention: 'pair phone' must not be triggered via ambient voice")
+        self.assertEqual(len(captured), 0)
 
     def test_6_policy_envelope_fail_closed_omissions(self):
         """Directive 6: Policy envelope check_boundary fails closed on missing process, missing domain, or Enter."""

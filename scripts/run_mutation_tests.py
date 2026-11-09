@@ -303,9 +303,9 @@ MUTATIONS = [
         "id": "MUTATION_31_SESSION_BOUND_MULTISIG_BYPASS",
         "name": "Bypass Session-Bound V2 Multi-Sig Verification in complete_device_enrollment",
         "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
-        "target": "                v2_verified = False\n                for test_exp in candidate_expiries:",
-        "replacement": "                v2_verified = True # MUTATION BYPASS: session binding check bypassed\n                for test_exp in candidate_expiries:",
-        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch30_security_hardening.py::TestBatch30SecurityHardening::test_6_enrollment_multi_sig_binds_session_and_expiry"]
+        "target": "                v2_msg = f\"ENROLL_DEVICE_V2|{session_id}|{device_id}|{public_key_pem.strip()}|{exp_val}\".encode('utf-8')\n                if not verify_asymmetric_signature(approver_entry[\"public_key\"], v2_msg, primary_approval_sig):",
+        "replacement": "                v2_msg = f\"ENROLL_DEVICE_V2|{session_id}|{device_id}|{public_key_pem.strip()}|{exp_val}\".encode('utf-8')\n                if False: # MUTATION BYPASS: bypass asymmetric signature check",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch32_security_hardening.py::TestBatch32SecurityHardening::test_3_v1_fallback_eliminated_and_v2_strictly_verifies_signed_expiry"]
     },
     {
         "id": "MUTATION_32_GLOBAL_LOCKOUT_BYPASS",
@@ -367,8 +367,8 @@ MUTATIONS = [
         "id": "MUTATION_39_V2_SIGNED_EXPIRY_BYPASS",
         "name": "Bypass Signed Expiry Verification in complete_device_enrollment",
         "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
-        "target": "                    if approval_expiry < now:\n                        with _ENROLLMENT_LOCK:\n                            _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)\n                        return False, f\"APPROVAL_EXPIRED: Signed approval expired at {approval_expiry} (current time {now})\"",
-        "replacement": "                    if False: # MUTATION BYPASS: accept expired approval signature\n                        pass",
+        "target": "                if exp_val < now:\n                    with _ENROLLMENT_LOCK:\n                        _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)\n                    return False, f\"APPROVAL_EXPIRED: Signed approval expired at {exp_val} (current time {now})\"",
+        "replacement": "                if False: # MUTATION BYPASS: accept expired approval signature\n                    pass",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch32_security_hardening.py::TestBatch32SecurityHardening::test_3_v1_fallback_eliminated_and_v2_strictly_verifies_signed_expiry"]
     },
     {
@@ -404,12 +404,36 @@ MUTATIONS = [
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch32_security_hardening.py::TestBatch32SecurityHardening::test_10_approval_cache_binds_caller_id_with_ttl"]
     },
     {
-        "id": "MUTATION_44_POLICY_ENVELOPE_ENTER_KEY_CASE_INSENSITIVE_BYPASS",
-        "name": "Bypass Case-Insensitive Enter Form Submission Check in check_boundary",
+        "id": "MUTATION_44_POLICY_ENVELOPE_ENTER_KEY_DETECTION_BYPASS",
+        "name": "Bypass Comprehensive Enter-to-Submit Form Check in check_boundary",
         "file": os.path.join(BASE_DIR, "policy_envelope.py"),
-        "target": "        key_arg = str(arguments.get(\"key\", \"\")).lower().strip()\n        if \"\\n\" in text_arg or \"\\r\" in text_arg or key_arg in (\"enter\", \"return\", \"{enter}\"):",
-        "replacement": "        key_arg = str(arguments.get(\"key\", \"\")).strip()\n        if \"\\n\" in text_arg or \"\\r\" in text_arg or key_arg in (\"enter\", \"return\"): # MUTATION BYPASS: case-sensitive only",
-        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch32_security_hardening.py::TestBatch32SecurityHardening::test_6_policy_envelope_fail_closed_omissions"]
+        "target": "        if enter_detected:\n            return False, \"DENY: Keystroke contains Enter-to-submit form submission. Requires per-step step-up human approval.\", 0",
+        "replacement": "        if False and enter_detected:\n            return False, \"DENY: Keystroke contains Enter-to-submit form submission. Requires per-step step-up human approval.\", 0",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch33_security_hardening.py::TestBatch33SecurityHardening::test_2_enter_to_submit_variations_detected"]
+    },
+    {
+        "id": "MUTATION_45_APPROVAL_EXPIRY_STRICTLY_MANDATORY_BYPASS",
+        "name": "Bypass Mandatory Signed approval_expiry in complete_device_enrollment",
+        "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
+        "target": "                if approval_expiry is None:\n                    with _ENROLLMENT_LOCK:\n                        _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)\n                    return False, \"APPROVAL_INVALID: Signed approval_expiry is strictly mandatory.\"",
+        "replacement": "                if False and approval_expiry is None:\n                    with _ENROLLMENT_LOCK:\n                        _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)\n                    return False, \"APPROVAL_INVALID: Signed approval_expiry is strictly mandatory.\"",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch33_security_hardening.py::TestBatch33SecurityHardening::test_1_approval_expiry_strictly_mandatory"]
+    },
+    {
+        "id": "MUTATION_46_BROWSER_ENVELOPE_EMPTY_DOMAINS_BYPASS",
+        "name": "Bypass Empty allowed_domains Fail-Closed Check in check_boundary",
+        "file": os.path.join(BASE_DIR, "policy_envelope.py"),
+        "target": "        if is_browser_action:\n            if not self.allowed_domains:\n                return False, \"DENY: Browser envelope requires explicit non-empty allowed_domains\", 0",
+        "replacement": "        if is_browser_action:\n            if False and not self.allowed_domains:\n                return False, \"DENY: Browser envelope requires explicit non-empty allowed_domains\", 0",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch33_security_hardening.py::TestBatch33SecurityHardening::test_4_browser_envelope_requires_non_empty_allowed_domains"]
+    },
+    {
+        "id": "MUTATION_47_ENVELOPE_STEP_RESERVATION_RELEASE_BYPASS",
+        "name": "Bypass Step Reservation Release on Proposal Denial in _handle_propose",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": "        if not allowed:\n            if getattr(self, \"envelope\", None) and getattr(self.envelope, \"is_active\", False):\n                self.envelope.release_reservation()",
+        "replacement": "        if not allowed:\n            if False and getattr(self, \"envelope\", None) and getattr(self.envelope, \"is_active\", False):\n                self.envelope.release_reservation()",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch33_security_hardening.py::TestBatch33SecurityHardening::test_3_envelope_step_reservation_no_leak_on_denial"]
     }
 ]
 
@@ -439,7 +463,7 @@ def _safe_copy(src: str, dst: str, retries: int = 5):
 
 def run_mutation_tests() -> bool:
     print("=" * 75)
-    print("=== BATCH 31 EXPANDED AUTOMATED CI MUTATION TEST HARNESS ===")
+    print("=== BATCH 33 EXPANDED AUTOMATED CI MUTATION TEST HARNESS ===")
     print("=" * 75)
     print(f"Total Security Mutations to Evaluate: {len(MUTATIONS)}\n")
 

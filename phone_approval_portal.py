@@ -397,29 +397,30 @@ def complete_device_enrollment(
                     return False, "APPROVAL_REQUIRED: Adding a device requires cryptographic approval from an active device."
 
                 now = int(time.time())
-                # Enforce strict signed expiry verification on session-bound V2 signature
+                # Enforce strict signed expiry verification on session-bound V2 signature (strictly mandatory)
                 if approval_expiry is None:
-                    sess_exp = int(sess.get("expiry", 0))
-                    candidate_expiries = [sess_exp, sess_exp - 1, sess_exp + 1, now + 60, now + 120]
-                else:
-                    if approval_expiry < now:
-                        with _ENROLLMENT_LOCK:
-                            _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)
-                        return False, f"APPROVAL_EXPIRED: Signed approval expired at {approval_expiry} (current time {now})"
-                    if approval_expiry > now + 300:
-                        with _ENROLLMENT_LOCK:
-                            _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)
-                        return False, f"EXPIRY_OUT_OF_BOUNDS: Approval expiry {approval_expiry} exceeds 300s window"
-                    candidate_expiries = [int(approval_expiry)]
+                    with _ENROLLMENT_LOCK:
+                        _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)
+                    return False, "APPROVAL_INVALID: Signed approval_expiry is strictly mandatory."
 
-                v2_verified = False
-                for test_exp in candidate_expiries:
-                    v2_msg = f"ENROLL_DEVICE_V2|{session_id}|{device_id}|{public_key_pem.strip()}|{test_exp}".encode('utf-8')
-                    if verify_asymmetric_signature(approver_entry["public_key"], v2_msg, primary_approval_sig):
-                        v2_verified = True
-                        break
+                try:
+                    exp_val = int(approval_expiry)
+                except (ValueError, TypeError):
+                    with _ENROLLMENT_LOCK:
+                        _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)
+                    return False, "APPROVAL_INVALID: approval_expiry must be an integer timestamp."
 
-                if not v2_verified:
+                if exp_val < now:
+                    with _ENROLLMENT_LOCK:
+                        _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)
+                    return False, f"APPROVAL_EXPIRED: Signed approval expired at {exp_val} (current time {now})"
+                if exp_val > now + 300:
+                    with _ENROLLMENT_LOCK:
+                        _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)
+                    return False, f"EXPIRY_OUT_OF_BOUNDS: Approval expiry {exp_val} exceeds 300s window"
+
+                v2_msg = f"ENROLL_DEVICE_V2|{session_id}|{device_id}|{public_key_pem.strip()}|{exp_val}".encode('utf-8')
+                if not verify_asymmetric_signature(approver_entry["public_key"], v2_msg, primary_approval_sig):
                     with _ENROLLMENT_LOCK:
                         _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)
                     return False, "APPROVAL_INVALID: Signature from active approver device failed verification or is expired."

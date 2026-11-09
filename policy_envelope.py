@@ -25,6 +25,7 @@ with strict architectural hardening:
 
 import os
 import sys
+import re
 import time
 import json
 import hmac
@@ -190,11 +191,13 @@ class PolicyEnvelope:
 
         now = time.time()
         if now > self.expiry:
-            self.is_active = False
+            with self._envelope_lock:
+                self.is_active = False
             return False, "DENY: Envelope has expired", 0
 
         if current_taint_epoch != self.taint_epoch:
-            self.is_active = False
+            with self._envelope_lock:
+                self.is_active = False
             return False, f"DENY: Taint epoch mismatch (envelope={self.taint_epoch}, current={current_taint_epoch})", 0
 
         # Check action type
@@ -213,10 +216,17 @@ class PolicyEnvelope:
             proc_clean = os.path.basename(current_process_image).lower()
 
         # Browser Domain Scoping Check with Strict Dot-Boundary Suffix Matching (fail-closed if domain missing)
-        is_browser_action = proc_clean in BROWSER_IMAGES or "browse" in tool_name.lower() or "click_web" in tool_name.lower()
-        if self.allowed_domains and (is_browser_action or current_domain):
+        has_browser_proc = proc_clean in BROWSER_IMAGES or any(p.lower() in BROWSER_IMAGES for p in self.allowed_process_images)
+        is_browser_action = has_browser_proc or "browse" in tool_name.lower() or "click_web" in tool_name.lower()
+
+        if is_browser_action:
+            if not self.allowed_domains:
+                return False, "DENY: Browser envelope requires explicit non-empty allowed_domains", 0
             if not current_domain or not any(is_domain_allowed(current_domain, d) for d in self.allowed_domains):
                 return False, f"DENY: Browser domain '{current_domain}' outside envelope domain scope: {self.allowed_domains}", 0
+        elif self.allowed_domains and current_domain:
+            if not any(is_domain_allowed(current_domain, d) for d in self.allowed_domains):
+                return False, f"DENY: Target domain '{current_domain}' outside envelope domain scope: {self.allowed_domains}", 0
 
         # Non-bypassable high-risk class check (tool name)
         for high_risk_kw in HIGH_RISK_PER_STEP_CLASSES:
@@ -232,9 +242,29 @@ class PolicyEnvelope:
             if kw in elem_name:
                 return False, f"DENY: Semantic high-risk control detected ('{elem_name}' matches '{kw}'). Requires per-step step-up human approval.", 0
 
-        # Check Enter-to-submit form pattern (case-insensitive)
-        key_arg = str(arguments.get("key", "")).lower().strip()
-        if "\n" in text_arg or "\r" in text_arg or key_arg in ("enter", "return", "{enter}"):
+        # Check Enter-to-submit form pattern (case-insensitive across key, keys, hotkey, text fields)
+        enter_detected = False
+        if "\n" in text_arg or "\r" in text_arg:
+            enter_detected = True
+
+        if not enter_detected:
+            for k_field in ("key", "keys", "hotkey", "text", "shortcut", "sequence"):
+                val = arguments.get(k_field)
+                if not val:
+                    continue
+                if isinstance(val, (list, tuple, set)):
+                    items = [str(x).lower().strip() for x in val]
+                else:
+                    items = [str(val).lower().strip()]
+                for item in items:
+                    norm = re.sub(r'[\+_\s\-]+', '', item)
+                    if any(x in norm for x in ("enter", "return")) or any(x in item for x in ("enter", "return")):
+                        enter_detected = True
+                        break
+                if enter_detected:
+                    break
+
+        if enter_detected:
             return False, "DENY: Keystroke contains Enter-to-submit form submission. Requires per-step step-up human approval.", 0
 
         with self._envelope_lock:

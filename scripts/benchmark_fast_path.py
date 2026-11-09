@@ -21,7 +21,7 @@ if BASE_DIR not in sys.path:
 import homie_supervisor
 import homie_mcp
 
-def benchmark(n_iterations=50):
+def benchmark(n_iterations=500):
     os.environ["HOMIE_TEST_ENV"] = "1"
     os.environ["HOMIE_COMPLETE_MEDIATION"] = "1"
 
@@ -52,11 +52,30 @@ def benchmark(n_iterations=50):
 
     supervisor.clean_shutdown()
 
-    p50 = statistics.median(latencies_ms)
-    p95 = statistics.quantiles(latencies_ms, n=20)[18]  # 95th percentile
-    p99 = statistics.quantiles(latencies_ms, n=100)[98] # 99th percentile
-    min_lat = min(latencies_ms)
-    max_lat = max(latencies_ms)
+    sorted_samples = sorted(latencies_ms)
+    n = len(sorted_samples)
+    min_lat = sorted_samples[0]
+    p50 = sorted_samples[int(n * 0.50)]
+    p95 = sorted_samples[min(n - 1, int(n * 0.95))]
+    p99 = sorted_samples[min(n - 1, int(n * 0.99))]
+    max_lat = sorted_samples[-1]
+
+    # Save raw benchmark data for auditability
+    import json
+    samples_path = os.path.join(BASE_DIR, "benchmark_samples.json")
+    try:
+        with open(samples_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "n_iterations": n_iterations,
+                "min_ms": min_lat,
+                "p50_ms": p50,
+                "p95_ms": p95,
+                "p99_ms": p99,
+                "max_ms": max_lat,
+                "samples_ms": [round(x, 4) for x in latencies_ms]
+            }, f, indent=2)
+    except Exception:
+        pass
 
     print("\n=== SUPERVISOR FAST-PATH END-TO-END LATENCY BENCHMARK ===")
     print(f"Iterations: {n_iterations}")
