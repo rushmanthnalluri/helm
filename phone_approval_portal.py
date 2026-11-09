@@ -60,14 +60,86 @@ MAX_FAILED_ENROLLMENT_ATTEMPTS = 3
 _SUPERVISOR_CHALLENGE_SEQ = 0
 _CONSOLE_RECOVERY_TOKENS: Dict[str, float] = {}
 
+def _init_recovery_tokens_table():
+    try:
+        import db_utils
+        with db_utils.get_db() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS console_recovery_tokens (
+                    token_hash TEXT PRIMARY KEY,
+                    expires_at REAL NOT NULL,
+                    consumed INTEGER DEFAULT 0,
+                    created_at REAL NOT NULL
+                )
+            """)
+            conn.commit()
+    except Exception as e:
+        logger.warning("Could not initialize console_recovery_tokens table: %s", e)
+
 def generate_console_recovery_token(ttl_seconds: float = 300.0) -> str:
-    """Generates an unguessable 32-character single-use recovery token in local console memory.
-    Valid for 5 minutes. Cannot be obtained by remote network callers or worker processes.
+    """Generates an unguessable 32-character single-use recovery token in local console memory and SQLite.
+    Valid for 5 minutes. Persisted across processes so CLI recovery commands can authorize server enrollment.
     """
     token = secrets.token_hex(16)
+    token_hash = hashlib.sha256(token.encode('utf-8')).hexdigest()
+    now = time.time()
+    exp = now + ttl_seconds
     with _ENROLLMENT_LOCK:
-        _CONSOLE_RECOVERY_TOKENS[token] = time.time() + ttl_seconds
+        _CONSOLE_RECOVERY_TOKENS[token] = exp
+    try:
+        import db_utils
+        _init_recovery_tokens_table()
+        with db_utils.get_db() as conn:
+            conn.execute(
+                "INSERT INTO console_recovery_tokens (token_hash, expires_at, consumed, created_at) VALUES (?, ?, 0, ?)",
+                (token_hash, exp, now)
+            )
+            conn.commit()
+    except Exception as e:
+        logger.warning("Could not persist recovery token to SQLite: %s", e)
     return token
+
+def consume_console_recovery_token(recovery_token: Optional[str]) -> bool:
+    """Consumes single-use console recovery token from in-memory cache or cross-process SQLite table."""
+    if not recovery_token or not isinstance(recovery_token, str):
+        return False
+    tok = recovery_token.strip()
+    now = time.time()
+    token_hash = hashlib.sha256(tok.encode('utf-8')).hexdigest()
+
+    # 1. Try in-memory cache
+    with _ENROLLMENT_LOCK:
+        exp = _CONSOLE_RECOVERY_TOKENS.pop(tok, None)
+        if exp and now <= exp:
+            try:
+                import db_utils
+                with db_utils.get_db() as conn:
+                    conn.execute("UPDATE console_recovery_tokens SET consumed = 1 WHERE token_hash = ?", (token_hash,))
+                    conn.commit()
+            except Exception:
+                pass
+            return True
+
+    # 2. Try cross-process SQLite table
+    try:
+        import db_utils
+        _init_recovery_tokens_table()
+        with db_utils.get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT rowid, expires_at FROM console_recovery_tokens WHERE token_hash = ? AND consumed = 0 AND expires_at > ?",
+                (token_hash, now)
+            )
+            row = cur.fetchone()
+            if row:
+                row_id = row[0]
+                cur.execute("UPDATE console_recovery_tokens SET consumed = 1 WHERE rowid = ?", (row_id,))
+                conn.commit()
+                return True
+    except Exception as e:
+        logger.warning("Error consuming recovery token from SQLite: %s", e)
+
+    return False
 
 def _load_enrollment_lockout() -> Dict[str, Any]:
     if os.path.exists(ENROLLMENT_LOCKOUT_PATH):
@@ -109,14 +181,7 @@ def reset_pairing_lockout(recovery_token: Optional[str] = None) -> Tuple[bool, s
     Strictly requires a valid single-use local console recovery token (fails closed otherwise).
     Zero boolean presence bypasses permitted.
     """
-    valid = False
-    with _ENROLLMENT_LOCK:
-        if recovery_token and isinstance(recovery_token, str):
-            exp = _CONSOLE_RECOVERY_TOKENS.pop(recovery_token.strip(), None)
-            if exp and time.time() <= exp:
-                valid = True
-
-    if not valid:
+    if not consume_console_recovery_token(recovery_token):
         logger.warning("Denied unauthenticated pairing lockout reset attempt.")
         return False, "DENY: Valid single-use console recovery token required to reset pairing lockout."
 
@@ -373,13 +438,7 @@ def complete_device_enrollment(
             if not active_device_ids:
                 # All previously registered devices are revoked (lost-phone scenario).
                 # Re-enrollment requires a valid console recovery token to prevent unauthorized enrollment.
-                token_valid = False
-                if recovery_token and isinstance(recovery_token, str):
-                    with _ENROLLMENT_LOCK:
-                        exp = _CONSOLE_RECOVERY_TOKENS.pop(recovery_token.strip(), None)
-                        if exp and time.time() <= exp:
-                            token_valid = True
-                if not token_valid:
+                if not consume_console_recovery_token(recovery_token):
                     with _ENROLLMENT_LOCK:
                         _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)
                     return False, "DENY: All registered devices are revoked. Physical console recovery token required to enroll a new device."
@@ -621,6 +680,21 @@ def verify_device_approval(
         f"phone_verified_{device_id}", item["tool_name"], "WRITE_EXEC", item["arguments"],
         decision=f"DEVICE_APPROVED:{step_up_id}"
     )
+
+    # Step 5: Relay verified device approval to homie_supervisor cache & SQLite approved_actions table
+    try:
+        import homie_supervisor
+        target_caller = item.get("caller_id") or "worker"
+        remaining_ttl = max(1.0, float(item.get("expiry", now + 60) - now))
+        homie_supervisor.record_approved_action(
+            caller_id=target_caller,
+            tool=item["tool_name"],
+            args_hash=str(item["args_hash"]).lower(),
+            taint_epoch=item.get("taint_epoch", 0),
+            ttl=min(remaining_ttl, 120.0)
+        )
+    except Exception as e:
+        logger.warning("Could not relay approved device action to supervisor: %s", e)
 
     logger.info("Step-up challenge %s verified successfully by paired hardware device %s", step_up_id, device_id)
     return True, "Step-up approval successfully verified by paired phone", item

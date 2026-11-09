@@ -162,10 +162,11 @@ class TestBatch35SecurityHardening(unittest.TestCase):
 
         # Scenario A: Actuator is invoked but throws RuntimeError (outcome: UNKNOWN)
         # The step budget MUST be consumed because the actuator ran side-effects!
-        with patch.object(sup.actuator, 'execute_actuator', side_effect=RuntimeError("Driver crashed mid-typewrite")):
-            rep = client.propose("homie_agent_type", {"text": "hello world", "target_process": "notepad.exe"})
-            self.assertEqual(rep.get("status"), "DENY")
-            self.assertIn("Driver crashed mid-typewrite", rep.get("reason", ""))
+        with patch.object(windows_tools, "get_foreground_window", return_value={"proc_name": "notepad.exe", "hwnd": 1234}):
+            with patch.object(sup.actuator, 'execute_actuator', side_effect=RuntimeError("Driver crashed mid-typewrite")):
+                rep = client.propose("homie_agent_type", {"text": "hello world", "target_process": "notepad.exe"})
+                self.assertEqual(rep.get("status"), "DENY")
+                self.assertIn("Driver crashed mid-typewrite", rep.get("reason", ""))
 
         # UNKNOWN outcome must have committed the step!
         self.assertEqual(env.steps_consumed, 1)
@@ -275,10 +276,12 @@ class TestBatch35SecurityHardening(unittest.TestCase):
         lParam_physical = ctypes.addressof(fake_kb_physical)
 
         with patch('phone_approval_portal.start_local_enrollment', return_value="sess_test_b35_12345678") as mock_enroll:
-            with patch('ctypes.windll.user32.GetAsyncKeyState', return_value=0x8000):
-                app.handle_keyboard_event(0, 0x0100, lParam_physical)
-                # Physical hardware keystroke MUST trigger enrollment
-                mock_enroll.assert_called_once()
+            app._physical_ctrl_down = True
+            app._physical_alt_down = True
+            app.handle_keyboard_event(0, 0x0100, lParam_physical)
+            time.sleep(0.05)
+            # Physical hardware keystroke MUST trigger enrollment
+            mock_enroll.assert_called_once()
 
 
 if __name__ == "__main__":

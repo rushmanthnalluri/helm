@@ -95,6 +95,8 @@ class HomieApp:
         self._ll_hook = None
         self._hook_proc = None
         self._running_hotkey = True
+        self._physical_ctrl_down = False
+        self._physical_alt_down = False
         self.tray = None
         self.telegram = None
 
@@ -240,20 +242,32 @@ class HomieApp:
             except Exception:
                 pass
 
+    def _trigger_pairing_async(self):
+        try:
+            import phone_approval_portal
+            sess_id = phone_approval_portal.start_local_enrollment(ttl_seconds=120.0)
+            if sess_id:
+                self.eval_js(f"window.ui.notice('Pairing ceremony active: {sess_id}')")
+        except Exception as e:
+            logger.error("Error triggering async pairing: %s", e)
+
     def handle_keyboard_event(self, nCode: int, wParam: int, lParam: int) -> int:
         """Low-level keyboard hook callback.
         Guarantees physical console presence for pairing hotkey (Ctrl + Alt + P).
         Rejects all synthetic/injected keystrokes (LLKHF_INJECTED | LLKHF_LOWER_IL_INJECTED).
+        Dispatches pairing asynchronously to worker thread to prevent LowLevelHooksTimeout.
         """
         import ctypes
         from ctypes import wintypes
         user32 = ctypes.windll.user32
         WM_KEYDOWN = 0x0100
+        WM_KEYUP = 0x0101
         WM_SYSKEYDOWN = 0x0104
+        WM_SYSKEYUP = 0x0105
         LLKHF_INJECTED = 0x00000001
         LLKHF_LOWER_IL_INJECTED = 0x00000002
 
-        if nCode >= 0 and wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
+        if nCode >= 0:
             class KBDLLHOOKSTRUCT(ctypes.Structure):
                 _fields_ = [
                     ("vkCode", wintypes.DWORD),
@@ -270,16 +284,22 @@ class HomieApp:
                     return user32.CallNextHookEx(self._ll_hook, nCode, wParam, lParam)
                 return 0
 
-            # Only genuine physical hardware keystrokes reach here
-            if kb.vkCode == 0x50:  # VK_P
-                ctrl_down = bool(user32.GetAsyncKeyState(0x11) & 0x8000)
-                alt_down = bool(user32.GetAsyncKeyState(0x12) & 0x8000)
-                if ctrl_down and alt_down:
-                    import phone_approval_portal
-                    sess_id = phone_approval_portal.start_local_enrollment(ttl_seconds=120.0)
-                    if sess_id:
-                        # Display FULL session ID so mobile device can enroll
-                        self.eval_js(f"window.ui.notice('Pairing ceremony active: {sess_id}')")
+            # Track physical key states exclusively through the physical low-level hook
+            vk = kb.vkCode
+            if wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                if vk in (0x11, 0xA2, 0xA3):  # VK_CONTROL, VK_LCONTROL, VK_RCONTROL
+                    self._physical_ctrl_down = True
+                elif vk in (0x12, 0xA4, 0xA5):  # VK_MENU, VK_LMENU, VK_RMENU
+                    self._physical_alt_down = True
+                elif vk == 0x50:  # VK_P
+                    if getattr(self, "_physical_ctrl_down", False) and getattr(self, "_physical_alt_down", False):
+                        # Asynchronous dispatch to background thread (avoids blocking hook thread)
+                        threading.Thread(target=self._trigger_pairing_async, daemon=True).start()
+            elif wParam in (WM_KEYUP, WM_SYSKEYUP):
+                if vk in (0x11, 0xA2, 0xA3):
+                    self._physical_ctrl_down = False
+                elif vk in (0x12, 0xA4, 0xA5):
+                    self._physical_alt_down = False
 
         if self._ll_hook:
             return user32.CallNextHookEx(self._ll_hook, nCode, wParam, lParam)

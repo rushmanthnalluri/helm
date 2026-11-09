@@ -15,18 +15,41 @@ import win32api
 import win32process
 from PIL import ImageGrab, Image, ImageDraw, ImageFont
 
+VK_MAP: Dict[str, int] = {
+    # Enter / Return
+    "enter": 13, "return": 13, "cr": 13, "ret": 13, "{enter}": 13, "{return}": 13,
+    "numpadenter": 13, "numpad_enter": 13,
+    # Modifiers
+    "ctrl": 17, "control": 17, "lctrl": 162, "rctrl": 163,
+    "alt": 18, "menu": 18, "lalt": 164, "ralt": 165,
+    "shift": 16, "lshift": 160, "rshift": 161,
+    "win": 91, "windows": 91, "lwin": 91, "rwin": 92,
+    # Letters
+    **{chr(c).lower(): c for c in range(ord('A'), ord('Z') + 1)},
+    # Digits
+    **{str(d): ord('0') + d for d in range(10)},
+    # F-keys
+    **{f"f{i}": 111 + i for i in range(1, 13)},
+    # Special keys
+    "esc": 27, "escape": 27, "tab": 9, "backspace": 8, "space": 32,
+    "delete": 46, "del": 46, "insert": 45, "home": 36, "end": 35,
+    "pageup": 33, "pagedown": 34, "up": 38, "down": 40, "left": 37, "right": 39
+}
+
 def canonicalize_keyboard_arguments(arguments: Dict[str, Any]) -> Tuple[bool, bool, List[int], List[str]]:
-    """Canonicalizes all keyboard and input arguments across all schemas at the injector level.
+    """Canonicalizes all keyboard and input arguments across all schemas into discrete Virtual-Key events.
+    Guarantees:
+    - NO substring or suffix tests (e.g. 'center', 'enterprise', 'return to sender' never trigger Enter).
+    - Free-form prose strings ONLY check for literal newlines (\\n, \\r).
+    - Catches key='\\n', text=['enter'], text=['\\n'], keycode=[13], vk=13.0, vk='0x0d'.
+    - Catches synthetic Ctrl+Alt+P chord across key combinations, tokens, and numeric codes (e.g. [17, 18, 80]).
+    - 'alt text for the ctrl panel' NEVER triggers Ctrl+Alt+P.
     Returns: (enter_detected: bool, ctrl_alt_p_detected: bool, vks: List[int], tokens: List[str])
     """
     KEY_FIELDS = (
         "key", "keys", "hotkey", "shortcut", "sequence",
         "vk", "keycode", "key_code", "keys_to_press", "chars", "input"
     )
-    ENTER_KEY_TOKENS = {
-        "enter", "return", "numpadenter", "numpad_enter",
-        "{enter}", "{return}", "cr", "ret", "\n", "\r"
-    }
 
     def _flatten(v) -> List[Any]:
         if v is None:
@@ -38,14 +61,33 @@ def canonicalize_keyboard_arguments(arguments: Dict[str, Any]) -> Tuple[bool, bo
             return res
         return [v]
 
+    def _parse_vk(raw) -> Optional[int]:
+        if raw is None or raw == "":
+            return None
+        if isinstance(raw, (int, float)):
+            try:
+                return int(raw)
+            except (ValueError, OverflowError):
+                return None
+        s = str(raw).strip().lower()
+        if s.startswith("0x"):
+            try:
+                return int(s, 16)
+            except ValueError:
+                pass
+        try:
+            return int(float(s))
+        except ValueError:
+            pass
+        return VK_MAP.get(s)
+
+    detected_vks: List[int] = []
+    tokens: List[str] = []
     enter_detected = False
-    ctrl_alt_p_detected = False
-    detected_vks = []
-    tokens = []
 
     # 1. Text field inspection:
-    # If text is string: literal \n or \r indicates form submission / Enter
-    # If text is a list/tuple: flatten and check individual items (e.g. text=["enter"] or text=["\n"])
+    # Free-form string prose ONLY checks for literal newlines (indicates form submit)
+    # If text is a list/tuple: treat elements as individual key events / tokens
     text_val = arguments.get("text")
     if text_val is not None:
         if isinstance(text_val, str):
@@ -59,13 +101,20 @@ def canonicalize_keyboard_arguments(arguments: Dict[str, Any]) -> Tuple[bool, bo
                 s_item = str(item)
                 if "\n" in s_item or "\r" in s_item:
                     enter_detected = True
-                    break
+                    detected_vks.append(13)
+                    continue
+                vk = _parse_vk(item)
+                if vk is not None:
+                    detected_vks.append(vk)
+                    if vk in (13, 0x0D):
+                        enter_detected = True
                 s_clean = s_item.strip().lower()
-                if s_clean in ENTER_KEY_TOKENS or s_clean in ("13", "0x0d", "0xd", "13.0"):
+                tokens.append(s_clean)
+                if s_clean in ("enter", "return", "{enter}", "{return}", "cr", "ret", "numpadenter", "numpad_enter"):
                     enter_detected = True
-                    break
+                    detected_vks.append(13)
 
-    # 2. Key fields inspection (flattening all nested lists/structures)
+    # 2. Key fields inspection (flattening all nested structures)
     for k_field in KEY_FIELDS:
         val = arguments.get(k_field)
         if val is None or val == "":
@@ -75,61 +124,82 @@ def canonicalize_keyboard_arguments(arguments: Dict[str, Any]) -> Tuple[bool, bo
             if raw_item is None or raw_item == "":
                 continue
 
-            # Check numeric VK codes (handles int, float e.g. 13.0, and numeric/hex strings)
-            is_vk_13 = False
-            if isinstance(raw_item, (int, float)):
-                try:
-                    if int(raw_item) == 13:
-                        is_vk_13 = True
-                except (ValueError, OverflowError):
-                    pass
-            else:
-                s_raw = str(raw_item).strip().lower()
-                if s_raw in ("13", "0x0d", "0xd", "13.0"):
-                    is_vk_13 = True
-                else:
-                    try:
-                        if int(float(s_raw)) == 13:
-                            is_vk_13 = True
-                    except Exception:
-                        pass
-
-            if is_vk_13:
-                enter_detected = True
-                detected_vks.append(13)
-
-            # Check for unstripped newline / carriage return (e.g. key="\n")
+            # Check for unstripped newline / carriage return
             str_item = str(raw_item)
             if "\n" in str_item or "\r" in str_item:
                 enter_detected = True
-
-            raw_lower = str_item.lower().strip()
-            tokens.append(raw_lower)
-
-            if raw_lower in ENTER_KEY_TOKENS:
-                enter_detected = True
                 detected_vks.append(13)
 
-            # Check compound shortcuts (e.g. "ctrl+enter", "Ctrl + Return")
-            parts = [re.sub(r'[\+_\s\-]+', '', p) for p in re.split(r'[\+,\s\-]+', raw_lower) if p]
-            if any(p in ENTER_KEY_TOKENS for p in parts):
-                enter_detected = True
+            # Try parsing directly as VK code
+            vk = _parse_vk(raw_item)
+            if vk is not None:
+                detected_vks.append(vk)
+                if vk in (13, 0x0D):
+                    enter_detected = True
 
-            norm = re.sub(r'[\+_\s\-]+', '', raw_lower)
-            if norm.endswith("enter") or norm.endswith("return"):
-                enter_detected = True
+            # If string contains delimiter (+, -, space, comma), parse compound chord
+            if isinstance(raw_item, str):
+                raw_lower = raw_item.strip().lower()
+                tokens.append(raw_lower)
+                parts = [p.strip().lower() for p in re.split(r'[\+,\s\-]+', raw_lower) if p.strip()]
+                for p in parts:
+                    tokens.append(p)
+                    part_vk = _parse_vk(p)
+                    if part_vk is not None:
+                        detected_vks.append(part_vk)
+                        if part_vk in (13, 0x0D):
+                            enter_detected = True
 
-    # 3. Comprehensive Ctrl+Alt+P chord detection across all fields and tokens
-    all_raw = " ".join(tokens) + " " + str(arguments.get("text", "")).lower()
-    norm_all = re.sub(r'[\+_\s\-]+', '', all_raw)
-    if "ctrl" in norm_all and "alt" in norm_all and "p" in norm_all:
-        ctrl_alt_p_detected = True
-    elif any(norm == "ctrlaltp" for norm in [re.sub(r'[\+_\s\-]+', '', t) for t in tokens]):
-        ctrl_alt_p_detected = True
-    elif {"ctrl", "alt", "p"}.issubset(set(tokens)):
-        ctrl_alt_p_detected = True
+    # 3. Exact Virtual-Key chord matching for Ctrl + Alt + P
+    # Modifiers: Ctrl (17, 162, 163), Alt (18, 164, 165), P (80, 0x50)
+    has_ctrl = any(vk in detected_vks for vk in (17, 162, 163))
+    has_alt = any(vk in detected_vks for vk in (18, 164, 165))
+    has_p = (80 in detected_vks)
+
+    token_set = set(tokens)
+    has_ctrl_token = bool({"ctrl", "control", "lctrl", "rctrl"}.intersection(token_set))
+    has_alt_token = bool({"alt", "menu", "lalt", "ralt"}.intersection(token_set))
+    has_p_token = bool({"p"}.intersection(token_set))
+
+    ctrl_alt_p_detected = (has_ctrl and has_alt and has_p) or (has_ctrl_token and has_alt_token and has_p_token)
 
     return enter_detected, ctrl_alt_p_detected, detected_vks, tokens
+
+def get_browser_active_domain(hwnd: Optional[int] = None) -> Optional[str]:
+    """Inspects active browser window via Windows UI Automation (UIA) to extract true URL hostname.
+    Guarantees: Never trusts window titles or worker-supplied domain arguments.
+    """
+    try:
+        import uiautomation as uia
+        import urllib.parse
+        
+        edit = None
+        if hwnd:
+            try:
+                window_ctrl = uia.ControlFromHandle(hwnd)
+                if window_ctrl:
+                    edit = window_ctrl.EditControl(searchDepth=8, SubName="Address")
+                    if not edit.Exists(0.1):
+                        edit = window_ctrl.EditControl(searchDepth=8, ClassName="Chrome_OmniboxView")
+            except Exception:
+                pass
+
+        if not edit or not edit.Exists(0.1):
+            edit = uia.EditControl(searchDepth=6, SubName="Address")
+            if not edit.Exists(0.1):
+                edit = uia.EditControl(searchDepth=6, ClassName="Chrome_OmniboxView")
+
+        if edit and edit.Exists(0.1):
+            val = edit.GetValuePattern().Value if hasattr(edit, 'GetValuePattern') else ""
+            if val:
+                val = str(val).strip()
+                if not val.startswith(("http://", "https://")):
+                    val = "https://" + val
+                parsed = urllib.parse.urlparse(val)
+                return parsed.hostname
+    except Exception as e:
+        logger.debug("UIA browser domain inspection error: %s", e)
+    return None
 
 def enable_dpi_awareness():
     """Sets per-monitor DPI awareness (V2) to guarantee exact multi-monitor coordinate precision."""

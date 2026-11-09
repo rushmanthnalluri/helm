@@ -803,23 +803,26 @@ class PolicySupervisor:
                 })
 
         # 5.1. Policy Envelope domain scoping, step budget & prohibited environments
-        # Resolve real active foreground process & domain via supervisor inspection
+        # Resolve real active foreground process & domain via supervisor-first inspection
         fg_info = windows_tools.get_foreground_window()
         supervisor_proc = (fg_info.get("proc_name") or "") if fg_info else ""
-        current_proc = supervisor_proc or args.get("target_process") or args.get("app_name")
-        current_domain = args.get("domain") or args.get("url") or args.get("target")
-        if current_domain and ("http://" in str(current_domain) or "https://" in str(current_domain)):
-            import urllib.parse
-            try:
-                current_domain = urllib.parse.urlparse(current_domain).hostname or current_domain
-            except Exception:
-                pass
-        if not current_domain and fg_info and supervisor_proc in policy_envelope.BROWSER_IMAGES:
-            title = fg_info.get("title", "")
-            for part in title.split(" - "):
-                if "." in part and " " not in part.strip():
-                    current_domain = part.strip()
-                    break
+        current_proc = supervisor_proc  # Fail-closed: Supervisor inspects OS foreground; NEVER accepts worker self-attested proc
+
+        # Supervisor-first domain resolution:
+        # If in a browser image, extract real URL via UIA from the address bar (worker-attested domain and title are ignored)
+        current_domain = None
+        clean_proc = os.path.basename(supervisor_proc).lower()
+        if clean_proc in policy_envelope.BROWSER_IMAGES:
+            current_domain = windows_tools.get_browser_active_domain(fg_info.get("hwnd") if fg_info else None)
+        else:
+            # For non-browser network tools, read explicit target argument
+            raw_target = args.get("domain") or args.get("url") or args.get("target")
+            if raw_target:
+                import urllib.parse
+                try:
+                    current_domain = urllib.parse.urlparse(str(raw_target)).hostname or str(raw_target)
+                except Exception:
+                    current_domain = str(raw_target)
 
         ks_to_commit = 0
         res_token = None
@@ -837,6 +840,7 @@ class PolicySupervisor:
                 })
 
         step_committed = False
+        actuator_invoked = False
         try:
             # 9. Taint & Out-of-band Step-up Verification (Fail-Closed)
             allowed, requires_step_up, taint_reason = taint_tracker.check_action_privilege(
@@ -901,7 +905,6 @@ class PolicySupervisor:
                 })
 
             # Phase 2: Privileged Supervisor Actuator executes effect WITH verified intent token
-            actuator_invoked = False
             execution_success = False
             exception_occurred = False
             result = ""

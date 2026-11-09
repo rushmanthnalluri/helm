@@ -944,17 +944,15 @@ def main():
 
     if cmd in ('--pairing-unlock', 'pairing-unlock', '--recover-device'):
         import phone_approval_portal
-        # Interactive confirmation required to ensure automated background processes or agents cannot invoke it
-        force = '--yes' in args or '-y' in args
-        if not force:
-            if sys.stdin.isatty():
-                confirmation = input("Type 'CONFIRM-RESET' to unlock pairing / generate recovery token: ").strip()
-                if confirmation != "CONFIRM-RESET":
-                    print("✗ [HOMIE SECURITY] Operation cancelled: confirmation code mismatch.")
-                    return
-            else:
-                print("✗ [HOMIE SECURITY] Interactive console presence required to unlock pairing.")
-                return
+        # Interactive console presence required to ensure automated processes or background agents cannot invoke recovery
+        if not sys.stdin.isatty():
+            print("✗ [HOMIE SECURITY] Interactive console presence required to unlock pairing.")
+            return
+
+        confirmation = input("Type 'CONFIRM-RESET' to unlock pairing / generate recovery token: ").strip()
+        if confirmation != "CONFIRM-RESET":
+            print("✗ [HOMIE SECURITY] Operation cancelled: confirmation code mismatch.")
+            return
         
         recovery_token = phone_approval_portal.generate_console_recovery_token(ttl_seconds=300.0)
         ok, msg = phone_approval_portal.reset_pairing_lockout(recovery_token=recovery_token)

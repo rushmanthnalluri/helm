@@ -335,9 +335,9 @@ MUTATIONS = [
         "id": "MUTATION_35_CONSOLE_RECOVERY_TOKEN_BYPASS",
         "name": "Bypass Console Recovery Token Verification in reset_pairing_lockout",
         "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
-        "target": "        if recovery_token and isinstance(recovery_token, str):\n            exp = _CONSOLE_RECOVERY_TOKENS.pop(recovery_token.strip(), None)\n            if exp and time.time() <= exp:\n                valid = True",
-        "replacement": "        if recovery_token and isinstance(recovery_token, str):\n            valid = True # MUTATION BYPASS: accept any arbitrary token string",
-        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch31_security_hardening.py::TestBatch31SecurityHardening::test_6_console_recovery_token_for_pairing_lockout_reset"]
+        "target": "    if not consume_console_recovery_token(recovery_token):",
+        "replacement": "    if False and not consume_console_recovery_token(recovery_token): # MUTATION BYPASS: accept any arbitrary token",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch36_security_hardening.py::TestBatch36SecurityHardening::test_3_recovery_cli_non_interactive_fails_closed_and_sqlite_cross_process"]
     },
     {
         "id": "MUTATION_36_OUTCOME_UNKNOWN_EXCEPTION_BYPASS",
@@ -359,8 +359,8 @@ MUTATIONS = [
         "id": "MUTATION_38_REVOKED_ALL_DEVICES_TOKEN_BYPASS",
         "name": "Bypass Recovery Token Requirement on All Devices Revoked in complete_device_enrollment",
         "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
-        "target": "                if not token_valid:\n                    with _ENROLLMENT_LOCK:\n                        _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)\n                    return False, \"DENY: All registered devices are revoked. Physical console recovery token required to enroll a new device.\"",
-        "replacement": "                if False: # MUTATION BYPASS: allow unauthenticated enrollment when all devices are revoked\n                    pass",
+        "target": "                if not consume_console_recovery_token(recovery_token):",
+        "replacement": "                if False and not consume_console_recovery_token(recovery_token): # MUTATION BYPASS: allow unauthenticated enrollment when all devices are revoked",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch32_security_hardening.py::TestBatch32SecurityHardening::test_2_revoked_primary_recovery_fails_closed_without_token"]
     },
     {
@@ -433,15 +433,15 @@ MUTATIONS = [
         "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
         "target": "        finally:\n            # Single-point guaranteed reservation release for all early returns, denials, and exceptions.\n            # Release reservation ONLY if the actuator was NEVER invoked!\n            if res_token and not step_committed and not actuator_invoked:",
         "replacement": "        finally:\n            # Single-point guaranteed reservation release for all early returns, denials, and exceptions.\n            # Release reservation ONLY if the actuator was NEVER invoked!\n            if False and res_token and not step_committed and not actuator_invoked:",
-        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch34_security_hardening.py::TestBatch34SecurityHardening::test_3_envelope_reservation_token_single_point_release_across_supervisor_exits"]
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch36_security_hardening.py::TestBatch36SecurityHardening::test_1_envelope_early_exit_paths_guarantee_zero_reserved_steps_and_no_unbound_local"]
     },
     {
         "id": "MUTATION_48_KEYCODE_13_ENTER_BYPASS",
         "name": "Bypass Numeric Keycode 13 Enter-to-Submit Detection in canonicalize_keyboard_arguments",
-        "file": os.path.join(BASE_DIR, "policy_envelope.py"),
-        "target": "            if is_vk_13:\n                enter_detected = True\n                detected_vks.append(13)",
-        "replacement": "            if False and is_vk_13:\n                enter_detected = True\n                detected_vks.append(13)",
-        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch34_security_hardening.py::TestBatch34SecurityHardening::test_2_enter_detection_no_false_positives_on_words_and_catches_keycode_13"]
+        "file": os.path.join(BASE_DIR, "windows_tools.py"),
+        "target": "                if vk in (13, 0x0D):\n                    enter_detected = True",
+        "replacement": "                if False and vk in (13, 0x0D):\n                    enter_detected = True",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch36_security_hardening.py::TestBatch36SecurityHardening::test_4_exact_vk_canonicalization_and_actuator_enforcement"]
     },
     {
         "id": "MUTATION_49_SYNTHETIC_CTRL_ALT_P_BYPASS",
@@ -487,9 +487,9 @@ MUTATIONS = [
         "id": "MUTATION_54_CONSOLE_RECOVERY_TOKEN_TTY_CHECK_BYPASS",
         "name": "Bypass Console Presence Verification in homie.py --pairing-unlock",
         "file": os.path.join(BASE_DIR, "homie.py"),
-        "target": "            if sys.stdin.isatty():\n                confirmation = input(\"Type 'CONFIRM-RESET' to unlock pairing / generate recovery token: \").strip()",
-        "replacement": "            if True or sys.stdin.isatty():\n                confirmation = 'CONFIRM-RESET'",
-        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch35_security_hardening.py::TestBatch35SecurityHardening::test_5_console_recovery_token_cli_caller"]
+        "target": "        if not sys.stdin.isatty():\n            print(\"✗ [HOMIE SECURITY] Interactive console presence required to unlock pairing.\")\n            return",
+        "replacement": "        if False and not sys.stdin.isatty():\n            pass",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch36_security_hardening.py::TestBatch36SecurityHardening::test_3_recovery_cli_non_interactive_fails_closed_and_sqlite_cross_process"]
     },
     {
         "id": "MUTATION_55_TELEGRAM_MEDIATION_BROKER_BYPASS",
@@ -498,6 +498,46 @@ MUTATIONS = [
         "target": "            ok, msg, _ = action_broker.execute_action('homie_control_media', {'action': 'play_pause'}, caller_id='telegram_remote')",
         "replacement": "            ok, msg = windows_tools.control_media('play_pause') # MUTATION BYPASS: bypass action_broker",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_entry_point_enumeration.py::TestEntryPointEnumeration::test_1_telegram_callback_entry_points_dispatch_via_broker"]
+    },
+    {
+        "id": "MUTATION_56_ACTUATOR_INVOKED_PRE_TRY_INIT_BYPASS",
+        "name": "Bypass Pre-Try actuator_invoked Initialization in PolicySupervisor._handle_propose",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": "        step_committed = False\n        actuator_invoked = False\n        try:",
+        "replacement": "        step_committed = False\n        # MUTATION BYPASS: drop actuator_invoked pre-init causing UnboundLocalError\n        try:",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch36_security_hardening.py::TestBatch36SecurityHardening::test_1_envelope_early_exit_paths_guarantee_zero_reserved_steps_and_no_unbound_local"]
+    },
+    {
+        "id": "MUTATION_57_DEVICE_APPROVAL_SUPERVISOR_RELAY_BYPASS",
+        "name": "Bypass Phone Device Approval Relay to Supervisor Cache in verify_device_approval",
+        "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
+        "target": "        homie_supervisor.record_approved_action(\n            caller_id=target_caller,\n            tool=item[\"tool_name\"],\n            args_hash=str(item[\"args_hash\"]).lower(),\n            taint_epoch=item.get(\"taint_epoch\", 0),\n            ttl=min(remaining_ttl, 120.0)\n        )",
+        "replacement": "        pass # MUTATION BYPASS: drop device approval relay to supervisor",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch36_security_hardening.py::TestBatch36SecurityHardening::test_2_verify_device_approval_relays_to_supervisor_cache_and_db"]
+    },
+    {
+        "id": "MUTATION_58_RECOVERY_TOKEN_CROSS_PROCESS_SQLITE_BYPASS",
+        "name": "Bypass Recovery Token Cross-Process SQLite Consumption in consume_console_recovery_token",
+        "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
+        "target": "    # 2. Try cross-process SQLite table\n    try:\n        import db_utils",
+        "replacement": "    # 2. Try cross-process SQLite table\n    return False # MUTATION BYPASS: drop SQLite recovery token consumption\n    try:\n        import db_utils",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch36_security_hardening.py::TestBatch36SecurityHardening::test_3_recovery_cli_non_interactive_fails_closed_and_sqlite_cross_process"]
+    },
+    {
+        "id": "MUTATION_59_EXACT_VK_CHORD_DETECTION_BYPASS",
+        "name": "Bypass Exact Virtual-Key Code Chord Matching in canonicalize_keyboard_arguments",
+        "file": os.path.join(BASE_DIR, "windows_tools.py"),
+        "target": "    has_ctrl = any(vk in detected_vks for vk in (17, 162, 163))\n    has_alt = any(vk in detected_vks for vk in (18, 164, 165))\n    has_p = (80 in detected_vks)",
+        "replacement": "    has_ctrl = False # MUTATION BYPASS: bypass VK chord detection\n    has_alt = False\n    has_p = False",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch36_security_hardening.py::TestBatch36SecurityHardening::test_4_exact_vk_canonicalization_and_actuator_enforcement"]
+    },
+    {
+        "id": "MUTATION_60_SUPERVISOR_FIRST_FOREGROUND_RESOLUTION_BYPASS",
+        "name": "Bypass Supervisor-First Foreground Process Resolution in PolicySupervisor._handle_propose",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": "        current_proc = supervisor_proc  # Fail-closed: Supervisor inspects OS foreground; NEVER accepts worker self-attested proc",
+        "replacement": "        current_proc = args.get(\"target_process\") or supervisor_proc # MUTATION BYPASS: trust worker proc",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch36_security_hardening.py::TestBatch36SecurityHardening::test_5_supervisor_first_foreground_and_uia_domain_scoping"]
     }
 ]
 
