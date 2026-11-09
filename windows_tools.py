@@ -236,6 +236,8 @@ def detect_blocked_system_chords(detected_vks: List[int], tokens: List[str]) -> 
         if other_vks or sub_tokens:
             tok_name = sorted(sub_tokens)[0].upper() if sub_tokens else (chr(other_vks[0]).upper() if 32 <= other_vks[0] <= 126 else str(other_vks[0]))
             return f"Win+{tok_name}"
+        # Lone Win key denial: blocks opening Start menu / search launch vectors
+        return "Win"
 
     return None
 
@@ -465,6 +467,22 @@ def get_window_process_info(hwnd):
         return {'pid': pid, 'proc_name': proc_name, 'exe_path': exe_path}
     except Exception:
         return {'pid': 0, 'proc_name': '', 'exe_path': ''}
+
+def get_window_under_point(x: int, y: int) -> Tuple[Optional[int], Dict[str, Any]]:
+    """Retrieves root window and process information for physical screen coordinates (x, y)."""
+    try:
+        import win32con
+        point_hwnd = win32gui.WindowFromPoint((int(x), int(y)))
+        if not point_hwnd or not win32gui.IsWindow(point_hwnd):
+            return None, {'pid': 0, 'proc_name': '', 'title': ''}
+        root_hwnd = win32gui.GetAncestor(point_hwnd, win32con.GA_ROOT)
+        target_hwnd = root_hwnd if (root_hwnd and win32gui.IsWindow(root_hwnd)) else point_hwnd
+        info = get_window_process_info(target_hwnd)
+        info['title'] = win32gui.GetWindowText(target_hwnd)
+        info['hwnd'] = target_hwnd
+        return target_hwnd, info
+    except Exception as e:
+        return None, {'pid': 0, 'proc_name': '', 'title': '', 'error': str(e)}
 
 PROHIBITED_PROCESS_IMAGES = {
     "powershell.exe", "pwsh.exe", "cmd.exe", "wt.exe", "bash.exe", "wsl.exe",

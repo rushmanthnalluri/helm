@@ -618,6 +618,46 @@ MUTATIONS = [
         "target": "        if other_vks or sub_tokens:\n            tok_name = sorted(sub_tokens)[0].upper() if sub_tokens else (chr(other_vks[0]).upper() if 32 <= other_vks[0] <= 126 else str(other_vks[0]))\n            return f\"Win+{tok_name}\"",
         "replacement": "        if False and (other_vks or sub_tokens): # MUTATION BYPASS: permit Win-key chords\n            tok_name = sorted(sub_tokens)[0].upper() if sub_tokens else (chr(other_vks[0]).upper() if 32 <= other_vks[0] <= 126 else str(other_vks[0]))\n            return f\"Win+{tok_name}\"",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch38_security_hardening.py::TestBatch38SecurityHardening::test_5_total_win_key_and_dangerous_chord_denial"]
+    },
+    {
+        "id": "MUTATION_71_POINT_UNDER_CURSOR_BYPASS",
+        "name": "Bypass WindowFromPoint Point-Under-Cursor Self-Targeting Defense in homie_supervisor.py",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": "            if tool in (\"homie_agent_click\", \"homie_agent_mouse_move\") and \"x\" in args and \"y\" in args:",
+        "replacement": "            if False and tool in (\"homie_agent_click\", \"homie_agent_mouse_move\") and \"x\" in args and \"y\" in args: # MUTATION BYPASS: allow point-under-cursor click on Homie UI\n                pass",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch39_security_hardening.py::TestBatch39SecurityHardening::test_1_point_under_cursor_windowfrompoint_self_targeting_defense"]
+    },
+    {
+        "id": "MUTATION_72_LONE_WIN_KEY_DENIAL_BYPASS",
+        "name": "Bypass Lone Win-Key Denial in detect_blocked_system_chords",
+        "file": os.path.join(BASE_DIR, "windows_tools.py"),
+        "target": "        # Lone Win key denial: blocks opening Start menu / search launch vectors\n        return \"Win\"",
+        "replacement": "        # MUTATION BYPASS: allow lone Win key\n        return None",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch39_security_hardening.py::TestBatch39SecurityHardening::test_2_lone_win_key_denial"]
+    },
+    {
+        "id": "MUTATION_73_CHORD_EXACT_ATOMIC_TOKEN_BYPASS",
+        "name": "Bypass Exact Atomic Token Chord Detection in windows_tools.py",
+        "file": os.path.join(BASE_DIR, "windows_tools.py"),
+        "target": "    has_tab = (9 in detected_vks) or (\"tab\" in atomic_tokens)",
+        "replacement": "    has_tab = False # MUTATION BYPASS: never detect tab key",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch39_security_hardening.py::TestBatch39SecurityHardening::test_3_exact_token_matching_without_substring_ambiguity"]
+    },
+    {
+        "id": "MUTATION_74_RECOVERY_TOKEN_UNLINK_FAIL_CLOSED_BYPASS",
+        "name": "Swallow Unlink Failure in consume_admin_recovery_token (Multi-Use Replay Bypass)",
+        "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
+        "target": "        except Exception as rm_err:\n            logger.critical(\"Failed to unlink admin recovery token; single use invariant failed: %s\", rm_err)\n            return False",
+        "replacement": "        except Exception as rm_err: # MUTATION BYPASS: swallow error and allow token reuse\n            pass",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch39_security_hardening.py::TestBatch39SecurityHardening::test_4_recovery_token_single_use_unlink_failure_fails_closed"]
+    },
+    {
+        "id": "MUTATION_75_COMPILED_IN_SAFETY_FLOOR_BYPASS",
+        "name": "Bypass Compiled-In Consequential Safety Floor in is_confirmation_required",
+        "file": os.path.join(BASE_DIR, "rails_config.py"),
+        "target": "        if canonical in COMPILED_IN_CONSEQUENTIAL_TOOLS or tool_name in COMPILED_IN_CONSEQUENTIAL_TOOLS:\n            return True",
+        "replacement": "        if False: # MUTATION BYPASS: bypass compiled-in floor and permit weakened disk config\n            return True",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch39_security_hardening.py::TestBatch39SecurityHardening::test_5_compiled_in_safety_floor_covers_all_consequential_and_fact_tools"]
     }
 ]
 
@@ -647,7 +687,7 @@ def _safe_copy(src: str, dst: str, retries: int = 5):
 
 def run_mutation_tests() -> bool:
     print("=" * 75)
-    print("=== BATCH 38 EXPANDED AUTOMATED CI MUTATION TEST HARNESS (70 DEFENSES) ===")
+    print("=== BATCH 39 EXPANDED AUTOMATED CI MUTATION TEST HARNESS (75 DEFENSES) ===")
     print("=" * 75)
     print(f"Total Security Mutations to Evaluate: {len(MUTATIONS)}\n")
 

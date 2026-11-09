@@ -166,13 +166,20 @@ class RailsConfig:
         The compiled-in safety floor CANNOT be removed or bypassed by disk config.
         Disk config may only ADD additional tools to require confirmation.
         """
-        if tool_name in COMPILED_IN_CONSEQUENTIAL_TOOLS:
+        from action_broker import ActionBroker
+        canonical = ActionBroker.LEGACY_TOOL_MAP.get(tool_name, tool_name)
+        if not canonical.startswith("homie_"):
+            canonical_cand = f"homie_{canonical}"
+            if canonical_cand in COMPILED_IN_CONSEQUENTIAL_TOOLS:
+                canonical = canonical_cand
+
+        if canonical in COMPILED_IN_CONSEQUENTIAL_TOOLS or tool_name in COMPILED_IN_CONSEQUENTIAL_TOOLS:
             return True
         self._reload_if_needed()
         with self._lock:
             safety = self._cached_config.get("safety", {})
             required_tools = safety.get("require_confirmation", [])
-            return tool_name in required_tools
+            return tool_name in required_tools or canonical in required_tools
 
     def get_heartbeat_thresholds(self) -> Tuple[float, float]:
         """Returns (disk_threshold_gb, ram_threshold_pct)."""

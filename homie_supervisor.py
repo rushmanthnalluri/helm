@@ -170,6 +170,31 @@ class SupervisorActuator:
                     f"Complete mediation breach: Synthetic UI interaction targeting Homie window '{fg_title}' is strictly prohibited."
                 )
 
+            # WindowFromPoint check: verify target window under physical coordinates for click/move actions
+            if tool in ("homie_agent_click", "homie_agent_mouse_move") and "x" in args and "y" in args:
+                try:
+                    _, pt_info = windows_tools.get_window_under_point(args["x"], args["y"])
+                    pt_pid = pt_info.get("pid")
+                    pt_proc = os.path.basename(pt_info.get("proc_name") or "").lower()
+                    pt_title = (pt_info.get("title") or "").lower()
+
+                    if pt_pid and pt_pid == os.getpid():
+                        raise CompleteMediationBreachError(
+                            f"Complete mediation breach: Point-under-cursor ({args['x']}, {args['y']}) targets Homie assistant process (PID: {pt_pid})!"
+                        )
+                    if "homie" in pt_title or "trillion" in pt_title:
+                        raise CompleteMediationBreachError(
+                            f"Complete mediation breach: Point-under-cursor ({args['x']}, {args['y']}) targets Homie window '{pt_title}'!"
+                        )
+                    if pt_proc and pt_proc in policy_envelope.PROHIBITED_ENVELOPE_IMAGES:
+                        raise CompleteMediationBreachError(
+                            f"Complete mediation breach: Point-under-cursor ({args['x']}, {args['y']}) targets prohibited process image '{pt_proc}'!"
+                        )
+                except CompleteMediationBreachError:
+                    raise
+                except Exception:
+                    pass
+
             if clean_act_proc and clean_act_proc in policy_envelope.PROHIBITED_ENVELOPE_IMAGES:
                 raise CompleteMediationBreachError(
                     f"Complete mediation breach: TOCTOU detected! Active foreground process '{act_proc}' is in prohibited processes list."

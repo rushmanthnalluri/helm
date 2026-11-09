@@ -151,6 +151,8 @@ class ConfirmationGate:
 
     def confirm(self, request_id: str, human_caller_id: str = "human_user") -> Tuple[bool, str, Optional[str]]:
         """Human explicitly confirms request. Generates a single-use execution token."""
+        if not human_caller_id or str(human_caller_id).startswith(("worker", "agent", "ai_", "script", "bot")):
+            return False, f"DENIED: Confirmation must be issued by a verified human operator, not '{human_caller_id}'.", None
         with self._lock:
             req = self.get_request(request_id)
             if not req:
