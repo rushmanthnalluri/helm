@@ -1,14 +1,14 @@
-"""homie_memory_extractor.py - Passive Background Fact Extractor for Homie.
+"""homie_memory_extractor.py - Safe Proposal-Only Fact Extractor for Homie.
 
-Adapted from OpenJarvis FactExtractor:
-Passively analyzes user-assistant conversation turns to extract durable,
-long-term personal facts (user preferences, tools, goals, identity)
-without interrupting the main conversation flow.
-
-Enforces:
-1. Strict bounds: fact key format, fact text <= 200 chars.
-2. Anti-injection check: strips prompt injection / instruction overrides before storage.
-3. Volatile filter: ignores temporary greetings, small talk, and assistant self-chatter.
+Security Invariants:
+1. Taint Refusal: If the workstation, session, or current turn is tainted,
+   extraction is STRICTLY REFUSED. Untrusted data (e.g. from web, clipboard,
+   or audio) cannot launder facts into persistent memory.
+2. Proposal-Only: Extracted facts are NEVER written directly to the memory store.
+   They are submitted as pending confirmation proposals via rails_confirmation.
+   A human MUST explicitly confirm the proposal before it can be committed.
+3. Strict Bounds: Key must be snake_case identifier; fact statement <= 200 chars.
+4. Volatile Filter: Ignores transient chatter, greetings, or short commands.
 """
 
 from __future__ import annotations
@@ -36,7 +36,9 @@ _EXTRACTOR_SYSTEM_PROMPT = (
 
 
 class FactExtractor:
-    """Extracts durable personal facts from conversational turns."""
+    """Extracts proposed durable personal facts from conversational turns.
+    Strictly proposal-only; NEVER commits facts directly to disk.
+    """
 
     def __init__(
         self,
@@ -62,7 +64,7 @@ class FactExtractor:
         text = user_text.strip()
 
         # "My name is X" / "I am X"
-        m = re.search(r"\bmy name is ([A-Z][a-zA-Z0-9_\- ]{1,30})\b", text, re.IGNORECASE)
+        m = re.search(r"\bmy name is ([A-Z][a-zA-Z0-9_\-]{1,25})\b", text, re.IGNORECASE)
         if m:
             facts.append(("user_name", f"The user's name is {m.group(1).strip()}."))
 
@@ -81,8 +83,16 @@ class FactExtractor:
 
         return facts
 
-    def extract(self, user_text: str, assistant_text: str = "") -> List[Tuple[str, str]]:
-        """Extract candidate facts from turn using heuristic + optional LLM."""
+    def extract(self, user_text: str, assistant_text: str = "", is_turn_tainted: bool = False) -> List[Tuple[str, str]]:
+        """Extract candidate facts from turn.
+        Refuses extraction if workstation or turn is tainted.
+        """
+        # 1. Taint Refusal Check: Never extract facts from tainted context
+        import taint_tracker
+        if is_turn_tainted or taint_tracker.is_workstation_tainted():
+            logger.warning("Fact extraction strictly refused: context is tainted.")
+            return []
+
         if self.is_volatile_or_ephemeral(user_text):
             return []
 
@@ -92,10 +102,10 @@ class FactExtractor:
             logger.warning("Fact extraction skipped: input contains detected instruction injection.")
             return []
 
-        # 1. First run fast heuristic
+        # 2. Run fast heuristic
         extracted = self.extract_heuristic(user_text)
 
-        # 2. Run LLM caller if provided and heuristic found nothing
+        # 3. Optional LLM fallback
         if not extracted and self.llm_caller:
             try:
                 turn_prompt = f"User: {user_text}\nAssistant: {assistant_text}"
@@ -107,7 +117,6 @@ class FactExtractor:
                             k = str(item["key"]).strip()
                             f = str(item["fact"]).strip()
                             if k and f and len(f) <= self.max_fact_chars:
-                                # Validate against injection in extracted fact
                                 is_inj, _ = rails_content_boundary.detect_instruction_injection(f)
                                 if not is_inj:
                                     extracted.append((k, f))
@@ -115,3 +124,17 @@ class FactExtractor:
                 logger.debug("LLM fact extraction degraded gracefully: %s", e)
 
         return extracted
+
+    def propose_fact_for_approval(self, key: str, fact: str, caller_id: str = "assistant") -> Any:
+        """Submits an extracted candidate fact as a pending confirmation proposal.
+        NEVER writes to memory store directly. Human must approve.
+        """
+        import rails_confirmation
+        gate = rails_confirmation.get_confirmation_gate()
+        req = gate.create_request(
+            "homie_remember_fact",
+            {"key": key, "fact": fact},
+            caller_id=caller_id,
+        )
+        logger.info("Submitted proposed fact %s as confirmation request %s", key, req.request_id)
+        return req

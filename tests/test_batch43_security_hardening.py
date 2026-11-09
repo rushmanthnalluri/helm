@@ -59,16 +59,34 @@ class TestBatch43SecurityHardening(unittest.TestCase):
         kill_switch._KILL_SWITCH_ACTIVE = False
 
     def test_1_safety_floor_diff_strictly_empty(self):
-        """Directive 1: Every tool in allowed_tools_map where tier != READ_ONLY must be in COMPILED_IN_CONSEQUENTIAL_TOOLS."""
+        """Directive 1: Explicitly categorized tool tiers with strict build-time unclassified detection."""
         m = homie_supervisor.get_allowed_tools_map()
-        diff = sorted(t for t, tier in m.items() if tier != "READ_ONLY" and t not in rails_config.COMPILED_IN_CONSEQUENTIAL_TOOLS)
-        self.assertEqual(diff, [], f"Safety floor violation: non-READ_ONLY tools missing from COMPILED_IN_CONSEQUENTIAL_TOOLS: {diff}")
+        cfg = rails_config.get_rails_config()
 
-        # Fact tools must be classified as WRITE_EXEC (not READ_ONLY)
+        # 1. Every tool in allowed_tools_map MUST be explicitly classified
+        unclassified = sorted(set(m.keys()) - rails_config.ALL_CLASSIFIED_TOOLS)
+        self.assertEqual(unclassified, [], f"Build failure: unclassified tools found in allowed_tools_map: {unclassified}")
+
+        # 2. Every WRITE_EXEC / CONSEQUENTIAL tool MUST be in COMPILED_IN_CONSEQUENTIAL_TOOLS
+        missing_consequential = sorted(t for t, tier in m.items() if tier in ("WRITE_EXEC", "CONSEQUENTIAL") and t not in rails_config.COMPILED_IN_CONSEQUENTIAL_TOOLS)
+        self.assertEqual(missing_consequential, [], f"Consequential floor violation: WRITE_EXEC tools missing from floor: {missing_consequential}")
+
+        # 3. Every SENSITIVE_READ tool MUST be in COMPILED_IN_SENSITIVE_READS
+        for t, tier in m.items():
+            if tier == "SENSITIVE_READ":
+                self.assertIn(t, rails_config.COMPILED_IN_SENSITIVE_READS)
+
+        # 4. Sensitive reads do NOT require per-action human confirmation prompt
+        self.assertFalse(cfg.is_confirmation_required("homie_capture_screen"))
+        self.assertFalse(cfg.is_confirmation_required("homie_get_clipboard"))
+        self.assertFalse(cfg.is_confirmation_required("homie_read_screen_memory"))
+
+        # 5. Consequential tools (launch app, remember/forget facts) strictly require confirmation
+        self.assertTrue(cfg.is_confirmation_required("homie_launch_app"))
+        self.assertTrue(cfg.is_confirmation_required("homie_remember_fact"))
+        self.assertTrue(cfg.is_confirmation_required("homie_forget_fact"))
         self.assertEqual(m.get("homie_remember_fact"), "WRITE_EXEC")
         self.assertEqual(m.get("homie_forget_fact"), "WRITE_EXEC")
-        self.assertTrue(rails_config.get_rails_config().is_confirmation_required("homie_remember_fact"))
-        self.assertTrue(rails_config.get_rails_config().is_confirmation_required("homie_forget_fact"))
 
     def test_2_window_title_homie_does_not_falsely_block(self):
         """Directive 2: Eliminating fragile 'homie' in title check prevents falsely blocking legitimate Chrome tabs."""

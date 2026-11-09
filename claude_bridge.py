@@ -32,23 +32,37 @@ def find_claude_window():
     """Finds the HWND and geometry of the active Claude Chrome window."""
     windows_tools.ensure_desktop_attached()
     wins = windows_tools.find_windows("Claude")
-    if not wins:
-        # Fallback to any chrome window with claude in title
-        import win32gui
-        results = []
-        def cb(h, _):
-            if win32gui.IsWindowVisible(h):
-                t = win32gui.GetWindowText(h)
-                if "claude" in t.lower() and "chrome" in t.lower():
-                    results.append({"hwnd": h, "title": t, "rect": win32gui.GetWindowRect(h)})
-        try:
-            win32gui.EnumWindows(cb, None)
-        except Exception:
-            pass
-        if results:
-            return results[0]
-        return None
-    return wins[0]
+    if wins:
+        return wins[0]
+
+    # Fallback: find any Chrome window and locate Claude tab
+    import win32gui
+    chrome_wins = []
+    def cb(h, _):
+        if win32gui.IsWindowVisible(h):
+            t = win32gui.GetWindowText(h)
+            if "chrome" in t.lower() or "google chrome" in t.lower():
+                chrome_wins.append({"hwnd": h, "title": t, "rect": win32gui.GetWindowRect(h)})
+    try:
+        win32gui.EnumWindows(cb, None)
+    except Exception:
+        pass
+
+    for cw in chrome_wins:
+        if "claude" in cw["title"].lower():
+            return cw
+        # Try switching tabs in this Chrome window to find Claude
+        hwnd = cw["hwnd"]
+        windows_tools.force_foreground_window(hwnd)
+        time.sleep(0.2)
+        for tab_idx in range(1, 9):
+            pyautogui.hotkey("ctrl", str(tab_idx))
+            time.sleep(0.15)
+            t = win32gui.GetWindowText(hwnd)
+            if "claude" in t.lower():
+                return {"hwnd": hwnd, "title": t, "rect": win32gui.GetWindowRect(hwnd)}
+
+    return None
 
 def send_message_to_claude(prompt_text, wait_for_reply_sec=12):
     """Brings Claude in Chrome forward, enters the prompt into the chat box, and sends it."""

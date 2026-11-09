@@ -995,11 +995,21 @@ class PolicySupervisor:
         })
 
     def _handle_register_ui(self, payload: Dict[str, Any], client_pid: Optional[int] = None) -> bytes:
-        pid = client_pid or payload.get("pid")
-        if pid and isinstance(pid, int):
-            self.register_protected_pid(pid)
-            return self._encode_reply(MSG_DATA, {"status": "OK", "registered_pid": pid})
-        return self._encode_reply(MSG_ERROR, {"error": "Invalid PID", "reason_code": "INVALID_ARGUMENT"})
+        import psutil
+        attested_pid = client_pid or payload.get("pid")
+        if not attested_pid or not isinstance(attested_pid, int):
+            return self._encode_reply(MSG_ERROR, {"error": "Invalid PID", "reason_code": "INVALID_ARGUMENT"})
+
+        if not psutil.pid_exists(attested_pid):
+            return self._encode_reply(MSG_ERROR, {"error": "Process does not exist", "reason_code": "PID_NOT_FOUND"})
+
+        claimed_pid = payload.get("pid")
+        if client_pid and claimed_pid and claimed_pid != client_pid:
+            return self._encode_reply(MSG_ERROR, {"error": "PID spoofing rejected", "reason_code": "PID_MISMATCH"})
+
+        self.protected_pids = {p for p in self.protected_pids if psutil.pid_exists(p)}
+        self.register_protected_pid(attested_pid)
+        return self._encode_reply(MSG_DATA, {"status": "OK", "registered_pid": attested_pid})
 
     def _encode_reply(self, msg_type: int, payload: Dict[str, Any]) -> bytes:
         self.last_supervisor_seq += 1
@@ -1439,9 +1449,32 @@ class NamedPipeSupervisorServer:
         self.thread: Optional[threading.Thread] = None
         self.server_pipe = None
 
+    @staticmethod
+    def _create_owner_only_security():
+        try:
+            import win32security, win32con, win32api
+            token_handle = win32security.OpenProcessToken(win32api.GetCurrentProcess(), win32con.TOKEN_QUERY)
+            user_sid = win32security.GetTokenInformation(token_handle, win32security.TokenUser)[0]
+            sd = win32security.SECURITY_DESCRIPTOR()
+            sd.Initialize()
+            dacl = win32security.ACL()
+            dacl.Initialize()
+            dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_ALL, user_sid)
+            system_sid = win32security.CreateWellKnownSid(win32security.WinLocalSystemSid)
+            dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_ALL, system_sid)
+            sd.SetSecurityDescriptorDacl(1, dacl, 0)
+            sa = win32security.SECURITY_ATTRIBUTES()
+            sa.SECURITY_DESCRIPTOR = sd
+            sa.bInheritHandle = False
+            return sa
+        except Exception as e:
+            logger.warning("Could not initialize custom pipe DACL: %s; falling back to default process DACL", e)
+            return None
+
     def start(self):
         import win32pipe
         self.running = True
+        sa = self._create_owner_only_security()
         self.server_pipe = win32pipe.CreateNamedPipe(
             self.pipe_name,
             win32pipe.PIPE_ACCESS_DUPLEX | win32pipe.FILE_FLAG_FIRST_PIPE_INSTANCE,
@@ -1450,7 +1483,7 @@ class NamedPipeSupervisorServer:
             65536,
             65536,
             0,
-            None
+            sa
         )
         self.thread = threading.Thread(target=self._run_server, daemon=True)
         self.thread.start()

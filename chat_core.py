@@ -434,7 +434,7 @@ class AgentCore:
                     if not reply:
                         raise ProviderError("The provider returned an empty reply.")
                     self.messages.append({"role": "assistant", "content": reply})
-                    # OpenJarvis Passive Fact Extraction: extract durable facts from turn
+                    # Proposal-Only Fact Extraction: proposes facts via confirmation gate (never writes directly)
                     try:
                         import homie_memory_extractor
                         extractor = homie_memory_extractor.FactExtractor()
@@ -442,7 +442,7 @@ class AgentCore:
                         if new_facts and self.memory_store:
                             for k, f in new_facts:
                                 if not self.memory_store.get_fact(k):
-                                    self.memory_store.set_fact(k, f)
+                                    extractor.propose_fact_for_approval(k, f, caller_id=caller_id)
                     except Exception:
                         pass
                     try:

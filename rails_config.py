@@ -21,7 +21,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("homie.rails_config")
 
-# Immutable compiled-in safety floor: cannot be weakened or bypassed by disk config
+# Immutable compiled-in consequential safety floor: tools that modify system state, files, or facts
+# and strictly require human confirmation before execution.
 COMPILED_IN_CONSEQUENTIAL_TOOLS: frozenset[str] = frozenset({
     "homie_set_clipboard",
     "homie_launch_app",
@@ -35,17 +36,45 @@ COMPILED_IN_CONSEQUENTIAL_TOOLS: frozenset[str] = frozenset({
     "homie_send_hotkey",
     "homie_execute_cmd",
     "homie_delete_file",
-    "homie_capture_screen",
-    "homie_control_media",
-    "homie_get_clipboard",
-    "homie_place_window",
-    "homie_play_youtube",
-    "homie_read_screen_memory",
-    "homie_remote_trackpad",
-    "homie_snap_window",
     "homie_remember_fact",
     "homie_forget_fact",
+    "homie_remote_trackpad",
 })
+
+# Sensitive read tools: read private user context; incur taint propagation and rate limits
+# but do NOT require disruptive per-action human confirmation dialogs.
+COMPILED_IN_SENSITIVE_READS: frozenset[str] = frozenset({
+    "homie_capture_screen",
+    "homie_get_clipboard",
+    "homie_read_screen_memory",
+})
+
+# Reversible UI/media controls: low risk, can be easily undone or adjusted.
+COMPILED_IN_REVERSIBLE_TOOLS: frozenset[str] = frozenset({
+    "homie_control_media",
+    "homie_place_window",
+    "homie_play_youtube",
+    "homie_snap_window",
+})
+
+# Safe passive read-only tools:
+COMPILED_IN_READ_ONLY_TOOLS: frozenset[str] = frozenset({
+    "homie_get_vitals",
+    "homie_list_downloads",
+    "homie_list_facts",
+    "homie_get_meeting_notes",
+    "homie_assistant_timeline",
+    "homie_get_top_processes",
+    "homie_list_windows",
+})
+
+# Full set of compiled-in classified tools: every tool in homie_supervisor must belong here!
+ALL_CLASSIFIED_TOOLS: frozenset[str] = (
+    COMPILED_IN_CONSEQUENTIAL_TOOLS
+    | COMPILED_IN_SENSITIVE_READS
+    | COMPILED_IN_REVERSIBLE_TOOLS
+    | COMPILED_IN_READ_ONLY_TOOLS
+)
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "model": {
