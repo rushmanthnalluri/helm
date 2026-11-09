@@ -29,6 +29,7 @@ import re
 import time
 import json
 import hmac
+import secrets
 import hashlib
 import logging
 from typing import List, Dict, Any, Optional, Tuple, Set
@@ -49,9 +50,11 @@ PROHIBITED_ENVELOPE_IMAGES: Set[str] = {
     "bash.exe", "code.exe", "vscode.exe", "excel.exe", "winword.exe"
 }
 
-# Known browser process images requiring domain scoping
+# Known browser and web-rendering process images requiring domain scoping
 BROWSER_IMAGES: Set[str] = {
-    "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe"
+    "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe",
+    "opera.exe", "vivaldi.exe", "arc.exe", "chromium.exe",
+    "slack.exe", "teams.exe", "discord.exe"
 }
 
 # High-risk action names
@@ -115,6 +118,8 @@ class PolicyEnvelope:
         # Runtime consumption counters (cannot be reset or widened)
         self.steps_consumed = 0
         self.reserved_steps = 0
+        self._active_reservations: Set[str] = set()
+        self._last_reservation_token: Optional[str] = None
         self.keystrokes_consumed = 0
         self.is_active = False
         self._envelope_lock = threading.Lock()
@@ -228,6 +233,15 @@ class PolicyEnvelope:
             if not any(is_domain_allowed(current_domain, d) for d in self.allowed_domains):
                 return False, f"DENY: Target domain '{current_domain}' outside envelope domain scope: {self.allowed_domains}", 0
 
+        # Physical console enrollment hotkey (Ctrl + Alt + P) can NEVER be synthesized
+        KEY_INPUT_FIELDS = ("key", "keys", "hotkey", "shortcut", "sequence", "keys_to_press", "text")
+        for k_field in KEY_INPUT_FIELDS:
+            kval = arguments.get(k_field)
+            if kval:
+                norm_str = re.sub(r'[\+_\s\-]+', '', str(kval).lower())
+                if "ctrl" in norm_str and "alt" in norm_str and "p" in norm_str:
+                    return False, "DENY: Synthetic simulation of physical console pairing hotkey (Ctrl+Alt+P) is strictly prohibited.", 0
+
         # Non-bypassable high-risk class check (tool name)
         for high_risk_kw in HIGH_RISK_PER_STEP_CLASSES:
             if high_risk_kw in tool_name.lower():
@@ -242,23 +256,47 @@ class PolicyEnvelope:
             if kw in elem_name:
                 return False, f"DENY: Semantic high-risk control detected ('{elem_name}' matches '{kw}'). Requires per-step step-up human approval.", 0
 
-        # Check Enter-to-submit form pattern (case-insensitive across key, keys, hotkey, text fields)
+        # Check Enter-to-submit form pattern
         enter_detected = False
+        # 1. Newline in prose text represents submission
         if "\n" in text_arg or "\r" in text_arg:
             enter_detected = True
 
+        # 2. Key / hotkey / keycode inspection (tokens, combos, VK 13)
         if not enter_detected:
-            for k_field in ("key", "keys", "hotkey", "text", "shortcut", "sequence"):
+            ENTER_KEY_TOKENS = {
+                "enter", "return", "numpadenter", "numpad_enter",
+                "{enter}", "{return}", "cr", "ret"
+            }
+            KEY_FIELDS = (
+                "key", "keys", "hotkey", "shortcut", "sequence",
+                "vk", "keycode", "key_code", "keys_to_press"
+            )
+            for k_field in KEY_FIELDS:
                 val = arguments.get(k_field)
-                if not val:
+                if val is None or val == "":
                     continue
+                # Direct numeric keycode 13 (VK_RETURN) or hex representation
+                is_vk_13 = (isinstance(val, int) and val == 13) or (str(val).strip().lower() in ("13", "0x0d", "0xd"))
+                if is_vk_13:
+                    enter_detected = True
+                    break
                 if isinstance(val, (list, tuple, set)):
-                    items = [str(x).lower().strip() for x in val]
+                    raw_items = [str(x) for x in val]
                 else:
-                    items = [str(val).lower().strip()]
-                for item in items:
-                    norm = re.sub(r'[\+_\s\-]+', '', item)
-                    if any(x in norm for x in ("enter", "return")) or any(x in item for x in ("enter", "return")):
+                    raw_items = [str(val)]
+                for raw_item in raw_items:
+                    raw_lower = raw_item.lower().strip()
+                    if raw_lower in ENTER_KEY_TOKENS:
+                        enter_detected = True
+                        break
+                    # Split compound combos like "ctrl+enter" or "Ctrl + Return"
+                    parts = [re.sub(r'[\+_\s\-]+', '', p) for p in re.split(r'[\+,\s\-]+', raw_lower) if p]
+                    if any(p in ENTER_KEY_TOKENS for p in parts):
+                        enter_detected = True
+                        break
+                    norm = re.sub(r'[\+_\s\-]+', '', raw_lower)
+                    if norm.endswith("enter") or norm.endswith("return"):
                         enter_detected = True
                         break
                 if enter_detected:
@@ -280,21 +318,52 @@ class PolicyEnvelope:
                 if self.keystrokes_consumed + keystrokes > self.keystroke_cap:
                     return False, f"DENY: Keystroke cap exceeded ({self.keystrokes_consumed + keystrokes}/{self.keystroke_cap})", 0
 
-            # Atomically reserve step
-            self.reserved_steps += 1
+            # Atomically reserve step with unguessable reservation token
+            res_token = f"res_{secrets.token_hex(8)}"
+            if not hasattr(self, "_active_reservations"):
+                self._active_reservations = set()
+            self._active_reservations.add(res_token)
+            self.reserved_steps = len(self._active_reservations)
+            self._last_reservation_token = res_token
             return True, "ALLOWED_BY_ENVELOPE", keystrokes
 
-    def release_reservation(self):
+    def reserve_step(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        current_process_image: Optional[str],
+        current_taint_epoch: int,
+        current_domain: Optional[str] = None
+    ) -> Tuple[bool, str, int, Optional[str]]:
+        """Validates envelope boundaries and atomically allocates a reservation token."""
+        valid, msg, ks = self.check_boundary(
+            tool_name, arguments, current_process_image, current_taint_epoch, current_domain
+        )
+        if not valid:
+            return False, msg, 0, None
+        return True, msg, ks, getattr(self, "_last_reservation_token", None)
+
+    def release_reservation(self, reservation_token: Optional[str] = None):
         """Releases a reserved step if the action proposal was rejected, denied, or aborted."""
         with self._envelope_lock:
-            if self.reserved_steps > 0:
-                self.reserved_steps -= 1
+            if not hasattr(self, "_active_reservations"):
+                self._active_reservations = set()
+            if reservation_token and reservation_token in self._active_reservations:
+                self._active_reservations.remove(reservation_token)
+            elif self._active_reservations:
+                self._active_reservations.pop()
+            self.reserved_steps = len(self._active_reservations)
 
-    def commit_step(self, keystrokes: int = 0):
+    def commit_step(self, keystrokes: int = 0, reservation_token: Optional[str] = None):
         """Commits one step and keystrokes to the envelope budget (Two-Phase Commit Phase 2)."""
         with self._envelope_lock:
-            if self.reserved_steps > 0:
-                self.reserved_steps -= 1
+            if not hasattr(self, "_active_reservations"):
+                self._active_reservations = set()
+            if reservation_token and reservation_token in self._active_reservations:
+                self._active_reservations.remove(reservation_token)
+            elif self._active_reservations:
+                self._active_reservations.pop()
+            self.reserved_steps = len(self._active_reservations)
             self.steps_consumed += 1
             self.keystrokes_consumed += max(0, int(keystrokes))
         logger.info(

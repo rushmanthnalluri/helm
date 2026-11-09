@@ -16,6 +16,7 @@ and the high-integrity policy supervisor:
 
 import os
 import sys
+import re
 import time
 import json
 import struct
@@ -137,6 +138,11 @@ class SupervisorActuator:
         if seq is None or not isinstance(seq, int) or seq <= 0:
             raise ValueError("Sequence number seq is strictly required and must be a positive integer!")
         req_seq = seq
+
+        # Prohibit synthetic simulation of console enrollment hotkey (Ctrl + Alt + P)
+        norm_key = re.sub(r'[\+_\s\-]+', '', str(args.get("key", "") or args.get("hotkey", "") or args.get("keys", "") or args.get("text", "")).lower())
+        if "ctrl" in norm_key and "alt" in norm_key and "p" in norm_key:
+            raise CompleteMediationBreachError("Complete mediation breach: Synthetic simulation of physical console pairing hotkey (Ctrl+Alt+P) is strictly prohibited.")
 
         if tier != "READ_ONLY":
             if not self.supervisor.verify_and_consume_intent_token(
@@ -717,9 +723,10 @@ class PolicySupervisor:
                     break
 
         ks_to_commit = 0
+        res_token = None
         if getattr(self, "envelope", None) and getattr(self.envelope, "is_active", False):
             current_epoch = taint_tracker.get_taint_epoch()
-            env_ok, env_msg, ks_to_commit = self.envelope.check_boundary(
+            env_ok, env_msg, ks_to_commit, res_token = self.envelope.reserve_step(
                 tool, args, current_proc, current_epoch, current_domain
             )
             if not env_ok:
@@ -730,121 +737,126 @@ class PolicySupervisor:
                     "reason": f"Policy Envelope Gate: {env_msg}"
                 })
 
-        # 9. Taint & Out-of-band Step-up Verification (Fail-Closed)
-        allowed, requires_step_up, taint_reason = taint_tracker.check_action_privilege(
-            caller_id, tier, tool, args
-        )
-        if not allowed:
-            if getattr(self, "envelope", None) and getattr(self.envelope, "is_active", False):
-                self.envelope.release_reservation()
-            if requires_step_up:
-                current_epoch = taint_tracker.get_taint_epoch()
-                if self.consume_approved_action(caller_id, tool, args_hash, current_epoch):
-                    logger.info("Supervisor authorized action '%s' via internal direct approval for caller '%s'", tool, caller_id)
-                elif step_up_token:
-                    valid_step_up, step_up_msg = taint_tracker.verify_and_consume_step_up_token(
-                        step_up_token, tool, args
-                    )
-                    if not valid_step_up:
+        step_committed = False
+        try:
+            # 9. Taint & Out-of-band Step-up Verification (Fail-Closed)
+            allowed, requires_step_up, taint_reason = taint_tracker.check_action_privilege(
+                caller_id, tier, tool, args
+            )
+            if not allowed:
+                if requires_step_up:
+                    current_epoch = taint_tracker.get_taint_epoch()
+                    if self.consume_approved_action(caller_id, tool, args_hash, current_epoch):
+                        logger.info("Supervisor authorized action '%s' via internal direct approval for caller '%s'", tool, caller_id)
+                    elif step_up_token:
+                        valid_step_up, step_up_msg = taint_tracker.verify_and_consume_step_up_token(
+                            step_up_token, tool, args
+                        )
+                        if not valid_step_up:
+                            return self._encode_reply(MSG_DECISION, {
+                                "req_id": req_id,
+                                "status": "DENY",
+                                "reason_code": REASON_UNAUTHORIZED_TOKEN,
+                                "reason": f"Step-up token rejected: {step_up_msg}"
+                            })
+                        logger.info("Supervisor authorized action '%s' via consumed step-up token for caller '%s'", tool, caller_id)
+                    else:
                         return self._encode_reply(MSG_DECISION, {
                             "req_id": req_id,
-                            "status": "DENY",
-                            "reason_code": REASON_UNAUTHORIZED_TOKEN,
-                            "reason": f"Step-up token rejected: {step_up_msg}"
+                            "status": "NEEDS_HUMAN",
+                            "reason_code": REASON_TAINTED_STEPUP,
+                            "reason": taint_reason
                         })
-                    logger.info("Supervisor authorized action '%s' via consumed step-up token for caller '%s'", tool, caller_id)
                 else:
                     return self._encode_reply(MSG_DECISION, {
                         "req_id": req_id,
-                        "status": "NEEDS_HUMAN",
-                        "reason_code": REASON_TAINTED_STEPUP,
+                        "status": "DENY",
+                        "reason_code": REASON_TAINTED_EXECUTION,
                         "reason": taint_reason
                     })
-            else:
+
+            # 10. Shadow Mode Simulation check
+            if shadow_mode.is_shadow_mode_active():
+                record = shadow_mode.record_simulated_action(caller_id, tool, tier, args)
                 return self._encode_reply(MSG_DECISION, {
                     "req_id": req_id,
-                    "status": "DENY",
-                    "reason_code": REASON_TAINTED_EXECUTION,
-                    "reason": taint_reason
+                    "status": "SHADOW",
+                    "reason_code": REASON_SHADOW_SIMULATED,
+                    "reason": f"Action simulated in shadow mode: {record['action_id']}",
+                    "result": f"[SHADOW_SIMULATION] {tool} evaluated with parameters {args}"
                 })
 
-        # 10. Shadow Mode Simulation check
-        if shadow_mode.is_shadow_mode_active():
-            if getattr(self, "envelope", None) and getattr(self.envelope, "is_active", False):
-                self.envelope.release_reservation()
-            record = shadow_mode.record_simulated_action(caller_id, tool, tier, args)
-            return self._encode_reply(MSG_DECISION, {
-                "req_id": req_id,
-                "status": "SHADOW",
-                "reason_code": REASON_SHADOW_SIMULATED,
-                "reason": f"Action simulated in shadow mode: {record['action_id']}",
-                "result": f"[SHADOW_SIMULATION] {tool} evaluated with parameters {args}"
-            })
-
-        # Commit policy envelope step budget now that authorization has succeeded
-        if getattr(self, "envelope", None) and getattr(self.envelope, "is_active", False):
-            self.envelope.commit_step(ks_to_commit)
-
-        # 11. TWO-PHASE ACTION EXECUTION:
-        # Phase 1: Supervisor mints unforgeable cryptographic INTENT token & records in audit ledger
-        intent_token = self.mint_intent_token(tool, args, caller_id, frame_seq)
-        try:
-            agent_audit_ledger.record_agent_action(
-                caller_id, tool, tier, args, decision=f"INTENT:{req_id}:{intent_token[:32]}"
-            )
-        except Exception as intent_err:
-            logger.critical("Audit ledger write failure during INTENT recording: %s", intent_err)
-            self._transition_to_locked(f"Audit ledger failure on INTENT: {intent_err}")
-            if getattr(self, "envelope", None) and getattr(self.envelope, "is_active", False):
-                self.envelope.release_reservation()
-            return self._encode_reply(MSG_ERROR, {
-                "error": f"Audit ledger failure: {intent_err}",
-                "reason_code": REASON_UNAUTHORIZED_TOKEN
-            })
-
-        # Phase 2: Privileged Supervisor Actuator executes effect WITH verified intent token
-        execution_success = False
-        exception_occurred = False
-        result = ""
-        try:
-            try:
-                result = self.actuator.execute_actuator(
-                    tool, args, caller_id=caller_id, client_token=client_token, intent_token=intent_token, seq=frame_seq
-                )
-                execution_success = True
-            except CompleteMediationBreachError as cme:
-                execution_success = False
-                result = f"Security Gate: {cme}"
-                self._transition_to_locked(f"Complete mediation violation: {cme}")
-            except Exception as e:
-                execution_success = False
-                exception_occurred = True
-                result = f"Error executing tool in supervisor: {e}"
-        finally:
-            # Phase 3: Record OUTCOME in HMAC-SHA256 audit ledger in finally block to guarantee ledger audit invariant
-            if execution_success:
-                outcome_status = "SUCCESS"
-            elif exception_occurred:
-                outcome_status = "UNKNOWN"
-            else:
-                outcome_status = "FAILED"
-
+            # 11. TWO-PHASE ACTION EXECUTION:
+            # Phase 1: Supervisor mints unforgeable cryptographic INTENT token & records in audit ledger
+            intent_token = self.mint_intent_token(tool, args, caller_id, frame_seq)
             try:
                 agent_audit_ledger.record_agent_action(
-                    caller_id, tool, tier, args, decision=f"OUTCOME:{req_id}:{outcome_status}"
+                    caller_id, tool, tier, args, decision=f"INTENT:{req_id}:{intent_token[:32]}"
                 )
-            except Exception as ledger_err:
-                logger.critical("Audit ledger write failure during outcome recording: %s", ledger_err)
-                self._transition_to_locked(f"Audit ledger failure: {ledger_err}")
+            except Exception as intent_err:
+                logger.critical("Audit ledger write failure during INTENT recording: %s", intent_err)
+                self._transition_to_locked(f"Audit ledger failure on INTENT: {intent_err}")
+                return self._encode_reply(MSG_ERROR, {
+                    "error": f"Audit ledger failure: {intent_err}",
+                    "reason_code": REASON_UNAUTHORIZED_TOKEN
+                })
 
-            self.active_request_id = None
+            # Phase 2: Privileged Supervisor Actuator executes effect WITH verified intent token
+            execution_success = False
+            exception_occurred = False
+            result = ""
+            try:
+                try:
+                    result = self.actuator.execute_actuator(
+                        tool, args, caller_id=caller_id, client_token=client_token, intent_token=intent_token, seq=frame_seq
+                    )
+                    execution_success = True
+                except CompleteMediationBreachError as cme:
+                    execution_success = False
+                    result = f"Security Gate: {cme}"
+                    self._transition_to_locked(f"Complete mediation violation: {cme}")
+                except Exception as e:
+                    execution_success = False
+                    exception_occurred = True
+                    result = f"Error executing tool in supervisor: {e}"
+            finally:
+                # Phase 3: Record OUTCOME in HMAC-SHA256 audit ledger in finally block to guarantee ledger audit invariant
+                if execution_success:
+                    outcome_status = "SUCCESS"
+                elif exception_occurred:
+                    outcome_status = "UNKNOWN"
+                else:
+                    outcome_status = "FAILED"
 
-        return self._encode_reply(MSG_DECISION, {
-            "req_id": req_id,
-            "status": "ALLOW" if execution_success else "DENY",
-            "reason_code": REASON_OK if execution_success else REASON_EXECUTION_FAILED,
-            "result": result
-        })
+                try:
+                    agent_audit_ledger.record_agent_action(
+                        caller_id, tool, tier, args, decision=f"OUTCOME:{req_id}:{outcome_status}"
+                    )
+                except Exception as ledger_err:
+                    logger.critical("Audit ledger write failure during outcome recording: %s", ledger_err)
+                    self._transition_to_locked(f"Audit ledger failure: {ledger_err}")
+
+                self.active_request_id = None
+
+            # Commit policy envelope step budget ONLY upon verified execution success
+            if execution_success:
+                if getattr(self, "envelope", None) and getattr(self.envelope, "is_active", False):
+                    self.envelope.commit_step(ks_to_commit, res_token)
+                    step_committed = True
+
+            return self._encode_reply(MSG_DECISION, {
+                "req_id": req_id,
+                "status": "ALLOW" if execution_success else "DENY",
+                "reason_code": REASON_OK if execution_success else REASON_EXECUTION_FAILED,
+                "reason": "Action authorized and successfully executed by supervisor" if execution_success else result,
+                "result": result
+            })
+
+        finally:
+            # Single-point guaranteed reservation release for all early returns, denials, and exceptions
+            if res_token and not step_committed:
+                if getattr(self, "envelope", None) and getattr(self.envelope, "is_active", False):
+                    self.envelope.release_reservation(res_token)
 
 
 class SupervisorClient:

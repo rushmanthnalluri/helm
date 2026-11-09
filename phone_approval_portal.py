@@ -345,15 +345,16 @@ def complete_device_enrollment(
                 return False, "Enrollment locked out: too many failed attempts. Session destroyed."
             return False, f"Invalid pairing code (attempt {sess['failed_attempts']}/{MAX_FAILED_ENROLLMENT_ATTEMPTS})"
 
+        # Atomically consume session from registry the instant pairing code matches (TOCTOU elimination)
+        del _LOCAL_ENROLLMENT_SESSIONS[session_id]
+
         # Validate asymmetric public key format and curve
         try:
             imported_key = ECC.import_key(public_key_pem.strip())
             if imported_key.has_private():
-                del _LOCAL_ENROLLMENT_SESSIONS[session_id]
                 return False, "DENY: Enrollment rejects private keys. Only public keys can be registered on PC."
             curve_norm = getattr(imported_key, 'curve', '').lower().replace(' ', '').replace('-', '')
             if curve_norm not in ('ed25519', 'p256', 'prime256v1', 'secp256r1', 'nistp256'):
-                del _LOCAL_ENROLLMENT_SESSIONS[session_id]
                 return False, "DENY: Asymmetric public key must be on the Ed25519 or P-256 curve."
         except Exception as e:
             return False, f"Invalid public key format: {e}"
@@ -421,13 +422,7 @@ def complete_device_enrollment(
 
                 v2_msg = f"ENROLL_DEVICE_V2|{session_id}|{device_id}|{public_key_pem.strip()}|{exp_val}".encode('utf-8')
                 if not verify_asymmetric_signature(approver_entry["public_key"], v2_msg, primary_approval_sig):
-                    with _ENROLLMENT_LOCK:
-                        _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)
                     return False, "APPROVAL_INVALID: Signature from active approver device failed verification or is expired."
-
-        # Consume the enrollment session
-        with _ENROLLMENT_LOCK:
-            _LOCAL_ENROLLMENT_SESSIONS.pop(session_id, None)
 
         registry[device_id] = {
             "public_key": public_key_pem.strip(),

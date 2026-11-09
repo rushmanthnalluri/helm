@@ -29,6 +29,11 @@ def benchmark(n_iterations=500):
     supervisor.state = homie_supervisor.STATE_ARMED
     actuator = supervisor.actuator
 
+    # 5 warm-up iterations to prime SQLite connection, table schemas, and JIT subkey cache
+    for warm_seq in range(1, 6):
+        w_token = supervisor.mint_intent_token("homie_snap_window", {"app_name": "notepad"}, f"warm_{warm_seq}", warm_seq)
+        actuator.execute_actuator("homie_snap_window", {"app_name": "notepad"}, caller_id=f"warm_{warm_seq}", intent_token=w_token, seq=warm_seq)
+
     latencies_ms = []
 
     for seq in range(1, n_iterations + 1):

@@ -39,9 +39,9 @@ import homie_confinement
 
 logger = logging.getLogger("homie.update_verifier")
 
-# Pinned Ed25519 publisher public key for official Homie software releases
+# Pinned Ed25519 publisher public key for official Homie software releases (Rotated Batch 34)
 PINNED_PUBLISHER_KEY_PEM = """-----BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEAwT684SVS8poYYWfnKvF+wYMEyy1ZIQSVJWbOoUzqYug=
+MCowBQYDK2VwAyEAXBYS0+c64gbsT95CnpeMWWQVQkfK7xSjwbld5xs4MGU=
 -----END PUBLIC KEY-----"""
 PINNED_PUBLISHER_PUBLIC_KEY = PINNED_PUBLISHER_KEY_PEM
 

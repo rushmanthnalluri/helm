@@ -271,8 +271,8 @@ MUTATIONS = [
         "id": "MUTATION_27_SUPERVISOR_FAIL_OPEN_BYPASS",
         "name": "Bypass Fail-Closed Gate on Non-StepUp Deny in _handle_propose",
         "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
-        "target": "        if not allowed:\n            if getattr(self, \"envelope\", None) and getattr(self.envelope, \"is_active\", False):\n                self.envelope.release_reservation()\n            if requires_step_up:",
-        "replacement": "        if False: # MUTATION BYPASS: taint fail-closed gate disabled\n            if requires_step_up:",
+        "target": "            if not allowed:\n                if requires_step_up:",
+        "replacement": "            if False: # MUTATION BYPASS: taint fail-closed gate disabled\n                if requires_step_up:",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch30_security_hardening.py::TestBatch30SecurityHardening::test_1_supervisor_fail_open_prevented_on_non_stepup_deny"]
     },
     {
@@ -287,8 +287,8 @@ MUTATIONS = [
         "id": "MUTATION_29_SUPERVISOR_ENVELOPE_BYPASS",
         "name": "Bypass Policy Envelope Check in PolicySupervisor._handle_propose",
         "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
-        "target": "        ks_to_commit = 0\n        if getattr(self, \"envelope\", None) and getattr(self.envelope, \"is_active\", False):",
-        "replacement": "        ks_to_commit = 0\n        if False: # MUTATION BYPASS: envelope check disabled",
+        "target": "        ks_to_commit = 0\n        res_token = None\n        if getattr(self, \"envelope\", None) and getattr(self.envelope, \"is_active\", False):",
+        "replacement": "        ks_to_commit = 0\n        res_token = None\n        if False: # MUTATION BYPASS: envelope check disabled",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch30_security_hardening.py::TestBatch30SecurityHardening::test_3_supervisor_envelope_enforcement_in_handle_propose"]
     },
     {
@@ -343,16 +343,16 @@ MUTATIONS = [
         "id": "MUTATION_36_OUTCOME_UNKNOWN_EXCEPTION_BYPASS",
         "name": "Bypass UNKNOWN Outcome Classification on Exception in _handle_propose",
         "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
-        "target": "            if execution_success:\n                outcome_status = \"SUCCESS\"\n            elif exception_occurred:\n                outcome_status = \"UNKNOWN\"",
-        "replacement": "            if execution_success:\n                outcome_status = \"SUCCESS\"\n            elif exception_occurred:\n                outcome_status = \"FAILED\" # MUTATION BYPASS: misclassify exception as FAILED",
+        "target": "                if execution_success:\n                    outcome_status = \"SUCCESS\"\n                elif exception_occurred:\n                    outcome_status = \"UNKNOWN\"",
+        "replacement": "                if execution_success:\n                    outcome_status = \"SUCCESS\"\n                elif exception_occurred:\n                    outcome_status = \"FAILED\" # MUTATION BYPASS: misclassify exception as FAILED",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch31_security_hardening.py::TestBatch31SecurityHardening::test_10_audit_ledger_outcome_unknown_on_exception_and_locks_on_write_failure"]
     },
     {
         "id": "MUTATION_37_SUPERVISOR_DIRECT_APPROVAL_BYPASS",
         "name": "Bypass Supervisor Direct Approved Action Lookup in _handle_propose",
         "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
-        "target": "                current_epoch = taint_tracker.get_taint_epoch()\n                if self.consume_approved_action(caller_id, tool, args_hash, current_epoch):",
-        "replacement": "                current_epoch = taint_tracker.get_taint_epoch()\n                if False: # MUTATION BYPASS: disable direct internal approval lookup",
+        "target": "                    current_epoch = taint_tracker.get_taint_epoch()\n                    if self.consume_approved_action(caller_id, tool, args_hash, current_epoch):",
+        "replacement": "                    current_epoch = taint_tracker.get_taint_epoch()\n                    if False: # MUTATION BYPASS: disable direct internal approval lookup",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch31_security_hardening.py::TestBatch31SecurityHardening::test_11_supervisor_direct_internal_approval_lookup"]
     },
     {
@@ -391,8 +391,8 @@ MUTATIONS = [
         "id": "MUTATION_42_SUPERVISOR_INTENT_LEDGER_FAILURE_LOCK_BYPASS",
         "name": "Bypass Supervisor Lock on INTENT Audit Ledger Error in _handle_propose",
         "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
-        "target": "        except Exception as intent_err:\n            logger.critical(\"Audit ledger write failure during INTENT recording: %s\", intent_err)\n            self._transition_to_locked(f\"Audit ledger failure on INTENT: {intent_err}\")",
-        "replacement": "        except Exception as intent_err:\n            pass # MUTATION BYPASS: ignore audit ledger failure and do not transition to locked",
+        "target": "            except Exception as intent_err:\n                logger.critical(\"Audit ledger write failure during INTENT recording: %s\", intent_err)\n                self._transition_to_locked(f\"Audit ledger failure on INTENT: {intent_err}\")",
+        "replacement": "            except Exception as intent_err:\n                pass # MUTATION BYPASS: ignore audit ledger failure and do not transition to locked",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch32_security_hardening.py::TestBatch32SecurityHardening::test_9_supervisor_locks_if_intent_ledger_fails"]
     },
     {
@@ -429,11 +429,35 @@ MUTATIONS = [
     },
     {
         "id": "MUTATION_47_ENVELOPE_STEP_RESERVATION_RELEASE_BYPASS",
-        "name": "Bypass Step Reservation Release on Proposal Denial in _handle_propose",
+        "name": "Bypass Single-Point Step Reservation Release on Proposal Denial in _handle_propose",
         "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
-        "target": "        if not allowed:\n            if getattr(self, \"envelope\", None) and getattr(self.envelope, \"is_active\", False):\n                self.envelope.release_reservation()",
-        "replacement": "        if not allowed:\n            if False and getattr(self, \"envelope\", None) and getattr(self.envelope, \"is_active\", False):\n                self.envelope.release_reservation()",
-        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch33_security_hardening.py::TestBatch33SecurityHardening::test_3_envelope_step_reservation_no_leak_on_denial"]
+        "target": "        finally:\n            # Single-point guaranteed reservation release for all early returns, denials, and exceptions\n            if res_token and not step_committed:",
+        "replacement": "        finally:\n            # Single-point guaranteed reservation release for all early returns, denials, and exceptions\n            if False and res_token and not step_committed:",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch34_security_hardening.py::TestBatch34SecurityHardening::test_3_envelope_reservation_token_single_point_release_across_supervisor_exits"]
+    },
+    {
+        "id": "MUTATION_48_KEYCODE_13_ENTER_BYPASS",
+        "name": "Bypass Numeric Keycode 13 Enter-to-Submit Detection in check_boundary",
+        "file": os.path.join(BASE_DIR, "policy_envelope.py"),
+        "target": "                is_vk_13 = (isinstance(val, int) and val == 13) or (str(val).strip().lower() in (\"13\", \"0x0d\", \"0xd\"))\n                if is_vk_13:",
+        "replacement": "                is_vk_13 = (isinstance(val, int) and val == 13) or (str(val).strip().lower() in (\"13\", \"0x0d\", \"0xd\"))\n                if False and is_vk_13:",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch34_security_hardening.py::TestBatch34SecurityHardening::test_2_enter_detection_no_false_positives_on_words_and_catches_keycode_13"]
+    },
+    {
+        "id": "MUTATION_49_SYNTHETIC_CTRL_ALT_P_BYPASS",
+        "name": "Bypass Synthetic Ctrl+Alt+P Injection Prevention in check_boundary",
+        "file": os.path.join(BASE_DIR, "policy_envelope.py"),
+        "target": "                if \"ctrl\" in norm_str and \"alt\" in norm_str and \"p\" in norm_str:\n                    return False, \"DENY: Synthetic simulation of physical console pairing hotkey (Ctrl+Alt+P) is strictly prohibited.\", 0",
+        "replacement": "                if False and \"ctrl\" in norm_str and \"alt\" in norm_str and \"p\" in norm_str:\n                    return False, \"DENY: Synthetic simulation of physical console pairing hotkey (Ctrl+Alt+P) is strictly prohibited.\", 0",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch34_security_hardening.py::TestBatch34SecurityHardening::test_5_synthetic_ctrl_alt_p_rejected"]
+    },
+    {
+        "id": "MUTATION_50_ATOMIC_SESSION_POP_BYPASS",
+        "name": "Bypass Atomic Session Deletion on Code Match in complete_device_enrollment",
+        "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
+        "target": "        # Atomically consume session from registry the instant pairing code matches (TOCTOU elimination)\n        del _LOCAL_ENROLLMENT_SESSIONS[session_id]",
+        "replacement": "        # MUTATION BYPASS: delay session deletion allowing replay/race\n        pass",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch34_security_hardening.py::TestBatch34SecurityHardening::test_4_concurrent_session_reuse_blocked_by_atomic_pop"]
     }
 ]
 
@@ -463,7 +487,7 @@ def _safe_copy(src: str, dst: str, retries: int = 5):
 
 def run_mutation_tests() -> bool:
     print("=" * 75)
-    print("=== BATCH 33 EXPANDED AUTOMATED CI MUTATION TEST HARNESS ===")
+    print("=== BATCH 34 EXPANDED AUTOMATED CI MUTATION TEST HARNESS ===")
     print("=" * 75)
     print(f"Total Security Mutations to Evaluate: {len(MUTATIONS)}\n")
 
