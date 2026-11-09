@@ -141,9 +141,40 @@ class SupervisorActuator:
 
         # Prohibit synthetic simulation of console enrollment hotkey (Ctrl + Alt + P)
         import policy_envelope
-        _, ctrl_alt_p_detected, _, _ = policy_envelope.canonicalize_keyboard_arguments(args)
+        _, ctrl_alt_p_detected, detected_vks, tokens = policy_envelope.canonicalize_keyboard_arguments(args)
         if ctrl_alt_p_detected:
             raise CompleteMediationBreachError("Complete mediation breach: Synthetic simulation of physical console pairing hotkey (Ctrl+Alt+P) is strictly prohibited.")
+
+        # Prohibit dangerous system hotkey chords
+        import windows_tools
+        blocked_chord = windows_tools.detect_blocked_system_chords(detected_vks, tokens)
+        if blocked_chord:
+            raise CompleteMediationBreachError(f"Complete mediation breach: Synthetic injection of dangerous system hotkey chord '{blocked_chord}' is strictly prohibited.")
+
+        # Prevent TOCTOU: Re-resolve foreground process and domain immediately before actuator execution
+        fg_act = windows_tools.get_foreground_window()
+        act_proc = (fg_act.get("proc_name") or "") if fg_act else ""
+        clean_act_proc = os.path.basename(act_proc).lower()
+
+        if clean_act_proc and clean_act_proc in policy_envelope.PROHIBITED_ENVELOPE_IMAGES:
+            raise CompleteMediationBreachError(
+                f"Complete mediation breach: TOCTOU detected! Active foreground process '{act_proc}' is in prohibited processes list."
+            )
+
+        if getattr(self.supervisor, "envelope", None) and getattr(self.supervisor.envelope, "is_active", False):
+            env = self.supervisor.envelope
+            if clean_act_proc and env.allowed_target_processes:
+                allowed_procs = [os.path.basename(p).lower() for p in env.allowed_target_processes]
+                if clean_act_proc not in allowed_procs:
+                    raise CompleteMediationBreachError(
+                        f"Complete mediation breach: TOCTOU detected! Active foreground process '{clean_act_proc}' switched away from envelope allowed targets: {allowed_procs}"
+                    )
+            if clean_act_proc and env.allowed_domains and clean_act_proc in policy_envelope.BROWSER_IMAGES:
+                act_domain = windows_tools.get_browser_active_domain(fg_act.get("hwnd") if fg_act else None)
+                if not act_domain or not any(policy_envelope.is_domain_allowed(act_domain, d) for d in env.allowed_domains):
+                    raise CompleteMediationBreachError(
+                        f"Complete mediation breach: TOCTOU detected! Active browser domain '{act_domain}' switched away from envelope allowed domains: {env.allowed_domains}"
+                    )
 
         if tier != "READ_ONLY":
             if not self.supervisor.verify_and_consume_intent_token(
@@ -220,30 +251,131 @@ def get_active_supervisor() -> Optional['PolicySupervisor']:
     return _ACTIVE_SUPERVISOR
 
 
-def record_approved_action(caller_id: str, tool: str, args_hash: str, taint_epoch: int, ttl: float = 120.0):
+def _init_approved_actions_table(conn):
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(approved_actions)")
+    cols = [c[1] for c in cur.fetchall()]
+    if not cols:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS approved_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                caller_id TEXT NOT NULL,
+                tool TEXT NOT NULL,
+                args_hash TEXT NOT NULL,
+                taint_epoch INTEGER NOT NULL,
+                expiry REAL NOT NULL,
+                consumed INTEGER NOT NULL DEFAULT 0,
+                signature_blob TEXT NOT NULL DEFAULT ''
+            );
+        """)
+    elif "signature_blob" not in cols:
+        conn.execute("ALTER TABLE approved_actions ADD COLUMN signature_blob TEXT NOT NULL DEFAULT ''")
+    conn.commit()
+
+
+def verify_signed_approval_evidence(
+    blob_raw: Any,
+    caller_id: str,
+    tool: str,
+    args_hash: str,
+    taint_epoch: int
+) -> bool:
+    """Cryptographically verifies a Signed Approval Blob against enrolled hardware device keys.
+    Fails closed if blob is missing, corrupted, expired, caller/tool/args/epoch mismatched,
+    or if signature fails verification against the enrolled device public key.
+    Zero trust in unverified database rows or unauthenticated file presence.
+    """
+    if not blob_raw:
+        return False
+    try:
+        if isinstance(blob_raw, str):
+            blob = json.loads(blob_raw)
+        elif isinstance(blob_raw, dict):
+            blob = blob_raw
+        else:
+            return False
+    except Exception:
+        return False
+
+    device_id = blob.get("device_id")
+    signature = blob.get("signature")
+    if not device_id or not signature:
+        return False
+
+    # Bindings check: caller, tool, args_hash, taint_epoch, expiry
+    if str(blob.get("caller_id", "")).strip() != str(caller_id).strip():
+        return False
+    b_tool = str(blob.get("tool_name") or blob.get("action_name") or blob.get("action", "")).strip()
+    if b_tool != str(tool).strip():
+        return False
+    b_args = str(blob.get("args_hash") or blob.get("payload_hash", "")).lower().strip()
+    if b_args != str(args_hash).lower().strip():
+        return False
+    if int(blob.get("taint_epoch", -1)) != int(taint_epoch):
+        return False
+    if float(blob.get("expiry", 0)) < time.time():
+        return False
+
+    # Load device public key from registry
+    try:
+        import phone_approval_portal
+        registry = phone_approval_portal._load_device_registry()
+    except Exception:
+        reg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".homie_device_keys.json")
+        if not os.path.exists(reg_path):
+            return False
+        try:
+            with open(reg_path, "r", encoding="utf-8") as f:
+                registry = json.load(f)
+        except Exception:
+            return False
+
+    dev_entry = registry.get(device_id)
+    if not dev_entry or dev_entry.get("revoked", False):
+        return False
+    pub_key_pem = dev_entry.get("public_key")
+    if not pub_key_pem:
+        return False
+
+    # Verify cryptographic signature
+    version = str(blob.get("version", ""))
+    if version in ("ACTION_APPROVAL_V1", "1"):
+        data_to_verify = f"ACTION_APPROVAL_V1|{device_id}|{tool}|{args_hash.lower()}|{blob.get('nonce')}|{blob.get('expiry')}|{taint_epoch}".encode('utf-8')
+    elif version in ("CHALLENGE_V2", "2"):
+        challenge_seq = blob.get("challenge_seq", 0)
+        raw_challenge = f"CHALLENGE_V2|{device_id}|{tool}|{args_hash.lower()}|{blob.get('nonce')}|{blob.get('expiry')}|{taint_epoch}|{challenge_seq}"
+        expected_hash = hashlib.sha256(raw_challenge.encode('utf-8')).hexdigest()
+        if blob.get("challenge_hash") and blob.get("challenge_hash") != expected_hash:
+            return False
+        challenge_hash = blob.get("challenge_hash") or expected_hash
+        data_to_verify = challenge_hash.encode('utf-8')
+    else:
+        return False
+
+    try:
+        import phone_approval_portal
+        return phone_approval_portal.verify_asymmetric_signature(pub_key_pem, data_to_verify, signature)
+    except Exception as e:
+        logger.warning("Error verifying approval evidence signature: %s", e)
+        return False
+
+
+def record_approved_action(caller_id: str, tool: str, args_hash: str, taint_epoch: int, ttl: float = 120.0, signed_blob: Optional[Any] = None):
     """Module-level production helper: records direct action approval across memory and SQLite."""
     sup = get_active_supervisor()
     if sup:
-        sup.record_approved_action(caller_id, tool, args_hash, taint_epoch, ttl=ttl)
+        sup.record_approved_action(caller_id, tool, args_hash, taint_epoch, ttl=ttl, signed_blob=signed_blob)
     else:
         try:
             import db_utils
+            exp_time = time.time() + ttl
+            blob_str = json.dumps(signed_blob) if isinstance(signed_blob, dict) else (str(signed_blob) if signed_blob else "")
             with db_utils.get_db() as conn:
+                _init_approved_actions_table(conn)
                 conn.execute("""
-                    CREATE TABLE IF NOT EXISTS approved_actions (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        caller_id TEXT NOT NULL,
-                        tool TEXT NOT NULL,
-                        args_hash TEXT NOT NULL,
-                        taint_epoch INTEGER NOT NULL,
-                        expiry REAL NOT NULL,
-                        consumed INTEGER NOT NULL DEFAULT 0
-                    );
-                """)
-                conn.execute("""
-                    INSERT INTO approved_actions (caller_id, tool, args_hash, taint_epoch, expiry, consumed)
-                    VALUES (?, ?, ?, ?, ?, 0)
-                """, (caller_id, tool, args_hash.lower(), int(taint_epoch), time.time() + ttl))
+                    INSERT INTO approved_actions (caller_id, tool, args_hash, taint_epoch, expiry, consumed, signature_blob)
+                    VALUES (?, ?, ?, ?, ?, 0, ?)
+                """, (caller_id, tool, args_hash.lower(), int(taint_epoch), exp_time, blob_str))
                 conn.commit()
         except Exception as e:
             logger.warning("Could not persist module-level approved action to SQLite: %s", e)
@@ -258,9 +390,10 @@ def consume_approved_action(caller_id: str, tool: str, args_hash: str, taint_epo
         import db_utils
         now = time.time()
         with db_utils.get_db() as conn:
+            _init_approved_actions_table(conn)
             cur = conn.cursor()
             cur.execute("""
-                SELECT id FROM approved_actions
+                SELECT id, signature_blob FROM approved_actions
                 WHERE caller_id = ? AND tool = ? AND args_hash = ? AND taint_epoch = ? AND consumed = 0 AND expiry >= ?
                 ORDER BY id ASC LIMIT 1
             """, (caller_id, tool, args_hash.lower(), int(taint_epoch), now))
@@ -268,7 +401,12 @@ def consume_approved_action(caller_id: str, tool: str, args_hash: str, taint_epo
             if row:
                 cur.execute("UPDATE approved_actions SET consumed = 1 WHERE id = ?", (row["id"],))
                 conn.commit()
-                return True
+                sig_blob = row["signature_blob"] if "signature_blob" in row.keys() else row[1]
+                if verify_signed_approval_evidence(sig_blob, caller_id, tool, args_hash, taint_epoch):
+                    return True
+                else:
+                    logger.warning("Module-level SQLite approved action row %s rejected: invalid or forged cryptographic evidence!", row["id"])
+                    return False
     except Exception as e:
         logger.warning("Could not consume module-level approved action from SQLite: %s", e)
     return False
@@ -462,56 +600,56 @@ class PolicySupervisor:
         """Legacy helper for backwards compatibility."""
         return False
 
-    def record_approved_action(self, caller_id: str, tool: str, args_hash: str, taint_epoch: int, ttl: float = 120.0):
-        """Directive 14 & Batch 32 & 35: Stores direct challenge approval bound to (caller_id, tool, args_hash, taint_epoch)."""
+    def record_approved_action(self, caller_id: str, tool: str, args_hash: str, taint_epoch: int, ttl: float = 120.0, signed_blob: Optional[Any] = None):
+        """Directive 14 & Batch 32 & 35 & 37: Stores direct challenge approval bound to (caller_id, tool, args_hash, taint_epoch) with cryptographic evidence."""
         exp_time = time.time() + ttl
+        blob_str = json.dumps(signed_blob) if isinstance(signed_blob, dict) else (str(signed_blob) if signed_blob else "")
         with self._approved_lock:
-            self._approved_actions[(caller_id, tool, args_hash.lower(), int(taint_epoch))] = exp_time
+            self._approved_actions[(caller_id, tool, args_hash.lower(), int(taint_epoch))] = (exp_time, signed_blob)
         # Cross-process durable SQLite persistence
         try:
             import db_utils
             with db_utils.get_db() as conn:
+                _init_approved_actions_table(conn)
                 conn.execute("""
-                    CREATE TABLE IF NOT EXISTS approved_actions (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        caller_id TEXT NOT NULL,
-                        tool TEXT NOT NULL,
-                        args_hash TEXT NOT NULL,
-                        taint_epoch INTEGER NOT NULL,
-                        expiry REAL NOT NULL,
-                        consumed INTEGER NOT NULL DEFAULT 0
-                    );
-                """)
-                conn.execute("""
-                    INSERT INTO approved_actions (caller_id, tool, args_hash, taint_epoch, expiry, consumed)
-                    VALUES (?, ?, ?, ?, ?, 0)
-                """, (caller_id, tool, args_hash.lower(), int(taint_epoch), exp_time))
+                    INSERT INTO approved_actions (caller_id, tool, args_hash, taint_epoch, expiry, consumed, signature_blob)
+                    VALUES (?, ?, ?, ?, ?, 0, ?)
+                """, (caller_id, tool, args_hash.lower(), int(taint_epoch), exp_time, blob_str))
                 conn.commit()
         except Exception as e:
             logger.warning("Could not persist approved action to SQLite: %s", e)
 
     def consume_approved_action(self, caller_id: str, tool: str, args_hash: str, taint_epoch: int) -> bool:
-        """Directive 14 & Batch 32 & 35: Atomically checks and consumes a direct approved action without worker bearer token."""
+        """Directive 14 & Batch 32 & 35 & 37: Atomically checks and consumes a direct approved action
+        with cryptographic verification of signed evidence blob against enrolled device keys.
+        """
         now = time.time()
         in_memory_found = False
         with self._approved_lock:
             key = (caller_id, tool, args_hash.lower(), int(taint_epoch))
             exp = self._approved_actions.pop(key, None)
             # Prune expired
-            to_del = [k for k, v in self._approved_actions.items() if now > v]
+            to_del = [k for k, v in self._approved_actions.items() if now > (v[0] if isinstance(v, tuple) else v)]
             for k in to_del:
                 self._approved_actions.pop(k, None)
-            if exp and now <= exp:
-                in_memory_found = True
+            if exp:
+                exp_time = exp[0] if isinstance(exp, tuple) else exp
+                blob = exp[1] if isinstance(exp, tuple) else None
+                if now <= exp_time:
+                    if verify_signed_approval_evidence(blob, caller_id, tool, args_hash, taint_epoch):
+                        in_memory_found = True
+                    else:
+                        logger.warning("In-memory approved action rejected: invalid or forged cryptographic evidence!")
 
         # Atomically consume in SQLite as well to prevent double-spending between memory and DB
         db_consumed = False
         try:
             import db_utils
             with db_utils.get_db() as conn:
+                _init_approved_actions_table(conn)
                 cur = conn.cursor()
                 cur.execute("""
-                    SELECT id FROM approved_actions
+                    SELECT id, signature_blob FROM approved_actions
                     WHERE caller_id = ? AND tool = ? AND args_hash = ? AND taint_epoch = ? AND consumed = 0 AND expiry >= ?
                     ORDER BY id ASC LIMIT 1
                 """, (caller_id, tool, args_hash.lower(), int(taint_epoch), now))
@@ -519,7 +657,11 @@ class PolicySupervisor:
                 if row:
                     cur.execute("UPDATE approved_actions SET consumed = 1 WHERE id = ?", (row["id"],))
                     conn.commit()
-                    db_consumed = True
+                    sig_blob = row["signature_blob"] if "signature_blob" in row.keys() else row[1]
+                    if verify_signed_approval_evidence(sig_blob, caller_id, tool, args_hash, taint_epoch):
+                        db_consumed = True
+                    else:
+                        logger.warning("SQLite approved action row %s rejected: invalid or forged cryptographic evidence signature!", row["id"])
         except Exception as e:
             logger.warning("Could not consume approved action from SQLite: %s", e)
 

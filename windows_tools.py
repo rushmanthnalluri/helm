@@ -61,7 +61,7 @@ def canonicalize_keyboard_arguments(arguments: Dict[str, Any]) -> Tuple[bool, bo
             return res
         return [v]
 
-    def _parse_vk(raw) -> Optional[int]:
+    def _parse_vk(raw, allow_decimal_str: bool = True) -> Optional[int]:
         if raw is None or raw == "":
             return None
         if isinstance(raw, (int, float)):
@@ -75,10 +75,11 @@ def canonicalize_keyboard_arguments(arguments: Dict[str, Any]) -> Tuple[bool, bo
                 return int(s, 16)
             except ValueError:
                 pass
-        try:
-            return int(float(s))
-        except ValueError:
-            pass
+        if allow_decimal_str:
+            try:
+                return int(float(s))
+            except ValueError:
+                pass
         return VK_MAP.get(s)
 
     detected_vks: List[int] = []
@@ -88,6 +89,7 @@ def canonicalize_keyboard_arguments(arguments: Dict[str, Any]) -> Tuple[bool, bo
     # 1. Text field inspection:
     # Free-form string prose ONLY checks for literal newlines (indicates form submit)
     # If text is a list/tuple: treat elements as individual key events / tokens
+    # Avoid parsing numeric integer strings in free-form prose (e.g. typing "13" or "80" in text should not look like Enter or P).
     text_val = arguments.get("text")
     if text_val is not None:
         if isinstance(text_val, str):
@@ -98,12 +100,18 @@ def canonicalize_keyboard_arguments(arguments: Dict[str, Any]) -> Tuple[bool, bo
             for item in flat_text:
                 if item is None:
                     continue
+                if isinstance(item, (int, float)):
+                    vk = int(item)
+                    detected_vks.append(vk)
+                    if vk in (13, 0x0D):
+                        enter_detected = True
+                    continue
                 s_item = str(item)
                 if "\n" in s_item or "\r" in s_item:
                     enter_detected = True
                     detected_vks.append(13)
                     continue
-                vk = _parse_vk(item)
+                vk = _parse_vk(item, allow_decimal_str=False)
                 if vk is not None:
                     detected_vks.append(vk)
                     if vk in (13, 0x0D):
@@ -165,31 +173,88 @@ def canonicalize_keyboard_arguments(arguments: Dict[str, Any]) -> Tuple[bool, bo
 
     return enter_detected, ctrl_alt_p_detected, detected_vks, tokens
 
+def detect_blocked_system_chords(detected_vks: List[int], tokens: List[str]) -> Optional[str]:
+    """Detects dangerous system hotkey chords that bypass desktop confinement or trigger OS prompts.
+    Explicitly blocks: Win+R, Win+X, Alt+F4, Ctrl+Shift+Esc, Ctrl+Alt+Del.
+    """
+    token_set = set(t.lower() for t in tokens)
+
+    has_win = any(vk in detected_vks for vk in (91, 92)) or bool({"win", "windows", "lwin", "rwin", "super", "cmd"}.intersection(token_set))
+    has_r = (82 in detected_vks) or bool({"r"}.intersection(token_set))
+    has_x = (88 in detected_vks) or bool({"x"}.intersection(token_set))
+    has_alt = any(vk in detected_vks for vk in (18, 164, 165)) or bool({"alt", "menu", "lalt", "ralt"}.intersection(token_set))
+    has_f4 = (115 in detected_vks) or bool({"f4"}.intersection(token_set))
+    has_ctrl = any(vk in detected_vks for vk in (17, 162, 163)) or bool({"ctrl", "control", "lctrl", "rctrl"}.intersection(token_set))
+    has_shift = any(vk in detected_vks for vk in (16, 160, 161)) or bool({"shift", "lshift", "rshift"}.intersection(token_set))
+    has_esc = (27 in detected_vks) or bool({"esc", "escape"}.intersection(token_set))
+    has_del = (46 in detected_vks) or bool({"del", "delete"}.intersection(token_set))
+
+    if has_win and has_r:
+        return "Win+R"
+    if has_win and has_x:
+        return "Win+X"
+    if has_alt and has_f4:
+        return "Alt+F4"
+    if has_ctrl and has_shift and has_esc:
+        return "Ctrl+Shift+Esc"
+    if has_ctrl and has_alt and has_del:
+        return "Ctrl+Alt+Del"
+    return None
+
 def get_browser_active_domain(hwnd: Optional[int] = None) -> Optional[str]:
     """Inspects active browser window via Windows UI Automation (UIA) to extract true URL hostname.
-    Guarantees: Never trusts window titles or worker-supplied domain arguments.
+    Top-level window constraint: Search descendants of hwnd ONLY.
+    Never falls back to desktop root uia.EditControl to prevent matching inputs on other windows or web pages.
+    Filters browser chrome toolbar controls specifically: Chrome_OmniboxView, OmniboxViewViews, addressEditBox, urlbar-input.
     """
+    if not hwnd:
+        fg = get_foreground_window()
+        hwnd = fg.get("hwnd") if fg else None
+    if not hwnd:
+        return None
+
     try:
         import uiautomation as uia
         import urllib.parse
-        
+
+        try:
+            window_ctrl = uia.ControlFromHandle(hwnd)
+        except Exception:
+            window_ctrl = None
+
+        if not window_ctrl:
+            return None
+
+        # Search descendants of hwnd ONLY (never desktop root)
         edit = None
-        if hwnd:
+        for class_name in ("Chrome_OmniboxView", "OmniboxViewViews"):
             try:
-                window_ctrl = uia.ControlFromHandle(hwnd)
-                if window_ctrl:
-                    edit = window_ctrl.EditControl(searchDepth=8, SubName="Address")
-                    if not edit.Exists(0.1):
-                        edit = window_ctrl.EditControl(searchDepth=8, ClassName="Chrome_OmniboxView")
+                cand = window_ctrl.EditControl(searchDepth=10, ClassName=class_name)
+                if cand.Exists(0.05):
+                    edit = cand
+                    break
             except Exception:
                 pass
 
-        if not edit or not edit.Exists(0.1):
-            edit = uia.EditControl(searchDepth=6, SubName="Address")
-            if not edit.Exists(0.1):
-                edit = uia.EditControl(searchDepth=6, ClassName="Chrome_OmniboxView")
+        if not edit or not edit.Exists(0.01):
+            for auto_id in ("addressEditBox", "urlbar-input"):
+                try:
+                    cand = window_ctrl.EditControl(searchDepth=10, AutomationId=auto_id)
+                    if cand.Exists(0.05):
+                        edit = cand
+                        break
+                except Exception:
+                    pass
 
-        if edit and edit.Exists(0.1):
+        if not edit or not edit.Exists(0.01):
+            try:
+                cand = window_ctrl.EditControl(searchDepth=10, SubName="Address")
+                if cand.Exists(0.05):
+                    edit = cand
+            except Exception:
+                pass
+
+        if edit and edit.Exists(0.01):
             val = edit.GetValuePattern().Value if hasattr(edit, 'GetValuePattern') else ""
             if val:
                 val = str(val).strip()

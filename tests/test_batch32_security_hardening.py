@@ -317,11 +317,18 @@ class TestBatch32SecurityHardening(unittest.TestCase):
         """Directive 10: Supervisor approval cache strictly binds (caller_id, tool, args_hash, taint_epoch)."""
         supervisor = homie_supervisor.PolicySupervisor()
         args_hash = "abc123hash"
-        supervisor.record_approved_action("worker_1", "homie_set_clipboard", args_hash, taint_epoch=2, ttl=60.0)
+        from tests.phone_testing_keys import enroll_test_device, mint_test_action_approval
+        priv_k, pub_k = enroll_test_device("primary_phone")
+        signed_blob = mint_test_action_approval(priv_k, "homie_set_clipboard", args_hash, "primary_phone", taint_epoch=2)
+        signed_blob["caller_id"] = "worker_1"
+        signed_blob["tool_name"] = "homie_set_clipboard"
+        signed_blob["args_hash"] = args_hash
+        supervisor.record_approved_action("worker_1", "homie_set_clipboard", args_hash, taint_epoch=2, ttl=60.0, signed_blob=signed_blob)
 
-        # Wrong caller cannot consume
+        # Wrong caller cannot consume and must not evict legitimate approval from cache
         consumed_wrong_caller = supervisor.consume_approved_action("worker_2", "homie_set_clipboard", args_hash, taint_epoch=2)
         self.assertFalse(consumed_wrong_caller)
+        self.assertIn(("worker_1", "homie_set_clipboard", args_hash.lower(), 2), supervisor._approved_actions, "Wrong caller evicted legitimate approval from cache!")
 
         # Wrong taint epoch cannot consume
         consumed_wrong_epoch = supervisor.consume_approved_action("worker_1", "homie_set_clipboard", args_hash, taint_epoch=3)

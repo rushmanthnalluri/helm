@@ -471,7 +471,7 @@ MUTATIONS = [
         "id": "MUTATION_52_PRODUCTION_APPROVAL_RELAY_BYPASS",
         "name": "Bypass Phone Approval Relay to Supervisor Cache in verify_action_approval",
         "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
-        "target": "        homie_supervisor.record_approved_action(\n            caller_id=target_caller,\n            tool=expected_action,\n            args_hash=str(expected_payload_hash).lower(),\n            taint_epoch=approval_epoch,\n            ttl=min(remaining_ttl, 120.0)\n        )",
+        "target": "        homie_supervisor.record_approved_action(\n            caller_id=target_caller,\n            tool=expected_action,\n            args_hash=str(expected_payload_hash).lower(),\n            taint_epoch=approval_epoch,\n            ttl=min(remaining_ttl, 120.0),\n            signed_blob=signed_approval_blob\n        )",
         "replacement": "        pass # MUTATION BYPASS: drop approval relay to supervisor",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch35_security_hardening.py::TestBatch35SecurityHardening::test_4_production_approval_relay_to_supervisor_cache_and_db"]
     },
@@ -511,7 +511,7 @@ MUTATIONS = [
         "id": "MUTATION_57_DEVICE_APPROVAL_SUPERVISOR_RELAY_BYPASS",
         "name": "Bypass Phone Device Approval Relay to Supervisor Cache in verify_device_approval",
         "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
-        "target": "        homie_supervisor.record_approved_action(\n            caller_id=target_caller,\n            tool=item[\"tool_name\"],\n            args_hash=str(item[\"args_hash\"]).lower(),\n            taint_epoch=item.get(\"taint_epoch\", 0),\n            ttl=min(remaining_ttl, 120.0)\n        )",
+        "target": "        homie_supervisor.record_approved_action(\n            caller_id=target_caller,\n            tool=item[\"tool_name\"],\n            args_hash=str(item[\"args_hash\"]).lower(),\n            taint_epoch=item.get(\"taint_epoch\", 0),\n            ttl=min(remaining_ttl, 120.0),\n            signed_blob=signed_approval_blob\n        )",
         "replacement": "        pass # MUTATION BYPASS: drop device approval relay to supervisor",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch36_security_hardening.py::TestBatch36SecurityHardening::test_2_verify_device_approval_relays_to_supervisor_cache_and_db"]
     },
@@ -538,6 +538,46 @@ MUTATIONS = [
         "target": "        current_proc = supervisor_proc  # Fail-closed: Supervisor inspects OS foreground; NEVER accepts worker self-attested proc",
         "replacement": "        current_proc = args.get(\"target_process\") or supervisor_proc # MUTATION BYPASS: trust worker proc",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch36_security_hardening.py::TestBatch36SecurityHardening::test_5_supervisor_first_foreground_and_uia_domain_scoping"]
+    },
+    {
+        "id": "MUTATION_61_SIGNED_APPROVAL_EVIDENCE_BYPASS",
+        "name": "Bypass Signed Approval Blob Cryptographic Verification in consume_approved_action",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": "                    if verify_signed_approval_evidence(sig_blob, caller_id, tool, args_hash, taint_epoch):",
+        "replacement": "                    if True: # MUTATION BYPASS: accept unsigned or forged evidence",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch37_security_hardening.py::TestBatch37SecurityHardening::test_1_signed_approval_evidence_verification_and_unverified_sqlite_row_rejection"]
+    },
+    {
+        "id": "MUTATION_62_UIA_TOP_LEVEL_WINDOW_CONSTRAINT_BYPASS",
+        "name": "Bypass Top-Level Window Handle Scoping in get_browser_active_domain",
+        "file": os.path.join(BASE_DIR, "windows_tools.py"),
+        "target": "        if edit and edit.Exists(0.01):",
+        "replacement": "        if not edit:\n            edit = uia.EditControl(searchDepth=6, SubName=\"Address\") # MUTATION BYPASS: query root desktop\n        if edit and edit.Exists(0.01):",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch37_security_hardening.py::TestBatch37SecurityHardening::test_3_uia_domain_resolution_strictly_scoped_to_hwnd_descendants"]
+    },
+    {
+        "id": "MUTATION_63_TOCTOU_ACTUATOR_FOREGROUND_PROCESS_BYPASS",
+        "name": "Bypass TOCTOU Foreground Process Re-Resolution in SupervisorActuator.execute_actuator",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": "        if clean_act_proc and clean_act_proc in policy_envelope.PROHIBITED_ENVELOPE_IMAGES:\n            raise CompleteMediationBreachError(",
+        "replacement": "        if False and clean_act_proc in policy_envelope.PROHIBITED_ENVELOPE_IMAGES: # MUTATION BYPASS: ignore TOCTOU\n            raise CompleteMediationBreachError(",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch37_security_hardening.py::TestBatch37SecurityHardening::test_4_actuator_toctou_defense_blocks_foreground_window_switching"]
+    },
+    {
+        "id": "MUTATION_64_SYSTEM_HOTKEY_CHORD_BLOCK_BYPASS",
+        "name": "Bypass Dangerous System Hotkey Chord Detection in detect_blocked_system_chords",
+        "file": os.path.join(BASE_DIR, "windows_tools.py"),
+        "target": "    if has_win and has_r:\n        return \"Win+R\"",
+        "replacement": "    if False and has_win and has_r: # MUTATION BYPASS: allow Win+R\n        return \"Win+R\"",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch37_security_hardening.py::TestBatch37SecurityHardening::test_5_exact_vk_canonicalizer_ignores_numeric_prose_and_blocks_dangerous_system_chords"]
+    },
+    {
+        "id": "MUTATION_65_RECOVERY_CLI_UAC_ELEVATION_CHECK_BYPASS",
+        "name": "Bypass Windows UAC Secure Desktop Elevation Check in homie.py --pairing-unlock",
+        "file": os.path.join(BASE_DIR, "homie.py"),
+        "target": "        if not is_admin:\n            print(\"✗ [HOMIE SECURITY] Administrative elevation required (UAC Secure Desktop).\")",
+        "replacement": "        if False and not is_admin: # MUTATION BYPASS: allow standard non-elevated user\n            print(\"✗ [HOMIE SECURITY] Administrative elevation required (UAC Secure Desktop).\")",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch37_security_hardening.py::TestBatch37SecurityHardening::test_2_recovery_cli_requires_uac_secure_desktop_elevation"]
     }
 ]
 
@@ -567,7 +607,7 @@ def _safe_copy(src: str, dst: str, retries: int = 5):
 
 def run_mutation_tests() -> bool:
     print("=" * 75)
-    print("=== BATCH 34 EXPANDED AUTOMATED CI MUTATION TEST HARNESS ===")
+    print("=== BATCH 37 EXPANDED AUTOMATED CI MUTATION TEST HARNESS ===")
     print("=" * 75)
     print(f"Total Security Mutations to Evaluate: {len(MUTATIONS)}\n")
 
@@ -621,17 +661,29 @@ def run_mutation_tests() -> bool:
                 print(f"    🚨 MUTATION SURVIVED! Security control is not actively defending.")
                 print(f"       Exit code: {proc.returncode}")
                 all_killed = False
-                results.append((mid, "SURVIVED"))
+                results.append((mid, "SURVIVED", None))
             else:
+                killer = None
+                combined_out = (proc.stdout or "") + "\n" + (proc.stderr or "")
+                for line in combined_out.splitlines():
+                    if "FAILED " in line:
+                        killer = line.replace("FAILED ", "").strip().split(" ")[0]
+                        break
+                    elif "AssertionError" in line or "Error:" in line:
+                        if not killer:
+                            killer = line.strip()[:80]
+                if not killer:
+                    killer = test_cmd[-1] if test_cmd else "unknown_test"
                 print(f"    ✅ MUTATION KILLED! Test failed as expected (exit code {proc.returncode}).")
-                results.append((mid, "KILLED"))
+                print(f"       Killed by: {killer}")
+                results.append((mid, "KILLED", killer))
 
         except subprocess.TimeoutExpired:
             print(f"    ✅ MUTATION KILLED! Test timed out / hung due to mutation.")
-            results.append((mid, "KILLED"))
+            results.append((mid, "KILLED", "TimeoutExpired"))
         except Exception as e:
             print(f"    ⚠️ Exception during mutation testing: {e}")
-            results.append((mid, f"ERROR: {e}"))
+            results.append((mid, f"ERROR: {e}", str(e)))
             all_killed = False
         finally:
             if os.path.exists(backup_path):
@@ -650,9 +702,12 @@ def run_mutation_tests() -> bool:
     print("=== MUTATION TEST SUMMARY REPORT ===")
     print("=" * 75)
     killed_count = 0
-    for mid, status in results:
+    for item in results:
+        mid, status = item[0], item[1]
+        killer = item[2] if len(item) > 2 and item[2] else ""
         icon = "✅" if status == "KILLED" else "❌"
-        print(f"  {icon} {mid:<45}: {status}")
+        killer_str = f" [by: {killer.split('::')[-1]}]" if killer else ""
+        print(f"  {icon} {mid:<45}: {status}{killer_str}")
         if status == "KILLED":
             killed_count += 1
 

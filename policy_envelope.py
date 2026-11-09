@@ -95,7 +95,13 @@ def canonicalize_keyboard_arguments(arguments: Dict[str, Any]) -> Tuple[bool, bo
             enter_detected = True
         return enter_detected, False, [], []
 
-    return enter_detected, ctrl_alt_p_detected, detected_vks, tokens
+def detect_blocked_system_chords(detected_vks: List[int], tokens: List[str]) -> Optional[str]:
+    """Detects dangerous system hotkey chords. Delegates to windows_tools."""
+    try:
+        import windows_tools
+        return windows_tools.detect_blocked_system_chords(detected_vks, tokens)
+    except Exception:
+        return None
 
 
 class PolicyEnvelope:
@@ -252,11 +258,16 @@ class PolicyEnvelope:
                 return False, f"DENY: Target domain '{current_domain}' outside envelope domain scope: {self.allowed_domains}", 0
 
         # Canonicalize keyboard arguments for precision Enter submit and synthetic Ctrl+Alt+P detection
-        enter_detected, ctrl_alt_p_detected, _, _ = canonicalize_keyboard_arguments(arguments)
+        enter_detected, ctrl_alt_p_detected, detected_vks, tokens = canonicalize_keyboard_arguments(arguments)
 
         # Physical console enrollment hotkey (Ctrl + Alt + P) can NEVER be synthesized
         if ctrl_alt_p_detected:
             return False, "DENY: Synthetic simulation of physical console pairing hotkey (Ctrl+Alt+P) is strictly prohibited.", 0
+
+        # Prohibited system hotkey chords (Win+R, Win+X, Alt+F4, Ctrl+Shift+Esc, Ctrl+Alt+Del)
+        blocked_chord = detect_blocked_system_chords(detected_vks, tokens)
+        if blocked_chord:
+            return False, f"DENY: Synthetic injection of dangerous system hotkey chord '{blocked_chord}' is strictly prohibited.", 0
 
         # Check Enter-to-submit form pattern
         if enter_detected:

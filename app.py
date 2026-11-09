@@ -251,15 +251,22 @@ class HomieApp:
         except Exception as e:
             logger.error("Error triggering async pairing: %s", e)
 
+    def reset_physical_modifiers(self):
+        """Resets tracked physical modifier keys upon focus loss (WM_KILLFOCUS) or window deactivation."""
+        self._physical_ctrl_down = False
+        self._physical_alt_down = False
+
     def handle_keyboard_event(self, nCode: int, wParam: int, lParam: int) -> int:
         """Low-level keyboard hook callback.
         Guarantees physical console presence for pairing hotkey (Ctrl + Alt + P).
         Rejects all synthetic/injected keystrokes (LLKHF_INJECTED | LLKHF_LOWER_IL_INJECTED).
         Dispatches pairing asynchronously to worker thread to prevent LowLevelHooksTimeout.
+        Clears physical modifiers on focus loss (WM_KILLFOCUS) and key-up.
         """
         import ctypes
         from ctypes import wintypes
         user32 = ctypes.windll.user32
+        WM_KILLFOCUS = 0x0008
         WM_KEYDOWN = 0x0100
         WM_KEYUP = 0x0101
         WM_SYSKEYDOWN = 0x0104
@@ -267,7 +274,11 @@ class HomieApp:
         LLKHF_INJECTED = 0x00000001
         LLKHF_LOWER_IL_INJECTED = 0x00000002
 
-        if nCode >= 0:
+        if wParam == WM_KILLFOCUS:
+            self.reset_physical_modifiers()
+            return 0
+
+        if nCode >= 0 and lParam:
             class KBDLLHOOKSTRUCT(ctypes.Structure):
                 _fields_ = [
                     ("vkCode", wintypes.DWORD),
@@ -332,6 +343,8 @@ class HomieApp:
                     b_ret = user32.GetMessageW(ctypes.byref(msg), None, 0, 0)
                     if b_ret in (0, -1):
                         break
+                    if msg.message in (0x0008, 0x001C):  # WM_KILLFOCUS, WM_ACTIVATEAPP
+                        self.reset_physical_modifiers()
                     user32.TranslateMessage(ctypes.byref(msg))
                     user32.DispatchMessageW(ctypes.byref(msg))
             except Exception:
@@ -348,6 +361,10 @@ class HomieApp:
                     ctrl = is_down(VK_CONTROL)
                     space = is_down(VK_SPACE)
                     alt = is_down(VK_MENU)
+                    if self._physical_ctrl_down and not ctrl:
+                        self._physical_ctrl_down = False
+                    if self._physical_alt_down and not alt:
+                        self._physical_alt_down = False
                     shift = is_down(VK_SHIFT)
                     esc = is_down(VK_ESCAPE)
 

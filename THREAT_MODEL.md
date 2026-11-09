@@ -83,6 +83,12 @@ Homie provides empirically verified, kernel-enforced guarantees on Windows 10/11
 - Format version byte (`0x01`) encapsulates all encrypted at-rest tokens (`vault:`).
 - HKDF-SHA256 derives domain-separated cryptographic subkeys for `storage`, `audit`, `session`, and `actuator`, preventing cross-domain token transplantation.
 
+### D. Same-User Workstation Process Boundary & Cryptographic Evidence Defense
+- **Same-User Filesystem Sharing**: On a single-user Windows workstation without a dedicated privileged Windows Service (`LocalSystem`) or crossing mandatory integrity levels, all processes running under the same standard user account share identical filesystem permissions. Consequently, file presence or database row presence (such as in SQLite `approved_actions`) cannot serve as an authorization boundary against same-user processes.
+- **Evidence-Based Security (Store Evidence, Not a Verdict)**: Homie enforces that the Policy Supervisor never trusts row presence or unsigned database flags as an approval verdict. All action approvals must store the full **Signed Approval Blob** containing `{device_id, tool_name, args_hash, nonce, expiry, taint_epoch, counter, signature}`.
+- **Asymmetric Signature Verification Against Pinned Enclave Keys**: When `consume_approved_action` executes, the supervisor independently verifies the Ed25519 asymmetric signature against the enrolled public key in `.homie_device_keys.json`. Because the corresponding private signing keys reside exclusively in the mobile device hardware Secure Enclave and never exist on the PC, an unauthorized same-user process cannot forge approvals, even with full arbitrary local write access to the SQLite database.
+- **Fail-Closed on Unverified Evidence**: Any database row or in-memory entry lacking a cryptographically verified signature against an enrolled, non-revoked device key fails closed immediately.
+
 ---
 
 ## 4. Explicit Non-Guarantees & Out-of-Scope Risks

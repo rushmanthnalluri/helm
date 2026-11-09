@@ -686,12 +686,27 @@ def verify_device_approval(
         import homie_supervisor
         target_caller = item.get("caller_id") or "worker"
         remaining_ttl = max(1.0, float(item.get("expiry", now + 60) - now))
+        signed_approval_blob = {
+            "version": "CHALLENGE_V2",
+            "device_id": device_id,
+            "tool_name": item["tool_name"],
+            "args_hash": str(item["args_hash"]).lower(),
+            "nonce": item["nonce"],
+            "expiry": item["expiry"],
+            "taint_epoch": item.get("taint_epoch", 0),
+            "challenge_seq": item.get("challenge_seq", 0),
+            "challenge_hash": item["challenge_hash"],
+            "signature": signature,
+            "caller_id": target_caller,
+            "counter": counter
+        }
         homie_supervisor.record_approved_action(
             caller_id=target_caller,
             tool=item["tool_name"],
             args_hash=str(item["args_hash"]).lower(),
             taint_epoch=item.get("taint_epoch", 0),
-            ttl=min(remaining_ttl, 120.0)
+            ttl=min(remaining_ttl, 120.0),
+            signed_blob=signed_approval_blob
         )
     except Exception as e:
         logger.warning("Could not relay approved device action to supervisor: %s", e)
@@ -793,12 +808,25 @@ def verify_action_approval(
     remaining_ttl = max(1.0, float(expiry - now))
     try:
         import homie_supervisor
+        signed_approval_blob = {
+            "version": approval.get("version", "ACTION_APPROVAL_V1"),
+            "device_id": approval.get("device_id", "primary_phone"),
+            "tool_name": expected_action,
+            "args_hash": str(expected_payload_hash).lower(),
+            "nonce": nonce,
+            "expiry": expiry,
+            "taint_epoch": approval_epoch,
+            "raw_msg": raw_msg,
+            "signature": approval.get("signature"),
+            "caller_id": target_caller
+        }
         homie_supervisor.record_approved_action(
             caller_id=target_caller,
             tool=expected_action,
             args_hash=str(expected_payload_hash).lower(),
             taint_epoch=approval_epoch,
-            ttl=min(remaining_ttl, 120.0)
+            ttl=min(remaining_ttl, 120.0),
+            signed_blob=signed_approval_blob
         )
     except Exception as e:
         logger.warning("Could not relay approved action to supervisor: %s", e)

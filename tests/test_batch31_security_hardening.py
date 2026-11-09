@@ -346,8 +346,14 @@ class TestBatch31SecurityHardening(unittest.TestCase):
         args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
         epoch = taint_tracker.get_taint_epoch()
 
-        # Register direct approval in supervisor internal table
-        supervisor.record_approved_action("worker", "homie_set_clipboard", args_hash, epoch)
+        # Register direct approval in supervisor internal table with cryptographic evidence
+        from tests.phone_testing_keys import enroll_test_device, mint_test_action_approval
+        priv_k, pub_k = enroll_test_device("primary_phone")
+        signed_blob = mint_test_action_approval(priv_k, "homie_set_clipboard", args_hash, "primary_phone", taint_epoch=epoch)
+        signed_blob["caller_id"] = "worker"
+        signed_blob["tool_name"] = "homie_set_clipboard"
+        signed_blob["args_hash"] = args_hash
+        supervisor.record_approved_action("worker", "homie_set_clipboard", args_hash, epoch, signed_blob=signed_blob)
 
         # Worker proposes action with NO step_up_token
         payload = {

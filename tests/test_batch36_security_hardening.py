@@ -195,7 +195,7 @@ class TestBatch36SecurityHardening(unittest.TestCase):
 
         # Confirmation mismatch must fail closed
         with patch.object(sys, "argv", ["homie.py", "--pairing-unlock"]):
-            with patch.object(sys.stdin, "isatty", return_value=True):
+            with patch.object(sys.stdin, "isatty", return_value=True), patch("ctypes.windll.shell32.IsUserAnAdmin", return_value=1):
                 with patch("builtins.input", return_value="WRONG-CODE"):
                     with patch("builtins.print") as mock_print:
                         homie.main()

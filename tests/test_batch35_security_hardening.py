@@ -235,7 +235,7 @@ class TestBatch35SecurityHardening(unittest.TestCase):
 
         # Interactive invocation with confirmation code
         with patch('sys.argv', ['homie.py', '--pairing-unlock']):
-            with patch('sys.stdin.isatty', return_value=True):
+            with patch('sys.stdin.isatty', return_value=True), patch('ctypes.windll.shell32.IsUserAnAdmin', return_value=1):
                 with patch('builtins.input', return_value='CONFIRM-RESET'):
                     with patch.object(phone_approval_portal, 'generate_console_recovery_token', wraps=phone_approval_portal.generate_console_recovery_token) as mock_gen:
                         homie.main()

@@ -949,6 +949,36 @@ def main():
             print("✗ [HOMIE SECURITY] Interactive console presence required to unlock pairing.")
             return
 
+        import ctypes
+        is_admin = False
+        try:
+            is_admin = bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except Exception:
+            is_admin = False
+
+        if not is_admin:
+            print("✗ [HOMIE SECURITY] Administrative elevation required (UAC Secure Desktop).")
+            print("Requesting Windows UAC Secure Desktop elevation...")
+            try:
+                params = " ".join([f'"{a}"' if " " in a else a for a in sys.argv[1:]])
+                res = ctypes.windll.shell32.ShellExecuteW(
+                    None,
+                    "runas",
+                    sys.executable,
+                    f'"{os.path.abspath(__file__)}" {params}',
+                    None,
+                    1  # SW_SHOWNORMAL
+                )
+                if res > 32:
+                    print("✓ [HOMIE SECURITY] Elevated recovery process launched on Secure Desktop.")
+                    return
+                else:
+                    print("✗ [HOMIE SECURITY] Elevation declined or cancelled.")
+                    return
+            except Exception as e:
+                print(f"✗ [HOMIE SECURITY] UAC Secure Desktop elevation failed: {e}")
+                return
+
         confirmation = input("Type 'CONFIRM-RESET' to unlock pairing / generate recovery token: ").strip()
         if confirmation != "CONFIRM-RESET":
             print("✗ [HOMIE SECURITY] Operation cancelled: confirmation code mismatch.")
