@@ -36,6 +36,17 @@
     .bubble { max-width: 92%; padding: 9px 11px; border-radius: 13px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
     .bubble.user { align-self: flex-end; border-bottom-right-radius: 4px; background: #263851; color: #eef5ff; }
     .bubble.assistant { align-self: flex-start; border: 1px solid #2c303a; border-bottom-left-radius: 4px; background: #1a1d24; color: #e6e8ed; }
+    .bubble.assistant p { margin: 0; }
+    .bubble.assistant p + p, .bubble.assistant ul + p, .bubble.assistant ol + p, .bubble.assistant pre + p { margin-top: 8px; }
+    .bubble.assistant h1, .bubble.assistant h2, .bubble.assistant h3 { margin: 2px 0 6px; line-height: 1.3; }
+    .bubble.assistant h1 { font-size: 16px; } .bubble.assistant h2 { font-size: 15px; } .bubble.assistant h3 { font-size: 14px; }
+    .bubble.assistant ul, .bubble.assistant ol { margin: 4px 0; padding-left: 21px; }
+    .bubble.assistant li { padding-left: 2px; margin: 2px 0; }
+    .bubble.assistant code { padding: 1px 4px; border-radius: 4px; background: #101217; color: #bcd5ff; font-family: Consolas, monospace; font-size: .94em; }
+    .bubble.assistant pre { margin: 6px 0; padding: 8px; overflow-x: auto; border-radius: 7px; background: #101217; }
+    .bubble.assistant pre code { padding: 0; background: transparent; white-space: pre; }
+    .bubble.assistant blockquote { margin: 4px 0; padding-left: 9px; border-left: 2px solid #576a8a; color: #c4cad5; }
+    .bubble.assistant a { color: #91baff; }
     .bubble.assistant.pending { color: #aeb4c0; }
     .bubble.assistant.error { border-color: #60373a; color: #ffb3b3; background: #281c20; }
     .bubble-tools { display: flex; gap: 5px; margin-top: 2px; }
@@ -97,6 +108,77 @@
         const el = $('toast'); el.textContent = text; el.classList.add('show');
         clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), 1800);
       }
+      function renderInline(parent, value) {
+        const pattern = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)|`([^`]+)`|\*\*\*(.+?)\*\*\*|___(.+?)___|\*\*(.+?)\*\*|__(.+?)__|~~(.+?)~~|\*([^*\n]+)\*|_([^_\n]+)_/g;
+        let from = 0, match;
+        while ((match = pattern.exec(value))) {
+          parent.append(document.createTextNode(value.slice(from, match.index)));
+          if (match[1]) {
+            const link = document.createElement('a'); link.textContent = match[1]; link.href = match[2];
+            link.target = '_blank'; link.rel = 'noopener noreferrer'; parent.append(link);
+          } else if (match[3]) {
+            const code = document.createElement('code'); code.textContent = match[3]; parent.append(code);
+          } else {
+            const tag = match[4] || match[5] ? 'em' : match[6] || match[7] ? 'strong' : match[8] ? 's' : 'em';
+            const valueText = match[4] || match[5] || match[6] || match[7] || match[8] || match[9] || match[10];
+            const node = document.createElement(tag);
+            if (match[4] || match[5]) {
+              const strong = document.createElement('strong'); renderInline(strong, valueText); node.append(strong);
+            } else renderInline(node, valueText);
+            parent.append(node);
+          }
+          from = pattern.lastIndex;
+        }
+        parent.append(document.createTextNode(value.slice(from)));
+      }
+      function renderMarkdown(target, value) {
+        target.replaceChildren();
+        const lines = String(value || '').replace(/\r/g, '').split('\n');
+        let paragraph = [], list = null, codeLines = null, quote = null;
+        const flushParagraph = () => {
+          if (!paragraph.length) return;
+          const p = document.createElement('p'); renderInline(p, paragraph.join(' ')); target.append(p); paragraph = [];
+        };
+        const flushList = () => { if (list) { target.append(list); list = null; } };
+        const flushQuote = () => { if (quote) { target.append(quote); quote = null; } };
+        for (const line of lines) {
+          if (/^\s*```/.test(line)) {
+            flushParagraph(); flushList(); flushQuote();
+            if (codeLines) {
+              const pre = document.createElement('pre'), code = document.createElement('code');
+              code.textContent = codeLines.join('\n'); pre.append(code); target.append(pre); codeLines = null;
+            } else codeLines = [];
+            continue;
+          }
+          if (codeLines) { codeLines.push(line); continue; }
+          if (!line.trim()) { flushParagraph(); flushList(); flushQuote(); continue; }
+          const heading = line.match(/^\s*(#{1,6})\s+(.+?)\s*#*\s*$/);
+          if (heading) {
+            flushParagraph(); flushList(); flushQuote();
+            const h = document.createElement(`h${Math.min(3, heading[1].length)}`); renderInline(h, heading[2]); target.append(h); continue;
+          }
+          const bullet = line.match(/^\s*[-*+]\s+(.+)$/);
+          const numbered = line.match(/^\s*\d+[.)]\s+(.+)$/);
+          if (bullet || numbered) {
+            flushParagraph(); flushQuote();
+            const type = bullet ? 'ul' : 'ol';
+            if (list && list.tagName.toLowerCase() !== type) flushList();
+            if (!list) list = document.createElement(type);
+            const li = document.createElement('li'); renderInline(li, (bullet || numbered)[1]); list.append(li); continue;
+          }
+          const quoted = line.match(/^\s*&gt;\s?(.*)$|^\s*>\s?(.*)$/);
+          if (quoted) {
+            flushParagraph(); flushList();
+            if (!quote) quote = document.createElement('blockquote');
+            const p = document.createElement('p'); renderInline(p, quoted[1] || quoted[2] || ''); quote.append(p); continue;
+          }
+          flushList(); flushQuote();
+          if (/^\s*([-*_])\1{2,}\s*$/.test(line)) { flushParagraph(); const hr = document.createElement('hr'); target.append(hr); continue; }
+          paragraph.push(line.trim());
+        }
+        flushParagraph(); flushList(); flushQuote();
+        if (codeLines) { const pre = document.createElement('pre'), code = document.createElement('code'); code.textContent = codeLines.join('\n'); pre.append(code); target.append(pre); }
+      }
       function newTurn(text) {
         $('welcome')?.remove();
         const turn = document.createElement('div'); turn.className = 'turn';
@@ -131,12 +213,12 @@
           if (kind === '…') {
             if (!currentAnswer) newTurn('');
             currentAnswer.classList.add('pending'); currentAnswer.classList.remove('error');
-            if (currentAnswerText === '') currentAnswer.textContent = '';
-            currentAnswerText += text; currentAnswer.textContent = currentAnswerText;
+            if (currentAnswerText === '') currentAnswer.replaceChildren();
+            currentAnswerText += text; renderMarkdown(currentAnswer, currentAnswerText);
             setStatus('Replying…', 'busy');
           } else if (kind === '✓') {
             if (!currentAnswer) newTurn('');
-            currentAnswer.classList.remove('pending', 'error'); currentAnswer.textContent = text;
+            currentAnswer.classList.remove('pending', 'error'); renderMarkdown(currentAnswer, text);
             currentAnswerText = text; currentAnswer = null; setStatus('Ready');
           } else if (kind === '·') {
             if (!currentAnswer) newTurn('');

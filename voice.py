@@ -191,6 +191,27 @@ def speak_text_async(text_to_speak, purge=True):
         return False
 
 
+def speech_friendly_text(text):
+    """Remove common Markdown decoration before sending text to speech."""
+    import html
+
+    clean = html.unescape(str(text or ""))
+    clean = re.sub(r"```[^\n]*\n?", " ", clean)
+    clean = re.sub(r"`([^`]*)`", r"\1", clean)
+    clean = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", clean)
+    clean = re.sub(r"(?<=\d)\s*\*\s*(?=\d)", " times ", clean)
+    clean = re.sub(r"^\s{0,3}#{1,6}\s*", "", clean, flags=re.MULTILINE)
+    clean = re.sub(r"^\s*(?:[-*+•]|\d+[.)])\s+", "", clean, flags=re.MULTILINE)
+    clean = clean.replace("**", "").replace("__", "").replace("~~", "")
+    clean = clean.replace("*", "").replace("_", "")
+    clean = re.sub(r"[|]+", ", ", clean)
+    clean = re.sub(r"[ \t]+", " ", clean)
+    clean = re.sub(r" *\n+ *", ". ", clean)
+    clean = re.sub(r"\s+([,.;:!?])", r"\1", clean)
+    clean = re.sub(r"(?:\.\s*){2,}", ". ", clean)
+    return clean.strip()
+
+
 class SentenceSpeechStreamer:
     """Turn model text deltas into interruptible, queued local speech chunks."""
 
@@ -229,7 +250,10 @@ class SentenceSpeechStreamer:
     def _speak(self, sentence):
         if not sentence or self._cancelled:
             return
-        started = bool(self._speaker(sentence, purge=self._first))
+        spoken_text = speech_friendly_text(sentence)
+        if not spoken_text:
+            return
+        started = bool(self._speaker(spoken_text, purge=self._first))
         if started:
             self._first = False
             if self._on_start:

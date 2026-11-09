@@ -125,61 +125,91 @@ class TestDurableMemory(unittest.TestCase):
 
     def test_5_agent_core_tool_roundtrip_remembers_and_forgets(self):
         """Agent can execute homie_remember_fact, homie_forget_fact, and homie_list_facts."""
+        import rails_confirmation
+        gate = rails_confirmation.get_confirmation_gate()
         registry = build_default_registry()
 
-        # Step 1: Execute homie_remember_fact
-        res1 = registry.execute("homie_remember_fact", {"key": "pet_name", "fact": "The user has a golden retriever named Max."})
-        self.assertTrue(res1["ok"])
-        self.assertEqual(self.store.get_fact("pet_name"), "The user has a golden retriever named Max.")
+        with patch("device_registry.get_enrolled_devices", return_value={}):
+            # Step 1: Execute homie_remember_fact (consequential tool requiring confirmation)
+            res1 = registry.execute("homie_remember_fact", {"key": "pet_name", "fact": "The user has a golden retriever named Max."})
+            if res1.get("needs_confirmation"):
+                req_id = res1["request_id"]
+                req_obj = gate.get_request(req_id)
+                ok, msg, token = gate.confirm(req_id, presence_gesture=req_obj.presence_challenge)
+                self.assertTrue(ok, msg)
+                res1 = registry.execute("homie_remember_fact", {"key": "pet_name", "fact": "The user has a golden retriever named Max."}, approval_token=token)
+            self.assertTrue(res1["ok"])
+            self.assertEqual(self.store.get_fact("pet_name"), "The user has a golden retriever named Max.")
 
-        # Step 2: Execute homie_list_facts
-        res2 = registry.execute("homie_list_facts", {})
-        self.assertTrue(res2["ok"])
-        listed = json.loads(res2["data"])
-        self.assertEqual(listed.get("pet_name"), "The user has a golden retriever named Max.")
+            # Step 2: Execute homie_list_facts (read-only)
+            res2 = registry.execute("homie_list_facts", {})
+            self.assertTrue(res2["ok"])
+            listed = json.loads(res2["data"])
+            self.assertEqual(listed.get("pet_name"), "The user has a golden retriever named Max.")
 
-        # Step 3: Execute homie_forget_fact
-        res3 = registry.execute("homie_forget_fact", {"key": "pet_name"})
-        self.assertTrue(res3["ok"])
-        self.assertIsNone(self.store.get_fact("pet_name"))
+            # Step 3: Execute homie_forget_fact (consequential tool requiring confirmation)
+            res3 = registry.execute("homie_forget_fact", {"key": "pet_name"})
+            if res3.get("needs_confirmation"):
+                req_id = res3["request_id"]
+                req_obj = gate.get_request(req_id)
+                ok, msg, token = gate.confirm(req_id, presence_gesture=req_obj.presence_challenge)
+                self.assertTrue(ok, msg)
+                res3 = registry.execute("homie_forget_fact", {"key": "pet_name"}, approval_token=token)
+            self.assertTrue(res3["ok"])
+            self.assertIsNone(self.store.get_fact("pet_name"))
 
     def test_6_dynamic_prompt_refresh_during_conversation(self):
         """AgentCore dynamically refreshes system prompt when facts are learned mid-session."""
+        import rails_confirmation
+        gate = rails_confirmation.get_confirmation_gate()
         registry = build_default_registry()
-        initial_facts = self.store.list_facts()
-        initial_prompt = build_system_prompt("Homie", "Assist user", facts=initial_facts)
-        self.assertNotIn("preferred_drink", initial_prompt)
 
-        # Provider emits a tool call to remember a fact
-        call_count = 0
-        def fake_provider(messages, system_prompt, prefs, tools, on_delta):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return ModelTurn(
-                    text="Let me remember that.",
-                    tool_calls=[ToolCall("call_1", "homie_remember_fact", '{"key": "preferred_drink", "fact": "The user prefers sparkling water with lime."}')]
-                )
-            # Second round: assistant responds having saved it
-            self.assertIn("preferred_drink", system_prompt)
-            self.assertIn("sparkling water with lime", system_prompt)
-            on_delta("I have noted that you prefer sparkling water with lime.")
-            return ModelTurn(text="I have noted that you prefer sparkling water with lime.")
+        with patch("device_registry.get_enrolled_devices", return_value={}):
+            orig_execute = registry.execute
+            def auto_confirm_execute(name, arguments, caller_id="ai_text_agent", approval_token=None):
+                res = orig_execute(name, arguments, caller_id=caller_id, approval_token=approval_token)
+                if res.get("needs_confirmation"):
+                    req_obj = gate.get_request(res["request_id"])
+                    ok, msg, tok = gate.confirm(res["request_id"], presence_gesture=req_obj.presence_challenge)
+                    if ok and tok:
+                        return orig_execute(name, arguments, caller_id=caller_id, approval_token=tok)
+                return res
+            registry.execute = auto_confirm_execute
 
-        core = AgentCore(
-            initial_prompt,
-            {},
-            tool_registry=registry,
-            provider_call=fake_provider,
-            memory_store=self.store
-        )
+            initial_facts = self.store.list_facts()
+            initial_prompt = build_system_prompt("Homie", "Assist user", facts=initial_facts)
+            self.assertNotIn("preferred_drink", initial_prompt)
 
-        streamed = []
-        reply = core.turn("Please remember that I prefer sparkling water with lime.", streamed.append)
-        self.assertIn("sparkling water", reply)
-        self.assertEqual(self.store.get_fact("preferred_drink"), "The user prefers sparkling water with lime.")
-        # Ensure core's active system prompt was updated dynamically
-        self.assertIn("preferred_drink", core.system_prompt)
+            # Provider emits a tool call to remember a fact
+            call_count = 0
+            def fake_provider(messages, system_prompt, prefs, tools, on_delta):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 1:
+                    return ModelTurn(
+                        text="Let me remember that.",
+                        tool_calls=[ToolCall("call_1", "homie_remember_fact", '{"key": "preferred_drink", "fact": "The user prefers sparkling water with lime."}')]
+                    )
+                # Second round: assistant responds having saved it
+                self.assertIn("preferred_drink", system_prompt)
+                self.assertIn("sparkling water with lime", system_prompt)
+                on_delta("I have noted that you prefer sparkling water with lime.")
+                return ModelTurn(text="I have noted that you prefer sparkling water with lime.")
+
+            core = AgentCore(
+                initial_prompt,
+                {},
+                tool_registry=registry,
+                provider_call=fake_provider,
+                memory_store=self.store
+            )
+
+            streamed = []
+            reply = core.turn("Please remember that I prefer sparkling water with lime.", streamed.append)
+            self.assertIn("sparkling water", reply)
+            self.assertEqual(self.store.get_fact("preferred_drink"), "The user prefers sparkling water with lime.")
+            # Ensure core's active system prompt was updated dynamically
+            self.assertIn("preferred_drink", core.system_prompt)
 
     def test_7_anti_taint_memory_laundering_defense(self):
         """Directive: When workstation or session is tainted, fact mutations are denied to prevent prompt laundering."""

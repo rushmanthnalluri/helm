@@ -5,9 +5,15 @@ import os
 import numpy as np
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from voice import VoiceEngine, SentenceSpeechStreamer
+from voice import VoiceEngine, SentenceSpeechStreamer, speech_friendly_text
 
 class TestVoiceEngine(unittest.TestCase):
+    def test_markdown_is_cleaned_before_speech(self):
+        self.assertEqual(
+            speech_friendly_text("**Screen Analysis**\n* **Open Applications:** `Code`\n2 * 3"),
+            "Screen Analysis. Open Applications: Code. 2 times 3",
+        )
+
     def test_voice_initialization(self):
         engine = VoiceEngine(model_size="tiny", language="en")
         self.assertEqual(engine.sample_rate, 16000)
@@ -43,6 +49,13 @@ class TestVoiceEngine(unittest.TestCase):
 
         self.assertEqual(spoken, [("Hello.", True), ("How are you?", False), ("Next part", False)])
         self.assertEqual(len(started), 3)
+
+    def test_sentence_speech_streamer_speaks_cleaned_markdown(self):
+        spoken = []
+        streamer = SentenceSpeechStreamer(speaker=lambda text, purge: spoken.append(text) or True)
+        streamer.feed("**A heading.**")
+        streamer.finish()
+        self.assertEqual(spoken, ["A heading."])
 
     def test_sentence_speech_streamer_cancel_discards_unspoken_buffer(self):
         spoken = []

@@ -504,8 +504,20 @@ def is_prohibited_target_process(hwnd=None):
     title = (info.get("title") or "").lower()
     if pid and pid == os.getpid():
         return True, f"Prohibited self-targeting: synthetic input into Homie assistant process (PID: {pid}) is barred"
-    if "homie" in title or "trillion" in title:
-        return True, f"Prohibited self-targeting: synthetic input into Homie window is barred"
+    try:
+        if win32gui.GetProp(target_hwnd, "HOMIE_PROTECTED_UI"):
+            return True, "Prohibited self-targeting: synthetic input into Homie protected window is barred"
+    except Exception:
+        pass
+    exe_path = info.get("exe_path") or ""
+    if exe_path:
+        try:
+            cand = os.path.normcase(os.path.abspath(exe_path))
+            base = os.path.normcase(os.path.abspath(BASE_DIR))
+            if os.path.commonpath([cand, base]) == base:
+                return True, f"Prohibited self-targeting: synthetic input into Homie application image '{exe_path}' is barred"
+        except Exception:
+            pass
 
     if proc_name in PROHIBITED_PROCESS_IMAGES:
         return True, f"Prohibited process image: '{proc_name}'"

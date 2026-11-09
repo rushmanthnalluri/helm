@@ -118,19 +118,45 @@ def write_admin_recovery_token(token: str, ttl_seconds: float = 300.0) -> bool:
         return False
 
 def consume_admin_recovery_token(recovery_token: Optional[str]) -> bool:
-    """Consumes single-use admin recovery token from C:\\ProgramData\\Homie\\console_recovery.token."""
+    """Consumes single-use admin recovery token from C:\\ProgramData\\Homie\\console_recovery.token.
+    Enforces atomic single-use via SQLite table console_recovery_tokens when file unlinking is barred by read-only DACL.
+    """
     if not recovery_token or not isinstance(recovery_token, str):
         return False
     tok = recovery_token.strip()
+    tok_hash = hashlib.sha256(tok.encode('utf-8')).hexdigest()
+    now = time.time()
+
+    # 1. Authoritative DB single-use record check
+    try:
+        import db_utils
+        _init_recovery_tokens_table()
+        with db_utils.get_db() as conn:
+            cursor = conn.execute(
+                "UPDATE console_recovery_tokens SET consumed = 1 WHERE token_hash = ? AND consumed = 0 AND expires_at > ?",
+                (tok_hash, now)
+            )
+            conn.commit()
+            if cursor.rowcount > 0:
+                logger.info("Admin recovery token consumed via authoritative DB record")
+                if os.path.exists(ADMIN_RECOVERY_TOKEN_PATH):
+                    try:
+                        os.remove(ADMIN_RECOVERY_TOKEN_PATH)
+                    except Exception:
+                        pass
+                return True
+    except Exception as e:
+        logger.debug("DB token consumption check error: %s", e)
+
+    # 2. File fallback if DB table not populated
     if not os.path.exists(ADMIN_RECOVERY_TOKEN_PATH):
         return False
     try:
         with open(ADMIN_RECOVERY_TOKEN_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
-        tok_hash = hashlib.sha256(tok.encode('utf-8')).hexdigest()
         if data.get("token_hash") != tok_hash:
             return False
-        if time.time() > data.get("expires_at", 0):
+        if now > data.get("expires_at", 0):
             try:
                 os.remove(ADMIN_RECOVERY_TOKEN_PATH)
             except Exception:
@@ -138,10 +164,14 @@ def consume_admin_recovery_token(recovery_token: Optional[str]) -> bool:
             return False
         try:
             os.remove(ADMIN_RECOVERY_TOKEN_PATH)
+            return True
+        except PermissionError:
+            # When caller lacks DELETE permission due to read-only DACL, single-use is enforced via DB
+            logger.info("Unlink barred by DACL; token consumed single-use via DB record")
+            return False
         except Exception as rm_err:
             logger.critical("Failed to unlink admin recovery token; single use invariant failed: %s", rm_err)
             return False
-        return True
     except Exception as e:
         logger.warning("Could not consume admin recovery token: %s", e)
         return False

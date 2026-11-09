@@ -12,6 +12,7 @@ import os
 import sys
 import time
 import signal
+import argparse
 import logging
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -60,7 +61,11 @@ class SupervisorDaemon:
 
 
 def main():
-    daemon = SupervisorDaemon()
+    parser = argparse.ArgumentParser(description="Homie Policy Supervisor Daemon")
+    parser.add_argument("--pipe", default=r"\\.\pipe\homie_supervisor", help="Named pipe name")
+    parsed = parser.parse_args()
+
+    daemon = SupervisorDaemon(pipe_name=parsed.pipe)
 
     def _sig_handler(sig, frame):
         logger.info("Signal %s received; shutting down.", sig)

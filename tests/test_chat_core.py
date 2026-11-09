@@ -285,6 +285,24 @@ class TestChatCore(unittest.TestCase):
         self.assertEqual(handled, [("What time is it?", "desktop_voice")])
         self.assertEqual([message["role"] for message in core.messages], ["user", "assistant"])
 
+    def test_fast_action_step_up_message_is_human_friendly(self):
+        core = chat_core.AgentCore("system", {}, provider_call=lambda *args: self.fail("provider should not run"))
+        reply = core.turn(
+            "Open YouTube",
+            lambda _: None,
+            caller_id="desktop_user",
+            quick_action_handler=lambda text, caller_id: (
+                True,
+                "Security Gate: STEP_UP_REQUIRED: Session is tainted by external data. "
+                "Out-of-band approval required [ID: ab12cd34]",
+            ),
+        )
+        self.assertEqual(
+            reply,
+            "I paused that action because this session has read or received external data. "
+            "Check your paired phone for approval; the request expires in 60 seconds. Request ID: ab12cd34.",
+        )
+
     def test_turn_cancel_signal_stops_provider_and_rolls_back_history(self):
         entered = threading.Event()
         cancel_event = threading.Event()

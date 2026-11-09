@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 import uuid
@@ -333,6 +334,30 @@ def _raise_for_provider_status(response, name: str) -> None:
     raise ProviderError(f"{name} is unavailable (HTTP {response.status_code}).")
 
 
+def humanize_local_action_reply(reply):
+    """Turn policy and transport messages from direct desktop actions into chat language."""
+    step_up = re.search(r"STEP_UP_REQUIRED[^\[]*(?:\[ID:\s*([^\]]+)\])?", reply, re.IGNORECASE)
+    if step_up:
+        request_id = (step_up.group(1) or "").strip()
+        suffix = f" Request ID: {request_id}." if request_id else ""
+        return (
+            "I paused that action because this session has read or received external data. "
+            "Check your paired phone for approval; the request expires in 60 seconds." + suffix
+        )
+
+    clean = reply.strip()
+    if clean.startswith("Security Gate:"):
+        reason = clean[len("Security Gate:"):].strip()
+        if "supervisor process is unreachable" in reason.lower() or "supervisor connection error" in reason.lower():
+            return "I couldn't carry out that PC action because Homie's action service is disconnected. Restart Homie and try again."
+        if "shadow" in reason.lower():
+            return "Homie is in preview mode, so it didn't change anything on your PC."
+        return f"I couldn't complete that action. {reason}"
+    if clean.startswith("[SHADOW MODE]") or clean.startswith("[SHADOW_SIMULATION]"):
+        return "Preview only: Homie didn't change anything on your PC."
+    return clean
+
+
 class AgentCore:
     """In-memory conversation and bounded tool loop shared by every adapter."""
 
@@ -378,7 +403,7 @@ class AgentCore:
             if quick_action_handler:
                 handled, fast_reply = quick_action_handler(text, caller_id=caller_id)
                 if handled:
-                    reply = str(fast_reply or "")
+                    reply = humanize_local_action_reply(str(fast_reply or ""))
                     if not reply.strip():
                         raise ProviderError("The local action returned an empty result.")
                     on_delta(reply)
@@ -394,8 +419,11 @@ class AgentCore:
                 _raise_if_cancelled(cancel_event)
                 tool_schemas = self.tool_registry.schemas() if self.tool_registry else []
                 provider_options = {"cancel_event": cancel_event} if cancel_event is not None else {}
+                # OpenJarvis Session Compression: precompress & consolidate long context
+                import homie_session_compression
+                compressed_messages = homie_session_compression.ContextCompressor().process(self.messages)
                 model_turn = self._provider_call(
-                    self.messages.copy(), self.system_prompt, self.prefs, tool_schemas,
+                    compressed_messages, self.system_prompt, self.prefs, tool_schemas,
                     on_delta, **provider_options,
                 )
                 _raise_if_cancelled(cancel_event)
@@ -406,6 +434,17 @@ class AgentCore:
                     if not reply:
                         raise ProviderError("The provider returned an empty reply.")
                     self.messages.append({"role": "assistant", "content": reply})
+                    # OpenJarvis Passive Fact Extraction: extract durable facts from turn
+                    try:
+                        import homie_memory_extractor
+                        extractor = homie_memory_extractor.FactExtractor()
+                        new_facts = extractor.extract(text, reply)
+                        if new_facts and self.memory_store:
+                            for k, f in new_facts:
+                                if not self.memory_store.get_fact(k):
+                                    self.memory_store.set_fact(k, f)
+                    except Exception:
+                        pass
                     try:
                         import rails_audit
                         input_chars = sum(len(str(m.get("content", ""))) for m in self.messages)

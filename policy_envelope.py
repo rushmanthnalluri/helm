@@ -260,7 +260,9 @@ class PolicyEnvelope:
         if is_browser_action:
             if not self.allowed_domains:
                 return False, "DENY: Browser envelope requires explicit non-empty allowed_domains", 0
-            if not current_domain or not any(is_domain_allowed(current_domain, d) for d in self.allowed_domains):
+            if not current_domain:
+                return False, "DENY: Browser domain could not be verified via UIA (fail-closed)", 0
+            if not any(is_domain_allowed(current_domain, d) for d in self.allowed_domains):
                 return False, f"DENY: Browser domain '{current_domain}' outside envelope domain scope: {self.allowed_domains}", 0
         elif self.allowed_domains and current_domain:
             if not any(is_domain_allowed(current_domain, d) for d in self.allowed_domains):

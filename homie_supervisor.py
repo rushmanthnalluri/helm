@@ -63,6 +63,9 @@ MSG_DATA = 6
 MSG_SHUTDOWN = 7
 MSG_ERROR = 8
 MSG_PROXY_LLM = 9
+MSG_CONFIRM = 10
+MSG_TAINT_QUERY = 11
+MSG_REGISTER_UI = 12
 
 # Reason Codes
 REASON_OK = "OK"
@@ -159,40 +162,75 @@ class SupervisorActuator:
             act_proc = (fg_act.get("proc_name") or "") if fg_act else ""
             clean_act_proc = os.path.basename(act_proc).lower()
             fg_pid = fg_act.get("pid") if fg_act else None
-            fg_title = (fg_act.get("title") or "").lower() if fg_act else ""
+            fg_hwnd = fg_act.get("hwnd") if fg_act else None
+            fg_exe = (fg_act.get("exe_path") or "") if fg_act else ""
 
-            if fg_pid and fg_pid == os.getpid():
+            protected_pids = getattr(self.supervisor, "protected_pids", set()) | {os.getpid()}
+            if fg_pid and fg_pid in protected_pids:
                 raise CompleteMediationBreachError(
-                    f"Complete mediation breach: Synthetic UI interaction targeting Homie assistant process (PID: {fg_pid}) is strictly prohibited."
+                    f"Complete mediation breach: Synthetic UI interaction targeting Homie protected process (PID: {fg_pid}) is strictly prohibited."
                 )
-            if "homie" in fg_title or "trillion" in fg_title:
-                raise CompleteMediationBreachError(
-                    f"Complete mediation breach: Synthetic UI interaction targeting Homie window '{fg_title}' is strictly prohibited."
-                )
+            if fg_hwnd:
+                try:
+                    import win32gui
+                    if win32gui.GetProp(fg_hwnd, "HOMIE_PROTECTED_UI"):
+                        raise CompleteMediationBreachError(
+                            "Complete mediation breach: Synthetic UI interaction targeting Homie protected window is strictly prohibited."
+                        )
+                except CompleteMediationBreachError:
+                    raise
+                except Exception:
+                    pass
+            if fg_exe:
+                try:
+                    cand = os.path.normcase(os.path.abspath(fg_exe))
+                    base = os.path.normcase(os.path.abspath(BASE_DIR))
+                    if os.path.commonpath([cand, base]) == base:
+                        raise CompleteMediationBreachError(
+                            f"Complete mediation breach: Synthetic UI interaction targeting Homie application image '{fg_exe}' is strictly prohibited."
+                        )
+                except CompleteMediationBreachError:
+                    raise
+                except Exception:
+                    pass
 
             # WindowFromPoint check: verify target window under physical coordinates for all coordinate-bearing actions
             target_x = args.get("x", args.get("click_x", args.get("target_x", args.get("to_x"))))
             target_y = args.get("y", args.get("click_y", args.get("target_y", args.get("to_y"))))
             if target_x is not None and target_y is not None:
                 try:
-                    _, pt_info = windows_tools.get_window_under_point(int(target_x), int(target_y))
+                    pt_hwnd, pt_info = windows_tools.get_window_under_point(int(target_x), int(target_y))
                     pt_pid = pt_info.get("pid")
                     pt_proc = os.path.basename(pt_info.get("proc_name") or "").lower()
-                    pt_title = (pt_info.get("title") or "").lower()
-                    pt_exe = (pt_info.get("exe_path") or "").lower()
+                    pt_exe = (pt_info.get("exe_path") or "")
 
-                    if pt_pid and pt_pid == os.getpid():
+                    if pt_pid and pt_pid in protected_pids:
                         raise CompleteMediationBreachError(
-                            f"Complete mediation breach: Point-under-cursor ({target_x}, {target_y}) targets Homie assistant process (PID: {pt_pid})!"
+                            f"Complete mediation breach: Point-under-cursor ({target_x}, {target_y}) targets Homie protected process (PID: {pt_pid})!"
                         )
-                    if BASE_DIR.lower() in pt_exe:
-                        raise CompleteMediationBreachError(
-                            f"Complete mediation breach: Point-under-cursor ({target_x}, {target_y}) targets Homie application image '{pt_exe}'!"
-                        )
-                    if "homie" in pt_title or "trillion" in pt_title:
-                        raise CompleteMediationBreachError(
-                            f"Complete mediation breach: Point-under-cursor ({target_x}, {target_y}) targets Homie window '{pt_title}'!"
-                        )
+                    if pt_hwnd:
+                        try:
+                            import win32gui
+                            if win32gui.GetProp(pt_hwnd, "HOMIE_PROTECTED_UI"):
+                                raise CompleteMediationBreachError(
+                                    f"Complete mediation breach: Point-under-cursor ({target_x}, {target_y}) targets Homie protected window!"
+                                )
+                        except CompleteMediationBreachError:
+                            raise
+                        except Exception:
+                            pass
+                    if pt_exe:
+                        try:
+                            cand = os.path.normcase(os.path.abspath(pt_exe))
+                            base = os.path.normcase(os.path.abspath(BASE_DIR))
+                            if os.path.commonpath([cand, base]) == base:
+                                raise CompleteMediationBreachError(
+                                    f"Complete mediation breach: Point-under-cursor ({target_x}, {target_y}) targets Homie application image '{pt_exe}'!"
+                                )
+                        except CompleteMediationBreachError:
+                            raise
+                        except Exception:
+                            pass
                     if pt_proc and pt_proc in policy_envelope.PROHIBITED_ENVELOPE_IMAGES:
                         raise CompleteMediationBreachError(
                             f"Complete mediation breach: Point-under-cursor ({target_x}, {target_y}) targets prohibited process image '{pt_proc}'!"
@@ -201,11 +239,6 @@ class SupervisorActuator:
                     raise
                 except Exception:
                     pass
-
-            if clean_act_proc and clean_act_proc in policy_envelope.PROHIBITED_ENVELOPE_IMAGES:
-                raise CompleteMediationBreachError(
-                    f"Complete mediation breach: TOCTOU detected! Active foreground process '{act_proc}' is in prohibited processes list."
-                )
 
             if getattr(self.supervisor, "envelope", None) and getattr(self.supervisor.envelope, "is_active", False):
                 env = self.supervisor.envelope
@@ -221,6 +254,11 @@ class SupervisorActuator:
                         raise CompleteMediationBreachError(
                             f"Complete mediation breach: TOCTOU detected! Active browser domain '{act_domain}' switched away from envelope allowed domains: {env.allowed_domains}"
                         )
+
+            if clean_act_proc and clean_act_proc in policy_envelope.PROHIBITED_ENVELOPE_IMAGES:
+                raise CompleteMediationBreachError(
+                    f"Complete mediation breach: Immediate foreground window targets prohibited process image '{clean_act_proc}'!"
+                )
 
         if tier != "READ_ONLY":
             if not self.supervisor.verify_and_consume_intent_token(
@@ -493,6 +531,7 @@ class PolicySupervisor:
         self._intent_lock = threading.Lock()
         self._approved_actions: Dict[Tuple[str, str, int], float] = {}
         self._approved_lock = threading.Lock()
+        self.protected_pids: set[int] = {os.getpid()}
         self.actuator = SupervisorActuator(self)
         self.envelope = None
         
@@ -540,6 +579,12 @@ class PolicySupervisor:
 
         if len(recent_crashes) >= 3:
             self._transition_to_locked("Crash-loop limit exceeded (>3 crashes in 5 minutes). Permanent supervisor lockout.")
+
+    def register_protected_pid(self, pid: int) -> None:
+        """Registers a trusted client PID (such as the UI process) to protect against synthetic injection."""
+        if isinstance(pid, int) and pid > 0:
+            self.protected_pids.add(pid)
+            logger.info("Supervisor registered protected PID: %d", pid)
 
     def _transition_to_locked(self, reason: str):
         self.state = STATE_LOCKED
@@ -806,7 +851,7 @@ class PolicySupervisor:
             logger.error("Error inspecting unresolved intents: %s", e)
         return unresolved
 
-    def handle_raw_frame(self, frame_bytes: bytes) -> bytes:
+    def handle_raw_frame(self, frame_bytes: bytes, client_pid: Optional[int] = None) -> bytes:
         """Processes an incoming raw binary frame and returns the encoded response binary frame."""
         try:
             version, msg_type, seq, payload, _ = BinaryFrameCodec.decode_frame(frame_bytes)
@@ -832,6 +877,12 @@ class PolicySupervisor:
             return self._handle_shutdown(payload)
         elif msg_type == MSG_PROXY_LLM:
             return self._handle_proxy_llm(payload)
+        elif msg_type == MSG_CONFIRM:
+            return self._handle_confirm(payload, client_pid=client_pid)
+        elif msg_type == MSG_TAINT_QUERY:
+            return self._handle_taint_query(payload)
+        elif msg_type == MSG_REGISTER_UI:
+            return self._handle_register_ui(payload, client_pid=client_pid)
         else:
             return self._encode_reply(MSG_ERROR, {"error": f"Unknown message type {msg_type}", "reason_code": REASON_MALFORMED_FRAME})
 
@@ -843,6 +894,112 @@ class PolicySupervisor:
         if not ok:
             return self._encode_reply(MSG_ERROR, {"error": res, "reason_code": "PROXY_LLM_DENIED"})
         return self._encode_reply(MSG_DATA, {"status": "OK", "result": res})
+
+    def _handle_confirm(self, payload: Dict[str, Any], client_pid: Optional[int] = None) -> bytes:
+        """Verifies a signed approval evidence blob or confirms an action inside the supervisor process.
+        Enforces fail-closed registry lookups and issues single-use step-up tokens.
+        """
+        tool_name = payload.get("tool_name", "")
+        args = payload.get("arguments", {})
+        caller_id = payload.get("caller_id", "desktop_user")
+        signed_evidence = payload.get("signed_evidence")
+        presence_gesture = payload.get("presence_gesture")
+
+        if str(caller_id).startswith(("worker", "agent", "ai_", "script", "bot")):
+            return self._encode_reply(MSG_ERROR, {
+                "error": f"DENIED: Confirmation must be issued by a verified human operator, not '{caller_id}'",
+                "reason_code": REASON_UNAUTHORIZED_TOKEN
+            })
+
+        clean_args = json.dumps(args, sort_keys=True, separators=(',', ':')) if isinstance(args, dict) else str(args)
+        args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
+
+        # Load enrolled devices from registry - FAIL CLOSED ON EXCEPTION
+        try:
+            import device_registry
+            devices = device_registry.get_enrolled_devices()
+        except Exception as reg_err:
+            logger.error("Supervisor device registry lookup failed: %s", reg_err)
+            return self._encode_reply(MSG_ERROR, {
+                "error": f"DENIED: Device registry unavailable or corrupted (fail-closed): {reg_err}",
+                "reason_code": "REGISTRY_ERROR"
+            })
+
+        current_epoch = taint_tracker.get_taint_epoch()
+
+        if devices:
+            if not signed_evidence or not isinstance(signed_evidence, dict):
+                return self._encode_reply(MSG_DECISION, {
+                    "status": "DENY",
+                    "reason_code": REASON_UNAUTHORIZED_TOKEN,
+                    "reason": "DENIED: Action confirmation strictly requires verified out-of-band signature from enrolled mobile device."
+                })
+
+            verified = False
+            err_detail = "Signature verification failed"
+            try:
+                if verify_signed_approval_evidence(signed_evidence, caller_id, tool_name, args_hash, current_epoch):
+                    verified = True
+            except Exception as e:
+                err_detail = str(e)
+
+            if not verified:
+                try:
+                    import phone_approval_portal
+                    ok, msg = phone_approval_portal.verify_action_approval(signed_evidence, tool_name, args_hash)
+                    if ok:
+                        verified = True
+                    else:
+                        err_detail = msg
+                except Exception as e:
+                    err_detail = f"{err_detail}; {e}"
+
+            if not verified:
+                return self._encode_reply(MSG_DECISION, {
+                    "status": "DENY",
+                    "reason_code": REASON_UNAUTHORIZED_TOKEN,
+                    "reason": f"DENIED: Mobile signature verification failed: {err_detail}"
+                })
+        else:
+            expected_gesture = payload.get("expected_gesture")
+            if not presence_gesture or not expected_gesture or not hmac.compare_digest(str(presence_gesture).strip(), str(expected_gesture).strip()):
+                return self._encode_reply(MSG_DECISION, {
+                    "status": "DENY",
+                    "reason_code": REASON_UNAUTHORIZED_TOKEN,
+                    "reason": "DENIED: Invalid or missing physical presence gesture."
+                })
+
+        token = f"tok_{secrets.token_hex(16)}"
+        taint_tracker.register_step_up_token(token, tool_name, args)
+        self.record_approved_action(
+            caller_id=caller_id,
+            tool=tool_name,
+            args_hash=args_hash,
+            taint_epoch=current_epoch,
+            ttl=120.0,
+            signed_blob=signed_evidence
+        )
+
+        return self._encode_reply(MSG_DECISION, {
+            "status": "ALLOW",
+            "step_up_token": token,
+            "reason": f"Action confirmed by supervisor proof for {tool_name}"
+        })
+
+    def _handle_taint_query(self, payload: Dict[str, Any]) -> bytes:
+        return self._encode_reply(MSG_DATA, {
+            "status": "OK",
+            "taint_epoch": taint_tracker.get_taint_epoch(),
+            "is_tainted": taint_tracker.is_workstation_tainted(),
+            "taint_summary": taint_tracker.get_taint_summary() if hasattr(taint_tracker, "get_taint_summary") else ""
+        })
+
+    def _handle_register_ui(self, payload: Dict[str, Any], client_pid: Optional[int] = None) -> bytes:
+        pid = client_pid or payload.get("pid")
+        if pid and isinstance(pid, int):
+            self.register_protected_pid(pid)
+            return self._encode_reply(MSG_DATA, {"status": "OK", "registered_pid": pid})
+        return self._encode_reply(MSG_ERROR, {"error": "Invalid PID", "reason_code": "INVALID_ARGUMENT"})
 
     def _encode_reply(self, msg_type: int, payload: Dict[str, Any]) -> bytes:
         self.last_supervisor_seq += 1
@@ -1243,6 +1400,25 @@ class SupervisorClient:
         }
         return self._send_and_receive(MSG_PROPOSE, payload)
 
+    def confirm(self, tool_name: str, arguments: Dict[str, Any], signed_evidence: Optional[Dict[str, Any]] = None,
+                caller_id: str = "desktop_user", presence_gesture: Optional[str] = None,
+                expected_gesture: Optional[str] = None) -> Dict[str, Any]:
+        payload = {
+            "tool_name": tool_name,
+            "arguments": arguments,
+            "signed_evidence": signed_evidence,
+            "caller_id": caller_id,
+            "presence_gesture": presence_gesture,
+            "expected_gesture": expected_gesture
+        }
+        return self._send_and_receive(MSG_CONFIRM, payload)
+
+    def get_taint_status(self) -> Dict[str, Any]:
+        return self._send_and_receive(MSG_TAINT_QUERY, {})
+
+    def register_ui(self, pid: Optional[int] = None) -> Dict[str, Any]:
+        return self._send_and_receive(MSG_REGISTER_UI, {"pid": pid or os.getpid()})
+
     def shutdown(self, reason: str = "normal") -> Dict[str, Any]:
         payload = {"reason": reason}
         return self._send_and_receive(MSG_SHUTDOWN, payload)
@@ -1314,7 +1490,7 @@ class NamedPipeSupervisorServer:
                         raw_frame = buffer[:frame_len]
                         buffer = buffer[frame_len:]
 
-                        reply_bytes = self.supervisor.handle_raw_frame(raw_frame)
+                        reply_bytes = self.supervisor.handle_raw_frame(raw_frame, client_pid=client_pid)
                         win32file.WriteFile(self.server_pipe, reply_bytes)
 
                 try:
@@ -1431,6 +1607,25 @@ class NamedPipeSupervisorClient:
             "step_up_token": step_up_token
         }
         return self._send_and_receive(MSG_PROPOSE, payload)
+
+    def confirm(self, tool_name: str, arguments: Dict[str, Any], signed_evidence: Optional[Dict[str, Any]] = None,
+                caller_id: str = "desktop_user", presence_gesture: Optional[str] = None,
+                expected_gesture: Optional[str] = None) -> Dict[str, Any]:
+        payload = {
+            "tool_name": tool_name,
+            "arguments": arguments,
+            "signed_evidence": signed_evidence,
+            "caller_id": caller_id,
+            "presence_gesture": presence_gesture,
+            "expected_gesture": expected_gesture
+        }
+        return self._send_and_receive(MSG_CONFIRM, payload)
+
+    def get_taint_status(self) -> Dict[str, Any]:
+        return self._send_and_receive(MSG_TAINT_QUERY, {})
+
+    def register_ui(self, pid: Optional[int] = None) -> Dict[str, Any]:
+        return self._send_and_receive(MSG_REGISTER_UI, {"pid": pid or os.getpid()})
 
     def shutdown(self, reason: str = "normal") -> Dict[str, Any]:
         payload = {"reason": reason}

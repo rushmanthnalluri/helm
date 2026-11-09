@@ -7,6 +7,7 @@ import sys
 import time
 import json
 import unittest
+from unittest.mock import patch
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
@@ -90,13 +91,17 @@ class TestBatch18Confinement(unittest.TestCase):
 
     def test_pre_injection_toctou_guard(self):
         """Verifies millisecond pre-injection TOCTOU check blocks focus race."""
-        # 1. Normal safe foreground check
-        safe, reason = PreInjectionTOCTOUGuard.verify_injection_target()
-        self.assertIsInstance(safe, bool)
+        # Isolate the focus-race assertion from whichever app happens to be foreground
+        # while tests run (the Python test runner itself is intentionally prohibited).
+        with patch("windows_tools.is_prohibited_target_process", return_value=(False, "Permitted target process")):
+            safe, reason = PreInjectionTOCTOUGuard.verify_injection_target()
+            self.assertIsInstance(safe, bool)
 
-        # 2. Focus race simulation: expected HWND does not match current foreground HWND
-        bogus_expected_hwnd = 99999999
-        safe_race, race_reason = PreInjectionTOCTOUGuard.verify_injection_target(expected_hwnd=bogus_expected_hwnd)
+            # The expected HWND does not match the real foreground HWND.
+            bogus_expected_hwnd = 99999999
+            safe_race, race_reason = PreInjectionTOCTOUGuard.verify_injection_target(
+                expected_hwnd=bogus_expected_hwnd
+            )
         self.assertFalse(safe_race)
         self.assertIn("Focus race detected", race_reason)
 

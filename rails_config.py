@@ -35,6 +35,16 @@ COMPILED_IN_CONSEQUENTIAL_TOOLS: frozenset[str] = frozenset({
     "homie_send_hotkey",
     "homie_execute_cmd",
     "homie_delete_file",
+    "homie_capture_screen",
+    "homie_control_media",
+    "homie_get_clipboard",
+    "homie_place_window",
+    "homie_play_youtube",
+    "homie_read_screen_memory",
+    "homie_remote_trackpad",
+    "homie_snap_window",
+    "homie_remember_fact",
+    "homie_forget_fact",
 })
 
 DEFAULT_CONFIG: Dict[str, Any] = {

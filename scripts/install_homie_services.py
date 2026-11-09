@@ -21,7 +21,7 @@ PYTHON_EXE = sys.executable
 SERVICES = [
     {
         "name": "Homie_Supervisor",
-        "script": "homie_supervisor.py",
+        "script": "homie_supervisor_daemon.py",
         "description": "Homie Out-of-Process Policy Supervisor and Actuator"
     },
     {

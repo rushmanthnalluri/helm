@@ -48,6 +48,24 @@ class TestChatAppIntegration(unittest.TestCase):
 
         window.minimize.assert_called_once_with()
 
+    def test_chat_renders_markdown_as_formatted_text(self):
+        instance = app.HomieApp.__new__(app.HomieApp)
+        html = instance.get_ui_html()
+        self.assertIn("function renderMarkdown(target, value)", html)
+        self.assertIn("document.createElement('strong')", html)
+        self.assertNotIn("innerHTML", html)
+
+    def test_safe_mode_toggle_updates_to_requested_state(self):
+        window = Mock()
+        app_instance = SimpleNamespace(window=window, prefs={}, eval_js=Mock())
+        api = app.HomieApi(app_instance)
+
+        with patch("app.homie.save_pref"):
+            api.post({"safe": False})
+
+        self.assertFalse(app_instance.prefs["safe"])
+        app_instance.eval_js.assert_called_once_with("window.ui.mode(false)")
+
     def test_text_ask_uses_agent_core_and_streams_to_ui(self):
         instance = app.HomieApp.__new__(app.HomieApp)
         instance.prefs = {"speak": False}

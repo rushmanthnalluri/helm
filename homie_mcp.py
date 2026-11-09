@@ -3,7 +3,8 @@ Hardened with Nonce-Guarded Delimiters, Capability Tiers, Strict Canonical Path 
 Elevated Terminal Protections, and Cryptographic Hash-Chained Audit Ledger:
 - READ_ONLY tier: vitals, meeting notes, list windows (all titles untrusted-tagged)
 - SENSITIVE_READ tier: screen memory, clipboard read, screen capture (dynamic random nonce tagging)
-- WRITE_EXEC tier: window placement, clipboard write
+- REVERSIBLE tier: allowlisted app launch, media control, YouTube search/playback, and window placement
+- WRITE_EXEC tier: clipboard write and other workstation changes
 - ELEVATED_CONFIRM: terminals (cmd, powershell, wt) and code editors requiring step-up confirmation
 
 Complies with Model Context Protocol specification (JSON-RPC 2.0).
@@ -65,7 +66,7 @@ MCP_TOOLS = [
     {
         "name": "homie_snap_window",
         "description": "Positions and snaps an application window to a specific screen region.",
-        "capabilityTier": "WRITE_EXEC",
+        "capabilityTier": "REVERSIBLE",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -182,7 +183,7 @@ MCP_TOOLS = [
     {
         "name": "homie_play_youtube",
         "description": "Plays music, videos, or songs on YouTube in the browser.",
-        "capabilityTier": "WRITE_EXEC",
+        "capabilityTier": "REVERSIBLE",
         "inputSchema": {
             "type": "object",
             "properties": {"query": {"type": "string"}},
@@ -192,7 +193,7 @@ MCP_TOOLS = [
     {
         "name": "homie_place_window",
         "description": "Positions, docks, or snaps windows on the desktop (left, right, full, center, etc.).",
-        "capabilityTier": "WRITE_EXEC",
+        "capabilityTier": "REVERSIBLE",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -205,7 +206,7 @@ MCP_TOOLS = [
     {
         "name": "homie_control_media",
         "description": "Controls Windows media playback (play, pause, next, prev, mute, volup, voldown).",
-        "capabilityTier": "WRITE_EXEC",
+        "capabilityTier": "REVERSIBLE",
         "inputSchema": {
             "type": "object",
             "properties": {"action": {"type": "string"}},
@@ -299,7 +300,7 @@ MCP_TOOLS = [
     {
         "name": "homie_remember_fact",
         "description": "Records or updates a durable personal fact about the user (e.g. name, preferences, work habits) that persists across restarts.",
-        "capabilityTier": "READ_ONLY",
+        "capabilityTier": "WRITE_EXEC",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -312,7 +313,7 @@ MCP_TOOLS = [
     {
         "name": "homie_forget_fact",
         "description": "Deletes a stale or outdated durable fact from the persistent memory store.",
-        "capabilityTier": "READ_ONLY",
+        "capabilityTier": "WRITE_EXEC",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -451,7 +452,7 @@ def execute_mcp_tool(name, arguments, caller_id="mcp_client", client_token=None)
             return output
 
     # Shadow Mode Gate: If shadow mode is active, simulate without touching the OS
-    if shadow_mode.is_shadow_mode_active() and tier in ("WRITE_EXEC", "ELEVATED_CONFIRM"):
+    if shadow_mode.is_shadow_mode_active() and tier in ("REVERSIBLE", "WRITE_EXEC", "ELEVATED_CONFIRM"):
         decision = "SHADOW_SIMULATED"
         output = f"[SHADOW MODE] Simulated execution of '{name}' (OS state unchanged)"
         try:

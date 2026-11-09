@@ -698,6 +698,46 @@ MUTATIONS = [
         "target": "            dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_READ, users_sid)",
         "replacement": "            dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_READ | win32con.DELETE, users_sid) # MUTATION BYPASS: reintroduce unelevated DoS deletion",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch41_security_hardening.py::TestBatch41SecurityHardening::test_5_recovery_token_dacl_denies_unelevated_delete"]
+    },
+    {
+        "id": "MUTATION_81_SAFETY_FLOOR_FACT_TOOLS_BYPASS",
+        "name": "Remove homie_remember_fact from COMPILED_IN_CONSEQUENTIAL_TOOLS in rails_config.py",
+        "file": os.path.join(BASE_DIR, "rails_config.py"),
+        "target": '    "homie_remember_fact",',
+        "replacement": '    # "homie_remember_fact", # MUTATION BYPASS: drop consequential protection',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch43_security_hardening.py::TestBatch43SecurityHardening::test_1_compiled_in_consequential_tools_floor_covers_all_non_readonly"]
+    },
+    {
+        "id": "MUTATION_82_DEVICE_REGISTRY_FAIL_OPEN_BYPASS",
+        "name": "Bypass Fail-Closed Device Registry Exception Handling in rails_confirmation.py",
+        "file": os.path.join(BASE_DIR, "rails_confirmation.py"),
+        "target": '                return False, f"DENIED: Device registry unavailable or corrupted (fail-closed): {reg_err}", None',
+        "replacement": '                devices = {} # MUTATION BYPASS: fail open on registry corruption',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch43_security_hardening.py::TestBatch43SecurityHardening::test_3_device_registry_failure_fails_closed"]
+    },
+    {
+        "id": "MUTATION_83_UIA_DOMAIN_RESOLUTION_FALLBACK_BYPASS",
+        "name": "Bypass UIA Browser Domain Resolution Fail-Closed in PolicyEnvelope.reserve_step",
+        "file": os.path.join(BASE_DIR, "policy_envelope.py"),
+        "target": '            if not current_domain:\n                return False, "DENY: Browser domain could not be verified via UIA (fail-closed)", 0',
+        "replacement": '            if not current_domain:\n                pass # MUTATION BYPASS: allow None domain without fail-closed rejection',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch43_security_hardening.py::TestBatch43SecurityHardening::test_4_browser_domain_uia_failure_fails_closed"]
+    },
+    {
+        "id": "MUTATION_84_OUTBOUND_SSRF_PROTECTION_BYPASS",
+        "name": "Bypass Outbound SSRF Protection Gate in action_broker.py",
+        "file": os.path.join(BASE_DIR, "action_broker.py"),
+        "target": '                ssrf_err = homie_ssrf.check_ssrf(cand_url)',
+        "replacement": '                ssrf_err = None # MUTATION BYPASS: allow SSRF to internal/cloud metadata',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_openjarvis_integration.py::TestOpenJarvisIntegration::test_4_action_broker_blocks_action_with_ssrf_url"]
+    },
+    {
+        "id": "MUTATION_85_CREDENTIAL_STRIPPER_REDACTION_BYPASS",
+        "name": "Bypass Secret and Credential Redaction in agent_tools.py",
+        "file": os.path.join(BASE_DIR, "agent_tools.py"),
+        "target": '        result = homie_credential_stripper.redact_secrets(result)',
+        "replacement": '        pass # MUTATION BYPASS: allow credentials to leak into logs and model context',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_openjarvis_integration.py::TestOpenJarvisIntegration::test_6_tool_registry_redacts_secrets_from_results"]
     }
 ]
 

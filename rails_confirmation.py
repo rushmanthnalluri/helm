@@ -176,6 +176,8 @@ class ConfirmationGate:
         presence_gesture: Optional[str] = None,
         human_caller_id: Optional[str] = None,
     ) -> Tuple[bool, str, Optional[str]]:
+        if human_caller_id and str(human_caller_id).startswith(("worker", "agent", "ai_", "script", "bot")):
+            return False, f"DENIED: Confirmation must be issued by a verified human operator, not '{human_caller_id}'.", None
         """Human explicitly confirms request. Generates a single-use execution token.
         Security Invariants:
         1. If one or more mobile devices are enrolled in device_registry:
@@ -183,12 +185,8 @@ class ConfirmationGate:
            from the enrolled device. Unsigned or missing signatures are unconditionally denied.
         2. If no mobile devices are enrolled:
            Confirmation requires an explicit physical presence gesture (matching ephemeral challenge code).
-        3. Bot / worker callers are strictly denied.
+        3. Fails closed on device registry corruption or unavailable state.
         """
-        # Strict anti-bot/anti-worker enforcement: AI agents and background workers CANNOT confirm actions
-        if human_caller_id and str(human_caller_id).startswith(("worker", "agent", "ai_", "script", "bot")):
-            return False, f"DENIED: Confirmation must be issued by a verified human operator, not '{human_caller_id}'.", None
-
         with self._lock:
             req = self.get_request(request_id)
             if not req:
@@ -196,12 +194,13 @@ class ConfirmationGate:
             if req.status != "PENDING":
                 return False, f"Request '{request_id}' is already {req.status}.", None
 
-            # 1. Check enrolled hardware devices
+            # 1. Check enrolled hardware devices - fail closed on any error
             try:
                 import device_registry
                 devices = device_registry.get_enrolled_devices()
-            except Exception:
-                devices = {}
+            except Exception as reg_err:
+                logger.error("Device registry access failed: %s", reg_err)
+                return False, f"DENIED: Device registry unavailable or corrupted (fail-closed): {reg_err}", None
 
             if devices:
                 # When devices are enrolled, phone cryptographic proof is strictly required

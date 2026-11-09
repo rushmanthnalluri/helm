@@ -78,8 +78,10 @@ class HomieApi:
 
         # 5. Safe mode switch
         elif 'safe' in message:
-            homie.save_pref('safe', bool(message['safe']))
-            self._app.eval_js("window.ui.mode(true)")
+            safe_enabled = bool(message['safe'])
+            homie.save_pref('safe', safe_enabled)
+            self._app.prefs['safe'] = safe_enabled
+            self._app.eval_js(f"window.ui.mode({json.dumps(safe_enabled)})")
 
         # 6. User clicked tip / support
         elif 'kofi' in message:
@@ -559,7 +561,7 @@ class HomieApp:
 
         def on_loaded():
             self.eval_js("window.ui.status('Homie Ready', false)")
-            self.eval_js("window.ui.mode(true)")
+            self.eval_js(f"window.ui.mode({json.dumps(bool(self.prefs.get('safe', True)))})")
             if hasattr(self, 'heartbeat') and self.heartbeat:
                 pending = self.heartbeat.get_pending_held_notices()
                 if pending:

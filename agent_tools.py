@@ -164,6 +164,10 @@ class ToolRegistry:
                 if is_injected:
                     result["security_flag"] = warning
 
+        # OpenJarvis Redaction Filter: Redact credentials, API keys, and private keys
+        import homie_credential_stripper
+        result = homie_credential_stripper.redact_secrets(result)
+
         try:
             encoded = json.dumps(result, ensure_ascii=False, default=str)
         except (TypeError, ValueError):

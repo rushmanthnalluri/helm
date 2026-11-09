@@ -29,6 +29,18 @@ _PENDING_STEP_UPS = {}  # step_up_id -> {session_id, tool_name, args, args_hash,
 _CONSUMED_STEP_UP_TOKENS = set()
 _WORKSTATION_TAINTED = False
 
+# These tools are low-impact, reversible desktop actions. Only the local text
+# and push-to-talk adapters may use them while tainted; model tools and remote
+# clients still require the ordinary step-up path.
+_LOCAL_REVERSIBLE_TOOLS = {
+    "homie_snap_window",
+    "homie_launch_app",
+    "homie_play_youtube",
+    "homie_place_window",
+    "homie_control_media",
+}
+_LOCAL_USER_CALLERS = {"desktop_user", "desktop_voice"}
+
 def is_workstation_tainted():
     return _WORKSTATION_TAINTED
 
@@ -75,7 +87,14 @@ def check_action_privilege(session_id, tool_tier, tool_name, arguments):
     if tool_tier == "SENSITIVE_READ":
         return True, False, "Sensitive reads permitted, will apply taint"
 
-    # WRITE_EXEC and ELEVATED_CONFIRM: Intercepted if session is tainted
+    if (
+        tool_tier == "REVERSIBLE"
+        and tool_name in _LOCAL_REVERSIBLE_TOOLS
+        and session_id in _LOCAL_USER_CALLERS
+    ):
+        return True, False, "Explicit local user request for a reversible action"
+
+    # Other mutating actions in tainted sessions need out-of-band step-up.
     if is_session_tainted(session_id):
         # Generate an out-of-band Step-Up approval request
         clean_args = json.dumps(arguments, sort_keys=True) if isinstance(arguments, dict) else str(arguments)
@@ -124,6 +143,19 @@ def approve_step_up(step_up_id, expected_args_hash=None):
     # Enforce single-use: immediately delete from pending
     del _PENDING_STEP_UPS[step_up_id]
     return True, item, f"Approved execution of {item['tool_name']}"
+
+def register_step_up_token(token: str, tool_name: str, arguments: dict, ttl_seconds: float = 300.0) -> None:
+    """Registers a single-use step-up token authorized for the specified tool and arguments."""
+    clean_args = json.dumps(arguments, sort_keys=True) if isinstance(arguments, dict) else str(arguments)
+    args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()[:16]
+    _PENDING_STEP_UPS[token] = {
+        "session_id": token,
+        "tool_name": tool_name,
+        "arguments": arguments,
+        "args_hash": args_hash,
+        "created_at": time.time(),
+        "expires_at": time.time() + ttl_seconds
+    }
 
 def verify_and_consume_step_up_token(token: Optional[str], tool_name: str, arguments: dict) -> Tuple[bool, str]:
     """Verifies and immediately consumes a single-use step-up token.

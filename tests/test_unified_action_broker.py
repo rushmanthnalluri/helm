@@ -139,6 +139,28 @@ class TestUnifiedActionBroker(unittest.TestCase):
         )
         self.assertTrue(found, "Audit entry for mediated fast command was not found in ledger")
 
+    def test_local_reversible_fast_action_remains_usable_after_screen_data_taint(self):
+        """A direct desktop request can run a reversible allowlisted action after a screen read."""
+        import unittest.mock as mock
+
+        taint_tracker.mark_session_tainted("screen_reader", source="screen_capture")
+        with mock.patch("windows_tools.play_youtube", return_value=(True, "Opened YouTube results")) as play:
+            handled, message = homie.try_fast_command(
+                "Can you open YouTube and play Telugu songs?", caller_id="desktop_user"
+            )
+
+        self.assertTrue(handled)
+        self.assertIn("Opened YouTube", message)
+        play.assert_called_once_with("telugu songs")
+
+        # This narrow exception must not extend to model-driven or write operations.
+        allowed, needs_step_up, reason = taint_tracker.check_action_privilege(
+            "ai_text_agent", "REVERSIBLE", "homie_play_youtube", {"query": "Telugu songs"}
+        )
+        self.assertFalse(allowed)
+        self.assertTrue(needs_step_up)
+        self.assertIn("STEP_UP_REQUIRED", reason)
+
 
 if __name__ == "__main__":
     unittest.main()

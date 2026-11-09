@@ -80,7 +80,8 @@ class ActionBroker:
                 self.pipe_client = homie_supervisor.NamedPipeSupervisorClient(pipe_name=self.pipe_name)
                 self.client = self.pipe_client
                 try:
-                    self.client.connect(timeout_sec=0.2)
+                    if self.client.connect(timeout_sec=0.2):
+                        self.client.register_ui(os.getpid())
                 except Exception:
                     pass
             else:
@@ -149,6 +150,7 @@ class ActionBroker:
                 try:
                     if not self.client.connect(timeout_sec=0.1):
                         return False, "Security Gate: Supervisor process is unreachable or disconnected (fail-closed).", None
+                    self.client.register_ui(os.getpid())
                 except Exception as conn_err:
                     return False, f"Security Gate: Supervisor connection error (fail-closed): {conn_err}", None
 
@@ -226,6 +228,21 @@ class ActionBroker:
         if not rate_ok:
             return False, f"Security Gate: {rate_msg}", None
 
+        # 5.1 Outbound SSRF Protection (OpenJarvis integration)
+        import homie_ssrf
+        for url_key in ("url", "link", "target_url", "endpoint"):
+            cand_url = args.get(url_key)
+            if cand_url and isinstance(cand_url, str) and ("://" in cand_url or "." in cand_url):
+                ssrf_err = homie_ssrf.check_ssrf(cand_url)
+                if ssrf_err:
+                    msg = f"Security Gate: SSRF check blocked outbound URL: {ssrf_err}"
+                    logger.warning("SSRF blocked for caller %s: %s", caller_id, ssrf_err)
+                    try:
+                        agent_audit_ledger.record_agent_action(caller_id, canonical_tool, tier, args, decision="DENY_SSRF")
+                    except Exception:
+                        pass
+                    return False, msg, None
+
         # 6. Policy Envelope & Prohibited Environments Check
         if canonical_tool in ("homie_launch_app", "open_app_or_url"):
             target = (args.get("app_name") or args.get("target") or "").lower().strip()
@@ -260,7 +277,7 @@ class ActionBroker:
                 return False, f"Security Gate: {taint_reason}", None
 
         # 8. Shadow Mode Simulation
-        if shadow_mode.is_shadow_mode_active() and tier in ("WRITE_EXEC", "ELEVATED_CONFIRM"):
+        if shadow_mode.is_shadow_mode_active() and tier in ("REVERSIBLE", "WRITE_EXEC", "ELEVATED_CONFIRM"):
             record = shadow_mode.record_simulated_action(caller_id, canonical_tool, tier, args)
             sim_msg = f"[SHADOW_SIMULATION] {canonical_tool} simulated with parameters {args}"
             return True, sim_msg, record
