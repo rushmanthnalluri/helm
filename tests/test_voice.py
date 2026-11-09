@@ -5,7 +5,7 @@ import os
 import numpy as np
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from voice import VoiceEngine
+from voice import VoiceEngine, SentenceSpeechStreamer
 
 class TestVoiceEngine(unittest.TestCase):
     def test_voice_initialization(self):
@@ -27,6 +27,30 @@ class TestVoiceEngine(unittest.TestCase):
         engine._audio_callback(sine_wave, len(sine_wave), None, None)
         self.assertGreater(len(levels), 0)
         self.assertGreater(levels[0], 0.0)
+
+    def test_sentence_speech_streamer_queues_and_flushes_chunks(self):
+        spoken = []
+        started = []
+        streamer = SentenceSpeechStreamer(
+            speaker=lambda text, purge: spoken.append((text, purge)) or True,
+            on_start=lambda: started.append(True),
+        )
+        streamer.feed("Hello.")
+        self.assertEqual(spoken, [])
+        streamer.feed(" How are")
+        streamer.feed(" you? Next part")
+        streamer.finish()
+
+        self.assertEqual(spoken, [("Hello.", True), ("How are you?", False), ("Next part", False)])
+        self.assertEqual(len(started), 3)
+
+    def test_sentence_speech_streamer_cancel_discards_unspoken_buffer(self):
+        spoken = []
+        streamer = SentenceSpeechStreamer(speaker=lambda text, purge: spoken.append(text) or True)
+        streamer.feed("This sentence is not complete")
+        streamer.cancel()
+        streamer.finish()
+        self.assertEqual(spoken, [])
 
 if __name__ == '__main__':
     unittest.main()

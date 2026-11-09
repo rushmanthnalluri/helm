@@ -92,8 +92,8 @@ class TestBatch37SecurityHardening(unittest.TestCase):
             homie_supervisor._init_approved_actions_table(conn)
             conn.execute("""
                 INSERT INTO approved_actions (caller_id, tool, args_hash, taint_epoch, expiry, consumed, signature_blob)
-                VALUES (?, ?, ?, ?, ?, 0, '')
-            """, (caller_id, tool_name, args_hash.lower(), epoch, time.time() + 60.0))
+                VALUES (?, ?, ?, ?, ?, 0, ?)
+            """, (caller_id, tool_name, args_hash.lower(), epoch, time.time() + 60.0, json.dumps({"forged": True})))
             conn.commit()
 
         # Supervisor MUST reject unsigned row (fails closed)

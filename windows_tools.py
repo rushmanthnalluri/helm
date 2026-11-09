@@ -175,30 +175,61 @@ def canonicalize_keyboard_arguments(arguments: Dict[str, Any]) -> Tuple[bool, bo
 
 def detect_blocked_system_chords(detected_vks: List[int], tokens: List[str]) -> Optional[str]:
     """Detects dangerous system hotkey chords that bypass desktop confinement or trigger OS prompts.
-    Explicitly blocks: Win+R, Win+X, Alt+F4, Ctrl+Shift+Esc, Ctrl+Alt+Del.
+    Explicitly blocks:
+    - EVERY chord containing a Windows key (Win+*, Win+1..9, Win+E, Win+S, Win+I, Win+R, Win+X, etc.)
+    - Alt+Tab, Alt+Space, Alt+F4
+    - Ctrl+Shift+Esc, Ctrl+Alt+Del, Ctrl+Esc, Ctrl+Shift+Enter
     """
     token_set = set(t.lower() for t in tokens)
 
     has_win = any(vk in detected_vks for vk in (91, 92)) or bool({"win", "windows", "lwin", "rwin", "super", "cmd"}.intersection(token_set))
-    has_r = (82 in detected_vks) or bool({"r"}.intersection(token_set))
-    has_x = (88 in detected_vks) or bool({"x"}.intersection(token_set))
     has_alt = any(vk in detected_vks for vk in (18, 164, 165)) or bool({"alt", "menu", "lalt", "ralt"}.intersection(token_set))
-    has_f4 = (115 in detected_vks) or bool({"f4"}.intersection(token_set))
     has_ctrl = any(vk in detected_vks for vk in (17, 162, 163)) or bool({"ctrl", "control", "lctrl", "rctrl"}.intersection(token_set))
     has_shift = any(vk in detected_vks for vk in (16, 160, 161)) or bool({"shift", "lshift", "rshift"}.intersection(token_set))
-    has_esc = (27 in detected_vks) or bool({"esc", "escape"}.intersection(token_set))
-    has_del = (46 in detected_vks) or bool({"del", "delete"}.intersection(token_set))
+    has_r = (82 in detected_vks) or bool({"r"}.intersection(token_set)) or any("+r" in t for t in token_set)
+    has_x = (88 in detected_vks) or bool({"x"}.intersection(token_set)) or any("+x" in t for t in token_set)
+    has_f4 = (115 in detected_vks) or bool({"f4"}.intersection(token_set)) or any("+f4" in t for t in token_set)
+    has_esc = (27 in detected_vks) or bool({"esc", "escape"}.intersection(token_set)) or any("+esc" in t for t in token_set)
+    has_del = (46 in detected_vks) or bool({"del", "delete"}.intersection(token_set)) or any("+del" in t for t in token_set)
+    has_tab = (9 in detected_vks) or bool({"tab"}.intersection(token_set)) or any("+tab" in t for t in token_set)
+    has_space = (32 in detected_vks) or bool({"space"}.intersection(token_set)) or any("+space" in t for t in token_set)
+    has_enter = (13 in detected_vks) or bool({"enter", "return"}.intersection(token_set)) or any("+enter" in t for t in token_set)
 
+    # 1. Explicit high-risk chords
     if has_win and has_r:
         return "Win+R"
     if has_win and has_x:
         return "Win+X"
     if has_alt and has_f4:
         return "Alt+F4"
+    if has_alt and has_tab:
+        return "Alt+Tab"
+    if has_alt and has_space:
+        return "Alt+Space"
     if has_ctrl and has_shift and has_esc:
         return "Ctrl+Shift+Esc"
     if has_ctrl and has_alt and has_del:
         return "Ctrl+Alt+Del"
+    if has_ctrl and has_esc:
+        return "Ctrl+Esc"
+    if has_ctrl and has_shift and has_enter:
+        return "Ctrl+Shift+Enter"
+
+    # 2. Total Win-Key Chord Denial: Deny ANY chord containing a Windows key
+    if has_win:
+        win_vks = {91, 92}
+        win_tokens = {"win", "windows", "lwin", "rwin", "super", "cmd"}
+        other_vks = [vk for vk in detected_vks if vk not in win_vks]
+        sub_tokens = set()
+        for t in token_set:
+            for part in t.split("+"):
+                p = part.strip()
+                if p and p not in win_tokens:
+                    sub_tokens.add(p)
+        if other_vks or sub_tokens:
+            tok_name = sorted(sub_tokens)[0].upper() if sub_tokens else (chr(other_vks[0]).upper() if 32 <= other_vks[0] <= 126 else str(other_vks[0]))
+            return f"Win+{tok_name}"
+
     return None
 
 def get_browser_active_domain(hwnd: Optional[int] = None) -> Optional[str]:

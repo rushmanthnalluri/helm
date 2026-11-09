@@ -4,6 +4,7 @@ and fast on-device Whisper transcription (or lightweight fallback).
 """
 import os
 import io
+import re
 import wave
 import threading
 import numpy as np
@@ -73,7 +74,7 @@ class VoiceEngine:
     def start_recording(self, level_callback=None):
         """Starts capturing audio from the default input device."""
         if self.recording:
-            return
+            return True
         self.frames = []
         self.recording = True
         self.level_callback = level_callback
@@ -89,9 +90,11 @@ class VoiceEngine:
                 callback=self._audio_callback
             )
             self.stream.start()
+            return True
         except Exception as e:
             self.recording = False
             print(f"[Voice] Failed to start audio stream: {e}")
+            return False
 
     def stop_recording(self):
         """Stops capturing audio and returns a numpy float32 array."""
@@ -173,18 +176,64 @@ def get_sapi_voice():
                 print(f"[Voice] Could not initialize SAPI.SpVoice: {e}")
         return _sapi_voice
 
-def speak_text_async(text_to_speak):
+def speak_text_async(text_to_speak, purge=True):
     """Speaks text asynchronously so user can interrupt (barge-in) anytime."""
     voice = get_sapi_voice()
     if not voice:
         return False
     try:
-        # SVSFlagsAsync = 1, SVSFPurgeBeforeSpeak = 2 -> 1 | 2 = 3 (Purge prior & Speak async)
-        voice.Speak(str(text_to_speak), 3)
+        # First speech chunk purges prior audio; subsequent chunks queue naturally.
+        flags = 1 | (2 if purge else 0)  # SVSFlagsAsync | optional SVSFPurgeBeforeSpeak
+        voice.Speak(str(text_to_speak), flags)
         return True
     except Exception as e:
         print(f"[Voice] Async speak error: {e}")
         return False
+
+
+class SentenceSpeechStreamer:
+    """Turn model text deltas into interruptible, queued local speech chunks."""
+
+    def __init__(self, enabled=True, speaker=None, on_start=None):
+        self.enabled = enabled
+        self._speaker = speaker or speak_text_async
+        self._on_start = on_start
+        self._buffer = ""
+        self._first = True
+        self._cancelled = False
+
+    def feed(self, text):
+        if not self.enabled or self._cancelled or not text:
+            return
+        self._buffer += str(text)
+        while True:
+            match = re.search(r"(?<=[.!?])\s+|[\r\n]+", self._buffer)
+            if not match:
+                return
+            sentence = self._buffer[:match.start()].strip()
+            self._buffer = self._buffer[match.end():]
+            self._speak(sentence)
+
+    def finish(self):
+        if not self.enabled or self._cancelled:
+            self._buffer = ""
+            return
+        sentence = self._buffer.strip()
+        self._buffer = ""
+        self._speak(sentence)
+
+    def cancel(self):
+        self._cancelled = True
+        self._buffer = ""
+
+    def _speak(self, sentence):
+        if not sentence or self._cancelled:
+            return
+        started = bool(self._speaker(sentence, purge=self._first))
+        if started:
+            self._first = False
+            if self._on_start:
+                self._on_start()
 
 def stop_speaking():
     """Barge-in: Instantly cancels and purges any active speech output."""

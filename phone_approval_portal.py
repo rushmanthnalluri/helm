@@ -36,16 +36,97 @@ if BASE_DIR not in sys.path:
 import taint_tracker
 import agent_audit_ledger
 import homie_confinement
+import device_registry
+from device_registry import (
+    verify_asymmetric_signature,
+    _load_device_registry,
+    _save_device_registry,
+    revoke_device_key,
+    check_and_record_consumed_nonce,
+    is_nonce_consumed,
+    record_consumed_nonce,
+    _load_consumed_nonces,
+    _save_consumed_nonces,
+    clear_consumed_nonces_for_testing,
+    _REGISTRY_LOCK,
+    _NONCE_LOCK,
+    DEVICE_REGISTRY_PATH,
+    CONSUMED_NONCES_PATH
+)
 
 logger = logging.getLogger("homie.phone_portal")
 
-DEVICE_REGISTRY_PATH = os.path.join(BASE_DIR, ".homie_device_keys.json")
-CONSUMED_NONCES_PATH = os.path.join(BASE_DIR, ".homie_consumed_nonces.json")
+ADMIN_RECOVERY_DIR = os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "Homie")
+ADMIN_RECOVERY_TOKEN_PATH = os.path.join(ADMIN_RECOVERY_DIR, "console_recovery.token")
 ENROLLMENT_LOCKOUT_PATH = os.path.join(BASE_DIR, ".homie_enrollment_lockout.json")
 
-_REGISTRY_LOCK = threading.RLock()
-_NONCE_LOCK = threading.RLock()
 _ENROLLMENT_LOCK = threading.RLock()
+
+def write_admin_recovery_token(token: str, ttl_seconds: float = 300.0) -> bool:
+    """Writes an admin recovery token to Administrator/SYSTEM-protected ProgramData directory."""
+    try:
+        os.makedirs(ADMIN_RECOVERY_DIR, exist_ok=True)
+        data = {
+            "token_hash": hashlib.sha256(token.encode('utf-8')).hexdigest(),
+            "expires_at": time.time() + ttl_seconds,
+            "created_at": time.time()
+        }
+        with open(ADMIN_RECOVERY_TOKEN_PATH, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+
+        try:
+            import win32security, ntsecuritycon as nsc, win32con, win32api
+            admin_sid = win32security.ConvertStringSidToSid("S-1-5-32-544")
+            system_sid = win32security.ConvertStringSidToSid("S-1-5-18")
+            dacl = win32security.ACL()
+            dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_ALL, admin_sid)
+            dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_ALL, system_sid)
+            try:
+                tok = win32security.OpenProcessToken(win32api.GetCurrentProcess(), win32con.TOKEN_QUERY)
+                my_sid = win32security.GetTokenInformation(tok, win32security.TokenUser)[0]
+                dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_ALL, my_sid)
+            except Exception:
+                pass
+
+            win32security.SetNamedSecurityInfo(
+                ADMIN_RECOVERY_TOKEN_PATH, win32security.SE_FILE_OBJECT,
+                win32security.DACL_SECURITY_INFORMATION | win32security.PROTECTED_DACL_SECURITY_INFORMATION,
+                None, None, dacl, None
+            )
+        except Exception:
+            pass
+        return True
+    except Exception as e:
+        logger.warning("Could not write admin recovery token: %s", e)
+        return False
+
+def consume_admin_recovery_token(recovery_token: Optional[str]) -> bool:
+    """Consumes single-use admin recovery token from C:\\ProgramData\\Homie\\console_recovery.token."""
+    if not recovery_token or not isinstance(recovery_token, str):
+        return False
+    tok = recovery_token.strip()
+    if not os.path.exists(ADMIN_RECOVERY_TOKEN_PATH):
+        return False
+    try:
+        with open(ADMIN_RECOVERY_TOKEN_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        tok_hash = hashlib.sha256(tok.encode('utf-8')).hexdigest()
+        if data.get("token_hash") != tok_hash:
+            return False
+        if time.time() > data.get("expires_at", 0):
+            try:
+                os.remove(ADMIN_RECOVERY_TOKEN_PATH)
+            except Exception:
+                pass
+            return False
+        try:
+            os.remove(ADMIN_RECOVERY_TOKEN_PATH)
+        except Exception:
+            pass
+        return True
+    except Exception as e:
+        logger.warning("Could not consume admin recovery token: %s", e)
+        return False
 _DISPLAY_DRIVER = None
 MAX_ACTION_APPROVAL_TTL = 300.0  # 5 minutes maximum validity cap for action approvals
 
@@ -56,6 +137,7 @@ def set_display_driver(driver_fn):
 
 _ACTIVE_CHALLENGES: Dict[str, Dict[str, Any]] = {}  # step_up_id -> challenge_metadata
 _LOCAL_ENROLLMENT_SESSIONS: Dict[str, Dict[str, Any]] = {}  # session_id -> {pairing_code, expiry, failed_attempts}
+_PENDING_ACTION_NONCES: set = set()
 MAX_FAILED_ENROLLMENT_ATTEMPTS = 3
 _SUPERVISOR_CHALLENGE_SEQ = 0
 _CONSOLE_RECOVERY_TOKENS: Dict[str, float] = {}
@@ -97,6 +179,7 @@ def generate_console_recovery_token(ttl_seconds: float = 300.0) -> str:
             conn.commit()
     except Exception as e:
         logger.warning("Could not persist recovery token to SQLite: %s", e)
+    write_admin_recovery_token(token, ttl_seconds=ttl_seconds)
     return token
 
 def consume_console_recovery_token(recovery_token: Optional[str]) -> bool:
@@ -120,7 +203,11 @@ def consume_console_recovery_token(recovery_token: Optional[str]) -> bool:
                 pass
             return True
 
-    # 2. Try cross-process SQLite table
+    # 2. Try Admin ProgramData token
+    if consume_admin_recovery_token(tok):
+        return True
+
+    # 3. Try cross-process SQLite table
     try:
         import db_utils
         _init_recovery_tokens_table()
@@ -510,9 +597,11 @@ def generate_approval_challenge(
     session_id: str,
     taint_epoch: int,
     device_id: str = "primary_phone",
-    ttl_seconds: float = 120.0
+    ttl_seconds: float = 120.0,
+    caller_id: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Binds approval challenge to SHA-256(CHALLENGE_V2 | device_id | tool | args_hash | nonce | expiry | taint_epoch | seq).
+    """Binds approval challenge to SHA-256(CHALLENGE_V3 | device_id | caller_id | tool | args_hash | nonce | expiry | taint_epoch | seq)
+    when caller_id is specified, or CHALLENGE_V2 for backwards-compatible challenges.
     Also derives server expected counter and stores canonical_args string for safe UI rendering.
     """
     global _SUPERVISOR_CHALLENGE_SEQ
@@ -528,12 +617,21 @@ def generate_approval_challenge(
     nonce = secrets.token_hex(16)
     expiry = int(time.time() + ttl_seconds)
 
-    raw_challenge = f"CHALLENGE_V2|{device_id}|{tool_name}|{args_hash}|{nonce}|{expiry}|{taint_epoch}|{challenge_seq}"
+    if caller_id is not None:
+        version = "CHALLENGE_V3"
+        raw_challenge = f"CHALLENGE_V3|{device_id}|{caller_id}|{tool_name}|{args_hash}|{nonce}|{expiry}|{taint_epoch}|{challenge_seq}"
+        eff_caller = caller_id
+    else:
+        version = "CHALLENGE_V2"
+        raw_challenge = f"CHALLENGE_V2|{device_id}|{tool_name}|{args_hash}|{nonce}|{expiry}|{taint_epoch}|{challenge_seq}"
+        eff_caller = "worker"
+
     challenge_hash = hashlib.sha256(raw_challenge.encode('utf-8')).hexdigest()
 
     canonical_prompt = (
         f"Security Authorization Required:\n"
         f"• Action: {tool_name}\n"
+        f"• Caller: {eff_caller}\n"
         f"• Target Arguments: {clean_args[:150]}\n"
         f"• Session: {session_id}\n"
         f"• Valid for: {int(ttl_seconds)}s"
@@ -542,6 +640,8 @@ def generate_approval_challenge(
     item = {
         "step_up_id": step_up_id,
         "device_id": device_id,
+        "caller_id": eff_caller,
+        "version": version,
         "tool_name": tool_name,
         "arguments": arguments,
         "canonical_args": clean_args,
@@ -687,8 +787,9 @@ def verify_device_approval(
         target_caller = item.get("caller_id") or "worker"
         remaining_ttl = max(1.0, float(item.get("expiry", now + 60) - now))
         signed_approval_blob = {
-            "version": "CHALLENGE_V2",
+            "version": item.get("version", "CHALLENGE_V3"),
             "device_id": device_id,
+            "caller_id": target_caller,
             "tool_name": item["tool_name"],
             "args_hash": str(item["args_hash"]).lower(),
             "nonce": item["nonce"],
@@ -697,7 +798,6 @@ def verify_device_approval(
             "challenge_seq": item.get("challenge_seq", 0),
             "challenge_hash": item["challenge_hash"],
             "signature": signature,
-            "caller_id": target_caller,
             "counter": counter
         }
         homie_supervisor.record_approved_action(
@@ -719,6 +819,7 @@ def clear_active_challenges():
     """Purges all active pending challenges and enrollment sessions."""
     _ACTIVE_CHALLENGES.clear()
     _LOCAL_ENROLLMENT_SESSIONS.clear()
+    _PENDING_ACTION_NONCES.clear()
 
 
 # ==============================================================================
@@ -799,9 +900,11 @@ def verify_action_approval(
     if not sig_ok:
         return False, "SIGNATURE_INVALID: Asymmetric Ed25519 signature failed verification"
 
-    # Step 2: Atomic check-and-record under _NONCE_LOCK (prevents concurrent race replays)
-    if not check_and_record_consumed_nonce(nonce, expiry):
-        return False, "REPLAY_REJECTED: Approval nonce has already been consumed"
+    # Step 2: Atomic anti-replay check under _NONCE_LOCK
+    with _NONCE_LOCK:
+        if is_nonce_consumed(nonce) or nonce in _PENDING_ACTION_NONCES:
+            return False, "REPLAY_REJECTED: Approval nonce has already been consumed"
+        _PENDING_ACTION_NONCES.add(nonce)
 
     # Step 3: Production Approval Cache Relay (In-memory + cross-process SQLite)
     target_caller = approval.get("caller_id") or "worker"

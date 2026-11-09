@@ -295,6 +295,41 @@ MCP_TOOLS = [
             "properties": {"command": {"type": "string"}},
             "required": ["command"]
         }
+    },
+    {
+        "name": "homie_remember_fact",
+        "description": "Records or updates a durable personal fact about the user (e.g. name, preferences, work habits) that persists across restarts.",
+        "capabilityTier": "READ_ONLY",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "key": {"type": "string", "description": "Short identifier, e.g. 'user_name', 'coffee_preference'"},
+                "fact": {"type": "string", "description": "Single clear declarative statement of fact"}
+            },
+            "required": ["key", "fact"]
+        }
+    },
+    {
+        "name": "homie_forget_fact",
+        "description": "Deletes a stale or outdated durable fact from the persistent memory store.",
+        "capabilityTier": "READ_ONLY",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "key": {"type": "string", "description": "Short identifier of the fact to remove"}
+            },
+            "required": ["key"]
+        }
+    },
+    {
+        "name": "homie_list_facts",
+        "description": "Lists all durable facts currently saved in the persistent memory store.",
+        "capabilityTier": "READ_ONLY",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
     }
 ]
 
@@ -609,6 +644,27 @@ def execute_mcp_tool(name, arguments, caller_id="mcp_client", client_token=None)
             cmd = arguments.get("command", "")
             ok, msg = windows_tools.execute_safe_command(cmd)
             output = msg
+
+        elif name in ("homie_remember_fact", "remember_fact"):
+            import durable_memory
+            k = str(arguments.get("key", "")).strip()
+            f = str(arguments.get("fact", "")).strip()
+            store = durable_memory.get_default_memory_store()
+            ok, msg = store.set_fact(k, f)
+            output = msg if ok else f"Error: {msg}"
+
+        elif name in ("homie_forget_fact", "forget_fact"):
+            import durable_memory
+            k = str(arguments.get("key", "")).strip()
+            store = durable_memory.get_default_memory_store()
+            ok, msg = store.delete_fact(k)
+            output = msg if ok else f"Error: {msg}"
+
+        elif name in ("homie_list_facts", "list_facts"):
+            import durable_memory
+            store = durable_memory.get_default_memory_store()
+            facts = store.list_facts()
+            output = json.dumps(facts, indent=2, ensure_ascii=False)
 
         else:
             decision = "DENY_UNKNOWN"

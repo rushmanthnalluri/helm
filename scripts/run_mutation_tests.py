@@ -87,8 +87,8 @@ MUTATIONS = [
         "id": "MUTATION_4_SUPERVISOR_COMPLETE_MEDIATION",
         "name": "Bypass Intent Token Verification in homie_supervisor.py",
         "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
-        "target": "raise CompleteMediationBreachError(",
-        "replacement": "# MUTATION BYPASS: Complete mediation disabled\n                pass # raise CompleteMediationBreachError(",
+        "target": "        if tier != \"READ_ONLY\":\n            if not self.supervisor.verify_and_consume_intent_token(\n                intent_token, tool, args, caller_id, req_seq\n            ):\n                raise CompleteMediationBreachError(",
+        "replacement": "        if False and tier != \"READ_ONLY\": # MUTATION BYPASS: Complete mediation disabled\n            if not self.supervisor.verify_and_consume_intent_token(\n                intent_token, tool, args, caller_id, req_seq\n            ):\n                raise CompleteMediationBreachError(",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch20_complete_mediation.py::TestBatch20CompleteMediationAndRedTeam::test_supervisor_actuator_requires_cryptographic_intent_token"]
     },
     {
@@ -237,10 +237,10 @@ MUTATIONS = [
     },
     {
         "id": "MUTATION_23_ATOMIC_NONCE_LOCK_BYPASS",
-        "name": "Bypass Atomic Nonce Check in check_and_record_consumed_nonce",
+        "name": "Bypass Atomic Nonce Check in verify_action_approval",
         "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
-        "target": "with _NONCE_LOCK:\n        nonces = _load_consumed_nonces()\n        if nonce in nonces:\n            return False",
-        "replacement": "if False: # MUTATION BYPASS: atomic nonce check disabled\n            pass",
+        "target": "    with _NONCE_LOCK:\n        if is_nonce_consumed(nonce) or nonce in _PENDING_ACTION_NONCES:\n            return False, \"REPLAY_REJECTED: Approval nonce has already been consumed\"",
+        "replacement": "    with _NONCE_LOCK:\n        if False and (is_nonce_consumed(nonce) or nonce in _PENDING_ACTION_NONCES): # MUTATION BYPASS: atomic nonce check disabled\n            return False, \"REPLAY_REJECTED: Approval nonce has already been consumed\"",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch29_security_hardening.py::TestBatch29SecurityHardening::test_4_concurrent_nonce_replay_race_condition"]
     },
     {
@@ -519,8 +519,8 @@ MUTATIONS = [
         "id": "MUTATION_58_RECOVERY_TOKEN_CROSS_PROCESS_SQLITE_BYPASS",
         "name": "Bypass Recovery Token Cross-Process SQLite Consumption in consume_console_recovery_token",
         "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
-        "target": "    # 2. Try cross-process SQLite table\n    try:\n        import db_utils",
-        "replacement": "    # 2. Try cross-process SQLite table\n    return False # MUTATION BYPASS: drop SQLite recovery token consumption\n    try:\n        import db_utils",
+        "target": "    # 3. Try cross-process SQLite table\n    try:\n        import db_utils",
+        "replacement": "    # 3. Try cross-process SQLite table\n    return False # MUTATION BYPASS: drop SQLite recovery token consumption\n    try:\n        import db_utils",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch36_security_hardening.py::TestBatch36SecurityHardening::test_3_recovery_cli_non_interactive_fails_closed_and_sqlite_cross_process"]
     },
     {
@@ -559,16 +559,16 @@ MUTATIONS = [
         "id": "MUTATION_63_TOCTOU_ACTUATOR_FOREGROUND_PROCESS_BYPASS",
         "name": "Bypass TOCTOU Foreground Process Re-Resolution in SupervisorActuator.execute_actuator",
         "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
-        "target": "        if clean_act_proc and clean_act_proc in policy_envelope.PROHIBITED_ENVELOPE_IMAGES:\n            raise CompleteMediationBreachError(",
-        "replacement": "        if False and clean_act_proc in policy_envelope.PROHIBITED_ENVELOPE_IMAGES: # MUTATION BYPASS: ignore TOCTOU\n            raise CompleteMediationBreachError(",
+        "target": "        if tool in UI_INTERACTIVE_TOOLS:",
+        "replacement": "        if False and tool in UI_INTERACTIVE_TOOLS: # MUTATION BYPASS: ignore TOCTOU",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch37_security_hardening.py::TestBatch37SecurityHardening::test_4_actuator_toctou_defense_blocks_foreground_window_switching"]
     },
     {
         "id": "MUTATION_64_SYSTEM_HOTKEY_CHORD_BLOCK_BYPASS",
         "name": "Bypass Dangerous System Hotkey Chord Detection in detect_blocked_system_chords",
         "file": os.path.join(BASE_DIR, "windows_tools.py"),
-        "target": "    if has_win and has_r:\n        return \"Win+R\"",
-        "replacement": "    if False and has_win and has_r: # MUTATION BYPASS: allow Win+R\n        return \"Win+R\"",
+        "target": "    if has_alt and has_f4:\n        return \"Alt+F4\"",
+        "replacement": "    if False and has_alt and has_f4: # MUTATION BYPASS: allow Alt+F4\n        return \"Alt+F4\"",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch37_security_hardening.py::TestBatch37SecurityHardening::test_5_exact_vk_canonicalizer_ignores_numeric_prose_and_blocks_dangerous_system_chords"]
     },
     {
@@ -578,6 +578,46 @@ MUTATIONS = [
         "target": "        if not is_admin:\n            print(\"✗ [HOMIE SECURITY] Administrative elevation required (UAC Secure Desktop).\")",
         "replacement": "        if False and not is_admin: # MUTATION BYPASS: allow standard non-elevated user\n            print(\"✗ [HOMIE SECURITY] Administrative elevation required (UAC Secure Desktop).\")",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch37_security_hardening.py::TestBatch37SecurityHardening::test_2_recovery_cli_requires_uac_secure_desktop_elevation"]
+    },
+    {
+        "id": "MUTATION_66_ANTI_BURN_DOS_SQLITE_LOOP_BYPASS",
+        "name": "Revert SQLite Approval Consumption to Single-Row (Anti-Burn DoS Bypass)",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": "                for row in rows:\n                    sig_blob = row[\"signature_blob\"] if \"signature_blob\" in row.keys() else row[1]",
+        "replacement": "                for row in rows:\n                    break # MUTATION BYPASS: burn immediately without iterating candidate rows\n                    sig_blob = row[\"signature_blob\"] if \"signature_blob\" in row.keys() else row[1]",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch38_security_hardening.py::TestBatch38SecurityHardening::test_3_anti_burn_dos_junk_row_defense"]
+    },
+    {
+        "id": "MUTATION_67_CHALLENGE_V3_RECOMPUTED_HASH_BYPASS",
+        "name": "Blindly Trust Blob challenge_hash Without Recomputing from Fields",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": "        if blob.get(\"challenge_hash\") and blob.get(\"challenge_hash\") != expected_hash:\n            return False\n        data_to_verify = expected_hash.encode('utf-8')",
+        "replacement": "        # MUTATION BYPASS: blindly trust blob challenge_hash\n        data_to_verify = (blob.get(\"challenge_hash\") or expected_hash).encode('utf-8')",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch38_security_hardening.py::TestBatch38SecurityHardening::test_2_tampered_challenge_fields_rejected_even_if_hash_signed"]
+    },
+    {
+        "id": "MUTATION_68_CHALLENGE_V3_CALLER_BINDING_BYPASS",
+        "name": "Omit caller_id from CHALLENGE_V3 Canonical Raw String in generate_approval_challenge",
+        "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
+        "target": "        raw_challenge = f\"CHALLENGE_V3|{device_id}|{caller_id}|{tool_name}|{args_hash}|{nonce}|{expiry}|{taint_epoch}|{challenge_seq}\"",
+        "replacement": "        raw_challenge = f\"CHALLENGE_V3|{device_id}|omitted|{tool_name}|{args_hash}|{nonce}|{expiry}|{taint_epoch}|{challenge_seq}\"",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch38_security_hardening.py::TestBatch38SecurityHardening::test_1_challenge_v3_cryptographic_caller_binding"]
+    },
+    {
+        "id": "MUTATION_69_PERSISTENT_NONCE_CONSUMPTION_BYPASS",
+        "name": "Bypass Persistent Nonce Check in Supervisor consume_approved_action",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": "                        if nonce and not device_registry.check_and_record_consumed_nonce(nonce, nonce_exp):\n                            logger.warning(\"SQLite approved action row %s rejected: nonce already consumed (replay)!\", row[\"id\"])",
+        "replacement": "                        if False and not device_registry.check_and_record_consumed_nonce(nonce, nonce_exp): # MUTATION BYPASS: allow replay\n                            logger.warning(\"SQLite approved action row %s rejected: nonce already consumed (replay)!\", row[\"id\"])",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch38_security_hardening.py::TestBatch38SecurityHardening::test_4_sqlite_row_replay_rejected_by_persistent_nonce_store"]
+    },
+    {
+        "id": "MUTATION_70_TOTAL_WIN_KEY_CHORD_DENIAL_BYPASS",
+        "name": "Bypass Total Win-Key Chord Denial in windows_tools.py",
+        "file": os.path.join(BASE_DIR, "windows_tools.py"),
+        "target": "        if other_vks or sub_tokens:\n            tok_name = sorted(sub_tokens)[0].upper() if sub_tokens else (chr(other_vks[0]).upper() if 32 <= other_vks[0] <= 126 else str(other_vks[0]))\n            return f\"Win+{tok_name}\"",
+        "replacement": "        if False and (other_vks or sub_tokens): # MUTATION BYPASS: permit Win-key chords\n            tok_name = sorted(sub_tokens)[0].upper() if sub_tokens else (chr(other_vks[0]).upper() if 32 <= other_vks[0] <= 126 else str(other_vks[0]))\n            return f\"Win+{tok_name}\"",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch38_security_hardening.py::TestBatch38SecurityHardening::test_5_total_win_key_and_dangerous_chord_denial"]
     }
 ]
 
@@ -607,7 +647,7 @@ def _safe_copy(src: str, dst: str, retries: int = 5):
 
 def run_mutation_tests() -> bool:
     print("=" * 75)
-    print("=== BATCH 37 EXPANDED AUTOMATED CI MUTATION TEST HARNESS ===")
+    print("=== BATCH 38 EXPANDED AUTOMATED CI MUTATION TEST HARNESS (70 DEFENSES) ===")
     print("=" * 75)
     print(f"Total Security Mutations to Evaluate: {len(MUTATIONS)}\n")
 
@@ -645,6 +685,17 @@ def run_mutation_tests() -> bool:
 
         try:
             mutated_content = original_content.replace(target, replacement, 1)
+
+            # Rigor Check: Ensure mutated content is syntactically valid before testing
+            import ast
+            try:
+                ast.parse(mutated_content)
+            except SyntaxError as syn_err:
+                print(f"    ❌ MUTATION_SYNTAX_ERROR: Mutated code failed ast.parse: {syn_err}")
+                all_killed = False
+                results.append((mid, "MUTATION_SYNTAX_ERROR", str(syn_err)))
+                continue
+
             _safe_write(file_path, mutated_content)
 
             proc = subprocess.run(
@@ -668,6 +719,12 @@ def run_mutation_tests() -> bool:
                 for line in combined_out.splitlines():
                     if "FAILED " in line:
                         killer = line.replace("FAILED ", "").strip().split(" ")[0]
+                        break
+                    elif line.startswith("FAIL: ") or "FAIL: test_" in line:
+                        killer = line.replace("FAIL: ", "").strip().split(" ")[0]
+                        break
+                    elif line.startswith("ERROR: ") or "ERROR: test_" in line:
+                        killer = line.replace("ERROR: ", "").strip().split(" ")[0]
                         break
                     elif "AssertionError" in line or "Error:" in line:
                         if not killer:

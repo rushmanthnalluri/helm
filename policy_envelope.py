@@ -148,6 +148,15 @@ class PolicyEnvelope:
         self.is_active = False
         self._envelope_lock = threading.Lock()
 
+    @property
+    def allowed_target_processes(self) -> List[str]:
+        """Alias for allowed_process_images for architectural consistency."""
+        return self.allowed_process_images
+
+    @allowed_target_processes.setter
+    def allowed_target_processes(self, val: List[str]):
+        self.allowed_process_images = [os.path.basename(p).lower() for p in val]
+
     def compute_canonical_hash(self) -> str:
         """Computes deterministic canonical hash of the envelope boundary."""
         imgs = ",".join(sorted(self.allowed_process_images))

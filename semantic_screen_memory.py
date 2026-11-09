@@ -24,6 +24,12 @@ import crypto_vault
 
 logger = logging.getLogger("homie.screen_memory")
 
+# The monitor is started by the desktop app during normal startup. Keep these
+# lifecycle flags initialized so that the first start does not fail before the
+# hotkey listener or UI can be brought up.
+_monitor_running = False
+_monitor_thread = None
+
 SENSITIVE_KEYWORDS = [
     "password", "1password", "bitwarden", "lastpass", "keepass", "bank",
     "banking", "incognito", "private browsing", "credit card", "security code"

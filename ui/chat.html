@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Homie</title>
+  <style>
+    :root { color-scheme: dark; font-family: "Segoe UI", system-ui, sans-serif; color: #f4f5f7; background: #111318; }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+    body { display: flex; flex-direction: column; background: #111318; }
+    button, textarea { font: inherit; }
+    button { color: inherit; }
+    header { display: flex; align-items: center; gap: 10px; min-height: 56px; padding: 9px 12px; border-bottom: 1px solid #282b33; background: #171920; }
+    .brand { display: flex; align-items: center; gap: 9px; min-width: 0; flex: 1; }
+    .mark { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 10px; background: linear-gradient(145deg,#448cff,#7658e8); font-size: 15px; font-weight: 700; }
+    .brand-copy { min-width: 0; }
+    .brand-copy strong { display: block; font-size: 14px; line-height: 18px; }
+    #status { display: flex; align-items: center; gap: 6px; color: #aeb4c0; font-size: 11px; }
+    #status::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #55c98a; }
+    #status.busy::before { background: #55a3ff; box-shadow: 0 0 8px #55a3ff; animation: pulse 1s infinite alternate; }
+    #status.error::before { background: #ff6b6b; }
+    @keyframes pulse { to { opacity: .35; } }
+    .head-actions { display: flex; align-items: center; gap: 5px; }
+    .icon-button { display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 8px; color: #b9bfca; background: transparent; cursor: pointer; }
+    .icon-button:hover { background: #292d36; color: #fff; }
+    .icon-button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    #safe { width: auto; padding: 0 9px; border: 1px solid #393d47; border-radius: 8px; font-size: 11px; background: #20232b; }
+    #safe[aria-pressed="true"] { border-color: #448cff; color: #a9caff; background: #1b2a40; }
+    main { flex: 1; min-height: 0; overflow-y: auto; padding: 15px 13px 10px; scroll-behavior: smooth; }
+    #welcome { display: grid; place-content: center; min-height: 100%; padding: 16px; text-align: center; color: #aeb4c0; }
+    #welcome .welcome-mark { margin: 0 auto 12px; display: grid; place-items: center; width: 42px; height: 42px; border: 1px solid #393d47; border-radius: 14px; color: #a9caff; background: #1c2230; font-size: 20px; }
+    #welcome h1 { margin: 0 0 7px; color: #f4f5f7; font-size: 18px; font-weight: 650; }
+    #welcome p { max-width: 260px; margin: 0 auto; font-size: 12px; line-height: 1.6; }
+    .turn { display: flex; flex-direction: column; gap: 8px; margin-bottom: 15px; }
+    .bubble { max-width: 92%; padding: 9px 11px; border-radius: 13px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .bubble.user { align-self: flex-end; border-bottom-right-radius: 4px; background: #263851; color: #eef5ff; }
+    .bubble.assistant { align-self: flex-start; border: 1px solid #2c303a; border-bottom-left-radius: 4px; background: #1a1d24; color: #e6e8ed; }
+    .bubble.assistant.pending { color: #aeb4c0; }
+    .bubble.assistant.error { border-color: #60373a; color: #ffb3b3; background: #281c20; }
+    .bubble-tools { display: flex; gap: 5px; margin-top: 2px; }
+    .bubble-tools button { padding: 3px 7px; border: 0; border-radius: 6px; color: #aeb4c0; background: transparent; font-size: 10px; cursor: pointer; }
+    .bubble-tools button:hover { color: #fff; background: #292d36; }
+    #composer-wrap { flex: none; padding: 10px 11px 12px; border-top: 1px solid #282b33; background: #171920; }
+    #composer { display: flex; align-items: flex-end; gap: 7px; padding: 7px; border: 1px solid #343843; border-radius: 14px; background: #20232b; }
+    #ask { flex: 1; min-width: 0; max-height: 112px; min-height: 35px; resize: none; padding: 8px 7px; border: 0; outline: 0; color: #f4f5f7; background: transparent; font-size: 13px; line-height: 1.45; }
+    #ask::placeholder { color: #858c99; }
+    #send, #mic { display: grid; place-items: center; flex: none; width: 35px; height: 35px; border: 0; border-radius: 10px; cursor: pointer; }
+    #send { color: #fff; background: #397fe8; }
+    #send:hover { background: #4b8df4; }
+    #send:disabled { opacity: .4; cursor: default; }
+    #mic { color: #c0c6d1; background: #2b2f38; }
+    #mic:hover, #mic.active { color: #fff; background: #3c4f70; }
+    #mic svg, #send svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    #hint { padding: 7px 3px 0; color: #777f8d; font-size: 10px; text-align: center; }
+    #toast { position: fixed; left: 50%; bottom: 82px; padding: 7px 10px; border: 1px solid #393d47; border-radius: 9px; color: #f4f5f7; background: #252832; font-size: 11px; opacity: 0; transform: translate(-50%, 5px); transition: .18s ease; pointer-events: none; }
+    #toast.show { opacity: 1; transform: translate(-50%, 0); }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand"><div class="mark">H</div><div class="brand-copy"><strong>Homie</strong><span id="status">Ready</span></div></div>
+    <div class="head-actions">
+      <button id="safe" class="icon-button" type="button" aria-pressed="false" title="Toggle safe mode">Safe mode</button>
+      <button id="minimize" class="icon-button" type="button" title="Minimize Homie" aria-label="Minimize Homie"><svg viewBox="0 0 16 16"><path d="M3 8h10"/></svg></button>
+    </div>
+  </header>
+  <main id="messages" aria-live="polite">
+    <section id="welcome"><div><div class="welcome-mark">✦</div><h1>Hi, I’m Homie.</h1><p>Type a message below, or hold Ctrl + Alt + Space to talk. I’ll show your transcript and reply here.</p></div></section>
+  </main>
+  <div id="composer-wrap">
+    <div id="composer">
+      <textarea id="ask" rows="1" placeholder="Message Homie…" aria-label="Message Homie"></textarea>
+      <button id="mic" type="button" title="Start or stop talking" aria-label="Start or stop talking"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg></button>
+      <button id="send" type="button" title="Send message" aria-label="Send message"><svg viewBox="0 0 24 24"><path d="M4 12 20 4l-5 16-3-6-8-2Z"/><path d="m12 14 8-10"/></svg></button>
+    </div>
+    <div id="hint">Enter to send · Shift+Enter for a new line</div>
+  </div>
+  <div id="toast" role="status"></div>
+  <script>
+    (() => {
+      const $ = id => document.getElementById(id);
+      const messages = $('messages'), ask = $('ask'), status = $('status'), mic = $('mic');
+      let currentAnswer = null, currentAnswerText = '', safeMode = false, toastTimer = 0;
+
+      function post(message) {
+        const api = window.pywebview?.api;
+        if (api?.post) api.post(message);
+        else toast('Homie is still starting. Try again in a moment.');
+      }
+      function setStatus(text, kind = '') {
+        status.textContent = text || 'Ready';
+        status.className = kind;
+      }
+      function scrollBottom() { messages.scrollTop = messages.scrollHeight; }
+      function toast(text) {
+        const el = $('toast'); el.textContent = text; el.classList.add('show');
+        clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), 1800);
+      }
+      function newTurn(text) {
+        $('welcome')?.remove();
+        const turn = document.createElement('div'); turn.className = 'turn';
+        const question = document.createElement('div'); question.className = 'bubble user'; question.textContent = text;
+        const answer = document.createElement('div'); answer.className = 'bubble assistant pending'; answer.textContent = 'Thinking…';
+        turn.append(question, answer); messages.append(turn);
+        currentAnswer = answer; currentAnswerText = ''; scrollBottom();
+      }
+      function send() {
+        const text = ask.value.trim(); if (!text) return;
+        ask.value = ''; ask.style.height = '35px';
+        post({send: text});
+      }
+      $('send').addEventListener('click', send);
+      ask.addEventListener('keydown', event => {
+        if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); send(); }
+      });
+      ask.addEventListener('input', () => { ask.style.height = '35px'; ask.style.height = Math.min(112, ask.scrollHeight) + 'px'; });
+      mic.addEventListener('click', () => post({mic: true}));
+      $('minimize').addEventListener('click', () => post({minimize: true}));
+      $('safe').addEventListener('click', () => { safeMode = !safeMode; post({safe: safeMode}); window.ui.mode(safeMode); });
+
+      window.ui = {
+        status(text) { setStatus(text || 'Ready'); },
+        mode(on) { safeMode = !!on; $('safe').setAttribute('aria-pressed', String(safeMode)); $('safe').textContent = safeMode ? 'Safe mode on' : 'Safe mode'; },
+        listen() { document.body.classList.add('listening'); mic.classList.add('active'); setStatus('Listening · release to send', 'busy'); },
+        level(value) { mic.title = `Microphone level ${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`; },
+        think() { document.body.classList.remove('listening'); mic.classList.remove('active'); setStatus('Thinking…', 'busy'); },
+        words(text) { newTurn(text); },
+        line(line) {
+          const kind = line[0], text = line.slice(2);
+          if (kind === '…') {
+            if (!currentAnswer) newTurn('');
+            currentAnswer.classList.add('pending'); currentAnswer.classList.remove('error');
+            if (currentAnswerText === '') currentAnswer.textContent = '';
+            currentAnswerText += text; currentAnswer.textContent = currentAnswerText;
+            setStatus('Replying…', 'busy');
+          } else if (kind === '✓') {
+            if (!currentAnswer) newTurn('');
+            currentAnswer.classList.remove('pending', 'error'); currentAnswer.textContent = text;
+            currentAnswerText = text; currentAnswer = null; setStatus('Ready');
+          } else if (kind === '·') {
+            if (!currentAnswer) newTurn('');
+            currentAnswer.classList.remove('pending'); currentAnswer.classList.add('error'); currentAnswer.textContent = text;
+            currentAnswer = null; setStatus('Could not reply', 'error');
+          } else if (text) setStatus(text, 'busy');
+          scrollBottom();
+        },
+        compose(focus) { setStatus('Ready'); if (focus) ask.focus(); },
+        stopped(text) { document.body.classList.remove('listening'); mic.classList.remove('active'); setStatus(text || 'Cancelled'); },
+        notice(text) { toast(text); },
+        paused(on) { setStatus(on ? 'Paused' : 'Ready'); }
+      };
+    })();
+  </script>
+</body>
+</html>

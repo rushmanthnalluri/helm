@@ -985,10 +985,12 @@ def main():
             return
         
         recovery_token = phone_approval_portal.generate_console_recovery_token(ttl_seconds=300.0)
+        phone_approval_portal.write_admin_recovery_token(recovery_token, ttl_seconds=300.0)
         ok, msg = phone_approval_portal.reset_pairing_lockout(recovery_token=recovery_token)
         print(f"✓ [HOMIE SECURITY] {msg}")
         if cmd == '--recover-device':
             new_rec_token = phone_approval_portal.generate_console_recovery_token(ttl_seconds=300.0)
+            phone_approval_portal.write_admin_recovery_token(new_rec_token, ttl_seconds=300.0)
             print(f"✓ [HOMIE SECURITY] Device recovery token (valid 5m): {new_rec_token}")
             print("  Use this recovery token during phone enrollment to restore access.")
         return

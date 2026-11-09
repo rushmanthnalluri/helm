@@ -43,6 +43,7 @@ import windows_tools
 import homie_mcp
 import worker_confinement
 import policy_envelope
+import device_registry
 
 logger = logging.getLogger("homie.supervisor")
 
@@ -151,30 +152,32 @@ class SupervisorActuator:
         if blocked_chord:
             raise CompleteMediationBreachError(f"Complete mediation breach: Synthetic injection of dangerous system hotkey chord '{blocked_chord}' is strictly prohibited.")
 
-        # Prevent TOCTOU: Re-resolve foreground process and domain immediately before actuator execution
-        fg_act = windows_tools.get_foreground_window()
-        act_proc = (fg_act.get("proc_name") or "") if fg_act else ""
-        clean_act_proc = os.path.basename(act_proc).lower()
+        # Prevent TOCTOU: Re-resolve foreground process and domain immediately before actuator execution for UI-interactive tools
+        UI_INTERACTIVE_TOOLS = {"homie_agent_click", "homie_agent_type", "homie_agent_mouse_move", "homie_send_hotkey"}
+        if tool in UI_INTERACTIVE_TOOLS:
+            fg_act = windows_tools.get_foreground_window()
+            act_proc = (fg_act.get("proc_name") or "") if fg_act else ""
+            clean_act_proc = os.path.basename(act_proc).lower()
 
-        if clean_act_proc and clean_act_proc in policy_envelope.PROHIBITED_ENVELOPE_IMAGES:
-            raise CompleteMediationBreachError(
-                f"Complete mediation breach: TOCTOU detected! Active foreground process '{act_proc}' is in prohibited processes list."
-            )
+            if clean_act_proc and clean_act_proc in policy_envelope.PROHIBITED_ENVELOPE_IMAGES:
+                raise CompleteMediationBreachError(
+                    f"Complete mediation breach: TOCTOU detected! Active foreground process '{act_proc}' is in prohibited processes list."
+                )
 
-        if getattr(self.supervisor, "envelope", None) and getattr(self.supervisor.envelope, "is_active", False):
-            env = self.supervisor.envelope
-            if clean_act_proc and env.allowed_target_processes:
-                allowed_procs = [os.path.basename(p).lower() for p in env.allowed_target_processes]
-                if clean_act_proc not in allowed_procs:
-                    raise CompleteMediationBreachError(
-                        f"Complete mediation breach: TOCTOU detected! Active foreground process '{clean_act_proc}' switched away from envelope allowed targets: {allowed_procs}"
-                    )
-            if clean_act_proc and env.allowed_domains and clean_act_proc in policy_envelope.BROWSER_IMAGES:
-                act_domain = windows_tools.get_browser_active_domain(fg_act.get("hwnd") if fg_act else None)
-                if not act_domain or not any(policy_envelope.is_domain_allowed(act_domain, d) for d in env.allowed_domains):
-                    raise CompleteMediationBreachError(
-                        f"Complete mediation breach: TOCTOU detected! Active browser domain '{act_domain}' switched away from envelope allowed domains: {env.allowed_domains}"
-                    )
+            if getattr(self.supervisor, "envelope", None) and getattr(self.supervisor.envelope, "is_active", False):
+                env = self.supervisor.envelope
+                if clean_act_proc and env.allowed_target_processes:
+                    allowed_procs = [os.path.basename(p).lower() for p in env.allowed_target_processes]
+                    if clean_act_proc not in allowed_procs:
+                        raise CompleteMediationBreachError(
+                            f"Complete mediation breach: TOCTOU detected! Active foreground process '{clean_act_proc}' switched away from envelope allowed targets: {allowed_procs}"
+                        )
+                if clean_act_proc and env.allowed_domains and clean_act_proc in policy_envelope.BROWSER_IMAGES:
+                    act_domain = windows_tools.get_browser_active_domain(fg_act.get("hwnd") if fg_act else None)
+                    if not act_domain or not any(policy_envelope.is_domain_allowed(act_domain, d) for d in env.allowed_domains):
+                        raise CompleteMediationBreachError(
+                            f"Complete mediation breach: TOCTOU detected! Active browser domain '{act_domain}' switched away from envelope allowed domains: {env.allowed_domains}"
+                        )
 
         if tier != "READ_ONLY":
             if not self.supervisor.verify_and_consume_intent_token(
@@ -284,6 +287,7 @@ def verify_signed_approval_evidence(
     Fails closed if blob is missing, corrupted, expired, caller/tool/args/epoch mismatched,
     or if signature fails verification against the enrolled device public key.
     Zero trust in unverified database rows or unauthenticated file presence.
+    Strictly rebuilds canonical challenge string from fields and verifies against recomputed hash.
     """
     if not blob_raw:
         return False
@@ -303,7 +307,8 @@ def verify_signed_approval_evidence(
         return False
 
     # Bindings check: caller, tool, args_hash, taint_epoch, expiry
-    if str(blob.get("caller_id", "")).strip() != str(caller_id).strip():
+    b_caller = str(blob.get("caller_id", "")).strip()
+    if b_caller != str(caller_id).strip():
         return False
     b_tool = str(blob.get("tool_name") or blob.get("action_name") or blob.get("action", "")).strip()
     if b_tool != str(tool).strip():
@@ -316,20 +321,8 @@ def verify_signed_approval_evidence(
     if float(blob.get("expiry", 0)) < time.time():
         return False
 
-    # Load device public key from registry
-    try:
-        import phone_approval_portal
-        registry = phone_approval_portal._load_device_registry()
-    except Exception:
-        reg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".homie_device_keys.json")
-        if not os.path.exists(reg_path):
-            return False
-        try:
-            with open(reg_path, "r", encoding="utf-8") as f:
-                registry = json.load(f)
-        except Exception:
-            return False
-
+    # Load device public key from decoupled device_registry
+    registry = device_registry._load_device_registry()
     dev_entry = registry.get(device_id)
     if not dev_entry or dev_entry.get("revoked", False):
         return False
@@ -337,24 +330,29 @@ def verify_signed_approval_evidence(
     if not pub_key_pem:
         return False
 
-    # Verify cryptographic signature
+    # Rebuild canonical signed message bytes strictly from blob fields
     version = str(blob.get("version", ""))
-    if version in ("ACTION_APPROVAL_V1", "1"):
-        data_to_verify = f"ACTION_APPROVAL_V1|{device_id}|{tool}|{args_hash.lower()}|{blob.get('nonce')}|{blob.get('expiry')}|{taint_epoch}".encode('utf-8')
+    if version in ("CHALLENGE_V3", "3"):
+        challenge_seq = blob.get("challenge_seq", 0)
+        raw_challenge = f"CHALLENGE_V3|{device_id}|{caller_id}|{tool}|{args_hash.lower()}|{blob.get('nonce')}|{blob.get('expiry')}|{taint_epoch}|{challenge_seq}"
+        expected_hash = hashlib.sha256(raw_challenge.encode('utf-8')).hexdigest()
+        if blob.get("challenge_hash") and blob.get("challenge_hash") != expected_hash:
+            return False
+        data_to_verify = expected_hash.encode('utf-8')
     elif version in ("CHALLENGE_V2", "2"):
         challenge_seq = blob.get("challenge_seq", 0)
         raw_challenge = f"CHALLENGE_V2|{device_id}|{tool}|{args_hash.lower()}|{blob.get('nonce')}|{blob.get('expiry')}|{taint_epoch}|{challenge_seq}"
         expected_hash = hashlib.sha256(raw_challenge.encode('utf-8')).hexdigest()
         if blob.get("challenge_hash") and blob.get("challenge_hash") != expected_hash:
             return False
-        challenge_hash = blob.get("challenge_hash") or expected_hash
-        data_to_verify = challenge_hash.encode('utf-8')
+        data_to_verify = expected_hash.encode('utf-8')
+    elif version in ("ACTION_APPROVAL_V1", "1"):
+        data_to_verify = f"ACTION_APPROVAL_V1|{device_id}|{tool}|{args_hash.lower()}|{blob.get('nonce')}|{blob.get('expiry')}|{taint_epoch}".encode('utf-8')
     else:
         return False
 
     try:
-        import phone_approval_portal
-        return phone_approval_portal.verify_asymmetric_signature(pub_key_pem, data_to_verify, signature)
+        return device_registry.verify_asymmetric_signature(pub_key_pem, data_to_verify, signature)
     except Exception as e:
         logger.warning("Error verifying approval evidence signature: %s", e)
         return False
@@ -382,7 +380,10 @@ def record_approved_action(caller_id: str, tool: str, args_hash: str, taint_epoc
 
 
 def consume_approved_action(caller_id: str, tool: str, args_hash: str, taint_epoch: int) -> bool:
-    """Module-level production helper: checks and consumes direct action approval across memory and SQLite."""
+    """Module-level production helper: checks and consumes direct action approval across memory and SQLite.
+    Anti-Burn DoS defense: Iterates candidate rows so invalid/junk rows do not burn valid approvals.
+    Anti-Replay defense: Atomically verifies and records nonce in persistent nonce store.
+    """
     sup = get_active_supervisor()
     if sup and sup.consume_approved_action(caller_id, tool, args_hash, taint_epoch):
         return True
@@ -395,18 +396,28 @@ def consume_approved_action(caller_id: str, tool: str, args_hash: str, taint_epo
             cur.execute("""
                 SELECT id, signature_blob FROM approved_actions
                 WHERE caller_id = ? AND tool = ? AND args_hash = ? AND taint_epoch = ? AND consumed = 0 AND expiry >= ?
-                ORDER BY id ASC LIMIT 1
+                ORDER BY id ASC
             """, (caller_id, tool, args_hash.lower(), int(taint_epoch), now))
-            row = cur.fetchone()
-            if row:
-                cur.execute("UPDATE approved_actions SET consumed = 1 WHERE id = ?", (row["id"],))
-                conn.commit()
+            rows = cur.fetchall()
+            for row in rows:
                 sig_blob = row["signature_blob"] if "signature_blob" in row.keys() else row[1]
                 if verify_signed_approval_evidence(sig_blob, caller_id, tool, args_hash, taint_epoch):
+                    b_dict = json.loads(sig_blob) if isinstance(sig_blob, str) else (sig_blob if isinstance(sig_blob, dict) else {})
+                    nonce = b_dict.get("nonce")
+                    nonce_exp = int(b_dict.get("expiry", now + 60))
+                    if nonce and not device_registry.check_and_record_consumed_nonce(nonce, nonce_exp):
+                        logger.warning("Module-level SQLite approved action row %s rejected: nonce already consumed (replay)!", row["id"])
+                        cur.execute("UPDATE approved_actions SET consumed = 1 WHERE id = ?", (row["id"],))
+                        conn.commit()
+                        continue
+
+                    cur.execute("UPDATE approved_actions SET consumed = 1 WHERE id = ?", (row["id"],))
+                    conn.commit()
                     return True
                 else:
-                    logger.warning("Module-level SQLite approved action row %s rejected: invalid or forged cryptographic evidence!", row["id"])
-                    return False
+                    logger.warning("Module-level SQLite approved action row %s rejected: invalid evidence, skipping junk row", row["id"])
+                    cur.execute("UPDATE approved_actions SET consumed = 1 WHERE id = ?", (row["id"],))
+                    conn.commit()
     except Exception as e:
         logger.warning("Could not consume module-level approved action from SQLite: %s", e)
     return False
@@ -620,8 +631,10 @@ class PolicySupervisor:
             logger.warning("Could not persist approved action to SQLite: %s", e)
 
     def consume_approved_action(self, caller_id: str, tool: str, args_hash: str, taint_epoch: int) -> bool:
-        """Directive 14 & Batch 32 & 35 & 37: Atomically checks and consumes a direct approved action
+        """Directive 14 & Batch 32 & 35 & 37 & 38: Atomically checks and consumes a direct approved action
         with cryptographic verification of signed evidence blob against enrolled device keys.
+        Anti-Burn DoS defense: Iterates candidate rows so invalid/junk rows do not burn valid approvals.
+        Anti-Replay defense: Atomically verifies and records nonce in persistent nonce store.
         """
         now = time.time()
         in_memory_found = False
@@ -637,7 +650,13 @@ class PolicySupervisor:
                 blob = exp[1] if isinstance(exp, tuple) else None
                 if now <= exp_time:
                     if verify_signed_approval_evidence(blob, caller_id, tool, args_hash, taint_epoch):
-                        in_memory_found = True
+                        b_dict = json.loads(blob) if isinstance(blob, str) else (blob if isinstance(blob, dict) else {})
+                        nonce = b_dict.get("nonce")
+                        nonce_exp = int(b_dict.get("expiry", exp_time))
+                        if nonce and not device_registry.check_and_record_consumed_nonce(nonce, nonce_exp):
+                            logger.warning("In-memory approved action rejected: nonce already consumed (replay)!")
+                        else:
+                            in_memory_found = True
                     else:
                         logger.warning("In-memory approved action rejected: invalid or forged cryptographic evidence!")
 
@@ -651,17 +670,29 @@ class PolicySupervisor:
                 cur.execute("""
                     SELECT id, signature_blob FROM approved_actions
                     WHERE caller_id = ? AND tool = ? AND args_hash = ? AND taint_epoch = ? AND consumed = 0 AND expiry >= ?
-                    ORDER BY id ASC LIMIT 1
+                    ORDER BY id ASC
                 """, (caller_id, tool, args_hash.lower(), int(taint_epoch), now))
-                row = cur.fetchone()
-                if row:
-                    cur.execute("UPDATE approved_actions SET consumed = 1 WHERE id = ?", (row["id"],))
-                    conn.commit()
+                rows = cur.fetchall()
+                for row in rows:
                     sig_blob = row["signature_blob"] if "signature_blob" in row.keys() else row[1]
                     if verify_signed_approval_evidence(sig_blob, caller_id, tool, args_hash, taint_epoch):
+                        b_dict = json.loads(sig_blob) if isinstance(sig_blob, str) else (sig_blob if isinstance(sig_blob, dict) else {})
+                        nonce = b_dict.get("nonce")
+                        nonce_exp = int(b_dict.get("expiry", now + 60))
+                        if nonce and not device_registry.check_and_record_consumed_nonce(nonce, nonce_exp):
+                            logger.warning("SQLite approved action row %s rejected: nonce already consumed (replay)!", row["id"])
+                            cur.execute("UPDATE approved_actions SET consumed = 1 WHERE id = ?", (row["id"],))
+                            conn.commit()
+                            continue
+
+                        cur.execute("UPDATE approved_actions SET consumed = 1 WHERE id = ?", (row["id"],))
+                        conn.commit()
                         db_consumed = True
+                        break
                     else:
-                        logger.warning("SQLite approved action row %s rejected: invalid or forged cryptographic evidence signature!", row["id"])
+                        logger.warning("Skipping invalid/forged SQLite approved action row %s; marking consumed to prevent DoS", row["id"])
+                        cur.execute("UPDATE approved_actions SET consumed = 1 WHERE id = ?", (row["id"],))
+                        conn.commit()
         except Exception as e:
             logger.warning("Could not consume approved action from SQLite: %s", e)
 

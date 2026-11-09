@@ -28,7 +28,10 @@ import homie
 import windows_tools
 import task_manager
 import assistant_timeline
-from voice import VoiceEngine
+from agent_tools import build_default_registry
+from chat_cli import load_mission
+from chat_core import AgentCore, ProviderError, TurnCancelled, build_system_prompt
+from voice import VoiceEngine, SentenceSpeechStreamer
 
 class HomieApi:
     """JS Bridge exposed to the webview via pywebview.api."""
@@ -43,11 +46,21 @@ class HomieApi:
         if not isinstance(message, dict):
             return
 
+        # Window controls are handled by pywebview, so the chat panel can be
+        # minimized reliably without depending on frameless-window behavior.
+        if 'minimize' in message:
+            if self._app.window:
+                self._app.window.minimize()
+
+        elif 'close' in message:
+            if self._app.window:
+                self._app.window.destroy()
+
         # 1. User typed an ask and submitted
-        if 'send' in message:
+        elif 'send' in message:
             text = str(message['send']).strip()
             if text:
-                self._app.tasks.submit_task('user_typed_ask', self._app.handle_user_ask, text, caller_id='desktop_user')
+                self._app.submit_user_turn('user_typed_ask', self._app.handle_user_ask, text, caller_id='desktop_user')
 
         # 2. Copy answer
         elif 'copy' in message:
@@ -78,9 +91,29 @@ class HomieApi:
             self._app.paused = False
             self._app.eval_js("window.ui.paused(false)")
 
+        # 8. Heartbeat notice actions
+        elif 'dismiss_notice' in message:
+            notice_id = str(message['dismiss_notice'])
+            if hasattr(self._app, 'heartbeat') and self._app.heartbeat:
+                self._app.heartbeat.dismiss_notice(notice_id)
+
+        elif 'get_inbox' in message:
+            if hasattr(self._app, 'heartbeat') and self._app.heartbeat:
+                notices = [n.to_dict() for n in self._app.heartbeat.load_inbox()]
+                self._app.eval_js(f"window.ui.inbox({json.dumps(notices)})")
+
 class HomieApp:
     def __init__(self):
         self.prefs = homie.get_prefs()
+        assistant_name = os.environ.get('HOMIE_NAME') or self.prefs.get('assistantName') or 'Homie'
+        import durable_memory
+        memory_store = durable_memory.get_default_memory_store()
+        self.agent_core = AgentCore(
+            build_system_prompt(str(assistant_name), load_mission(), facts=memory_store.list_facts()),
+            self.prefs,
+            tool_registry=build_default_registry(),
+            memory_store=memory_store,
+        )
         self.window = None
         self.voice = VoiceEngine(
             model_size=self.prefs.get('whisperModel', 'tiny'),
@@ -88,6 +121,12 @@ class HomieApp:
         )
         self.api = HomieApi(self)
         self.tasks = task_manager.get_task_manager()
+        import heartbeat_service
+        self.heartbeat = heartbeat_service.get_default_heartbeat_service()
+        self.heartbeat.on_surface_callback = self._handle_heartbeat_notice
+        self._ask_tasks = []
+        self._ask_tasks_lock = threading.Lock()
+        self._speech_stream_active = threading.Event()
         self.is_recording = False
         self.paused = False
         self.held_keys = set()
@@ -99,6 +138,20 @@ class HomieApp:
         self._physical_alt_down = False
         self.tray = None
         self.telegram = None
+
+    def _handle_heartbeat_notice(self, notice):
+        """Surfaces proactive alerts in UI or timeline."""
+        try:
+            assistant_timeline.record_timeline_event(
+                category="heartbeat",
+                title=notice.title,
+                summary=notice.message,
+                metadata={"notice_id": notice.notice_id, "severity": notice.severity}
+            )
+            msg = f"[{notice.title}] {notice.message}"
+            self.eval_js(f"window.ui.notice({json.dumps(msg)})")
+        except Exception as e:
+            print(f"[Heartbeat] Error surfacing notice: {e}")
 
     def start_telegram_bridge(self):
         """Starts the Telegram bridge if a bot token is available."""
@@ -131,19 +184,21 @@ class HomieApp:
                 pass
 
     def get_ui_html(self):
-        """Loads ui.html with orbs.js inlined at /*ORBS*/."""
-        ui_path = os.path.join(BASE_DIR, 'ui', 'ui.html')
-        orbs_path = os.path.join(BASE_DIR, 'ui', 'orbs.js')
+        """Load the Windows chat panel with a pywebview-compatible bridge."""
+        ui_path = os.path.join(BASE_DIR, 'ui', 'chat.html')
         with open(ui_path, 'r', encoding='utf-8') as f:
-            html = f.read()
-        with open(orbs_path, 'r', encoding='utf-8') as f:
-            orbs = f.read()
-        return html.replace('/*ORBS*/', orbs)
+            return f.read()
 
     def start_listening(self):
         """Initiates voice recording on hotkey press."""
-        if self.is_recording or self.is_processing or self.paused:
+        if self.is_recording or self.paused:
             return
+        if self.is_processing:
+            # Barge-in is accepted only after assistant audio has actually started.
+            if not self._speech_stream_active.is_set():
+                return
+            self.cancel_active_user_turns()
+        self._speech_stream_active.clear()
 
         self.is_recording = True
         self.show_window()
@@ -153,7 +208,9 @@ class HomieApp:
             if self.is_recording:
                 self.eval_js(f"window.ui.level({lvl:.3f})")
 
-        self.voice.start_recording(level_callback=on_level)
+        if self.voice.start_recording(level_callback=on_level) is False:
+            self.is_recording = False
+            self.eval_js("window.ui.stopped('Microphone unavailable')")
 
     @property
     def is_processing(self) -> bool:
@@ -175,7 +232,7 @@ class HomieApp:
         audio_data = self.voice.stop_recording()
 
         # Process via durable TaskManager with bounded workers and cancellation
-        self.tasks.submit_task('voice_audio_transcription', self._process_audio, audio_data)
+        self.submit_user_turn('voice_audio_transcription', self._process_audio, audio_data)
 
     def toggle_listening(self):
         """Toggles recording for press-to-talk mode."""
@@ -184,52 +241,93 @@ class HomieApp:
         else:
             self.start_listening()
 
-    def _process_audio(self, audio_data):
+    def submit_user_turn(self, name, function, *args, **kwargs):
+        """Track user-initiated turns so barge-in cancels only those turns."""
+        with self._ask_tasks_lock:
+            self._ask_tasks = [task for task in self._ask_tasks if task.status.value in ('PENDING', 'RUNNING')]
+            task = self.tasks.submit_task(name, function, *args, **kwargs)
+            self._ask_tasks.append(task)
+            return task
+
+    def cancel_active_user_turns(self):
+        with self._ask_tasks_lock:
+            active = [task for task in self._ask_tasks if task.status.value in ('PENDING', 'RUNNING')]
+        for task in active:
+            task.cancel()
+        self._speech_stream_active.clear()
+
+    def _process_audio(self, audio_data, cancel_event=None):
         self.is_processing = True
         try:
+            if cancel_event and cancel_event.is_set():
+                return
             # Transcribe speech
             text = self.voice.transcribe(audio_data)
+            if cancel_event and cancel_event.is_set():
+                return
             if not text:
                 # No speech heard; open typing composer
                 self.eval_js("window.ui.compose(true)")
                 return
 
-            self.handle_user_ask(text)
+            self.handle_user_ask(text, caller_id='desktop_voice', cancel_event=cancel_event)
         finally:
             self.is_processing = False
 
-    def handle_user_ask(self, text, caller_id='desktop_voice'):
+    def handle_user_ask(self, text, caller_id='desktop_voice', cancel_event=None):
         """Handles an ask either from voice or typing."""
         self.is_processing = True
+        speak = caller_id == 'desktop_voice' or bool(self.prefs.get('speak', False))
+        self._speech_stream_active.clear()
+        speech = SentenceSpeechStreamer(
+            enabled=speak,
+            on_start=self._speech_stream_active.set,
+        )
         try:
+            if cancel_event and cancel_event.is_set():
+                return
             self.eval_js(f"window.ui.words({json.dumps(text)})")
             self.eval_js("window.ui.think()")
+            self.prefs = homie.get_prefs()
+            self.agent_core.prefs = self.prefs
 
-            # 1. Try instant command (<50ms, $0)
-            handled, fast_msg = homie.try_fast_command(text, caller_id=caller_id)
-            if handled:
-                time.sleep(0.05)
-                self.eval_js(f"window.ui.line({json.dumps('✓ ' + fast_msg)})")
+            def on_delta(delta):
+                if cancel_event and cancel_event.is_set():
+                    return
+                speech.feed(delta)
+                self.eval_js(f"window.ui.line({json.dumps('… ' + delta)})")
+
+            result = self.agent_core.turn(
+                text,
+                on_delta,
+                caller_id=caller_id,
+                quick_action_handler=homie.try_fast_command,
+                cancel_event=cancel_event,
+            )
+            if cancel_event and cancel_event.is_set():
+                speech.cancel()
                 return
-
-            # 2. Invoke AI brain (Google AI Studio, NVIDIA NIM, Groq, Ollama, Claude)
-            def on_step(line):
-                self.eval_js(f"window.ui.line({json.dumps(line)})")
-
-            result = homie.run_ai(text, step_callback=on_step)
-            # Ensure final response is displayed
-            if result and not result.startswith(('·', '▸', '✓')):
-                self.eval_js(f"window.ui.line({json.dumps('✓ ' + result)})")
-
+            speech.finish()
+            self.eval_js(f"window.ui.line({json.dumps('✓ ' + result)})")
+        except TurnCancelled:
+            speech.cancel()
+            return
+        except ProviderError as e:
+            speech.cancel()
+            self.eval_js(f"window.ui.line({json.dumps('· ' + str(e))})")
         except Exception as e:
+            speech.cancel()
             self.eval_js(f"window.ui.line({json.dumps('· Error: ' + str(e))})")
         finally:
+            if not self.is_recording:
+                self._speech_stream_active.clear()
             self.is_processing = False
 
     def show_window(self):
-        """Ensures the floating overlay window is visible and on top."""
+        """Restores the chat window when a hotkey arrives while it is minimized."""
         if self.window:
             try:
+                self.window.restore()
                 self.window.show()
             except Exception:
                 pass
@@ -419,6 +517,10 @@ class HomieApp:
         # 0. Start unified Assistant Timeline monitor & retention pruner
         assistant_timeline.start_timeline_monitor()
 
+        # 0b. Start proactive heartbeat scheduled checks loop
+        if hasattr(self, 'heartbeat') and self.heartbeat:
+            self.heartbeat.start()
+
         # 1. Start global hotkey listener
         self.start_hotkey_listener()
 
@@ -428,30 +530,42 @@ class HomieApp:
         # 3. Start Telegram remote control bridge (if token configured)
         self.start_telegram_bridge()
 
-        # 4. Create PyWebView transparent floating overlay
+        # 4. Create a compact, normal Windows chat window. A native frame keeps
+        # minimize/restore behavior predictable; the chat toolbar has its own
+        # minimize button as well.
         html_content = self.get_ui_html()
         monitors = windows_tools.get_monitors()
         primary = monitors[0] if monitors else {'x': 0, 'y': 0}
-        win_x = primary.get('x', 0) + 24
-        win_y = primary.get('y', 0) + 24
+        window_width = min(380, max(340, primary.get('width', 380) - 32))
+        window_height = min(500, max(420, primary.get('height', 500) - 48))
+        win_x = primary.get('x', 0) + max(16, primary.get('width', window_width) - window_width - 20)
+        win_y = primary.get('y', 0) + 20
 
         self.window = webview.create_window(
             title='Homie',
             html=html_content,
             js_api=self.api,
-            width=500,
-            height=430,
+            width=window_width,
+            height=window_height,
             x=win_x,
             y=win_y,
-            frameless=True,
-            on_top=True,
-            transparent=True,
-            easy_drag=True
+            min_size=(340, 420),
+            resizable=True,
+            frameless=False,
+            on_top=False,
+            transparent=False,
+            easy_drag=False
         )
 
         def on_loaded():
             self.eval_js("window.ui.status('Homie Ready', false)")
             self.eval_js("window.ui.mode(true)")
+            if hasattr(self, 'heartbeat') and self.heartbeat:
+                pending = self.heartbeat.get_pending_held_notices()
+                if pending:
+                    self.heartbeat.mark_notices_delivered()
+                    for p in pending:
+                        self.eval_js(f"window.ui.notice({json.dumps('[' + p.title + '] ' + p.message)})")
 
         self.window.events.loaded += on_loaded
 

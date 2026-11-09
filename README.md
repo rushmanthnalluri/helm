@@ -13,9 +13,9 @@
 
 ## 🌟 What is Homie?
 
-**Homie** is an open-source, hold-to-talk desktop voice assistant built natively for **Windows 10 and Windows 11**. 
+**Homie** is an open-source desktop voice and chat assistant built natively for **Windows 10 and Windows 11**.
 
-Inspired by macOS's [Atticus](https://github.com/SaarthurR/atticus-mac) by Caleb Writes Code and SaarthurR, Homie brings the entire concept to Windows with native Windows automation, multi-display support, edge-to-edge floating acrylic UI, and local on-device speech transcription.
+Inspired by macOS's [Atticus](https://github.com/SaarthurR/atticus-mac) by Caleb Writes Code and SaarthurR, Homie brings the concept to Windows with native Windows automation, a compact desktop chat window, and local on-device speech transcription.
 
 ### Key Capabilities
 
@@ -24,7 +24,7 @@ Inspired by macOS's [Atticus](https://github.com/SaarthurR/atticus-mac) by Caleb
 - **👀 Screen Vision**: Ask *"What's on my screen?"* or *"Where is the save button?"* and Homie takes high-resolution display captures to inspect controls.
 - **🪟 Windows Window Management**: *"Put Chrome on the left and VS Code on the right"* snaps windows across any number of monitors while respecting your taskbar.
 - **🎙️ On-Device Privacy**: Uses on-device `faster-whisper` (CTranslate2 INT8) for transcription. Your audio never leaves your computer.
-- **✨ Glowing Thinking Orb UI**: Features Jakub Antalik's animated thinking-orbs Canvas engine in a floating translucent card that never steals focus from what you're doing.
+- **Compact chat window**: Type or talk in a small, resizable chat with visible transcripts, streamed replies, and a minimize button.
 - **🛡️ Safe by Default**: Prompts you with an interactive Allow / Don't Allow card before running destructive operations (`rmdir /s`, `format`, `del /f /q`, system shutdown).
 - **🧠 Memory & Rules**: Say *"Remember to always write replies in bullet points"* and every future prompt includes your preferences.
 
@@ -141,7 +141,19 @@ Double-click `run.bat` or run:
 python app.py
 ```
 
-Homie will appear in your **System Tray** and float a glowing, unobtrusive acrylic card in the corner of your primary display.
+Homie opens a compact chat window and adds a **System Tray** icon. Minimize it to keep it out of the way; the global push-to-talk shortcut works while Homie remains running.
+
+### Text-First Terminal Chat
+
+Start a streaming text conversation using the provider configured in Homie's settings:
+
+```powershell
+python chat_cli.py
+```
+
+The terminal chat keeps conversation history in memory until you exit. It can read system vitals and list recent Downloads through Homie's ActionBroker. Those read-only results are sent to the configured model when a tool is used. Consequential tools are not exposed in this chat. Set `HOMIE_NAME` to customize the assistant name, and configure provider credentials with `GEMINI_API_KEY`, `NVIDIA_API_KEY`, or `GROQ_API_KEY` (Ollama needs no key).
+
+The desktop app's typed asks and push-to-talk transcripts enter the same tool-aware conversation core. Transcription uses the existing local Whisper engine; replies stream into the overlay and are spoken in sentence chunks through Windows SAPI. The transcript remains visible in the overlay, and starting push-to-talk while Homie is speaking interrupts speech and cancels the current user turn. The terminal remains available as a text-only interface.
 
 ### Global Hotkeys
 | Hotkey | Action |
@@ -202,13 +214,14 @@ python homie.py --fast "pause music"
 
 ```
 d:\homie\
-├── app.py                 # PyWebView floating acrylic GUI, hotkeys, system tray
+├── app.py                 # PyWebView chat window, hotkeys, system tray
 ├── homie.py               # Core brain, Claude Code bridge, fast command engine, safety gate
 ├── windows_tools.py       # Windows native automation (win32gui, monitors, media keys, mss)
 ├── voice.py               # Local Whisper speech-to-text & live audio RMS visualizer
 ├── ui/
-│   ├── ui.html            # Floating overlay card & reactive conversation thread
-│   ├── orbs.js            # Thinking-orbs Canvas particle engine (MIT, Jakub Antalik)
+│   ├── chat.html          # Compact chat, transcript, voice and minimize controls
+│   ├── ui.html            # Legacy floating-card interface
+│   ├── orbs.js            # Legacy thinking-orbs Canvas engine
 │   ├── settings.html      # Settings pane (hotkey, voice models, safe mode)
 │   ├── AppIcon.ico        # Windows app icon
 │   └── AppIcon.png        # Icon asset
@@ -229,10 +242,10 @@ d:\homie\
 To run the full regression test suite:
 
 ```powershell
-python -m unittest discover -s tests -v
+python -m pytest -q
 ```
 
-All 14 core tests verify window discovery, media hardware controls, instant commands, memory rule storage, search parsing, and voice level computation.
+Pytest loads `tests/conftest.py`, which resets safety state between tests.
 
 ---
 

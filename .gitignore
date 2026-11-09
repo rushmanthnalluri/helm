@@ -25,6 +25,9 @@ wheels/
 *.log
 *.key
 *.bin
+.env
+.env.*
+!.env.example
 claude_*.png
 *.jsonl
 
