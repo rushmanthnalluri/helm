@@ -852,7 +852,12 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
             self._send_response(200, "text/html; charset=utf-8", html)
         elif path == "/status":
             conf = load_phone_config()
-            vitals = windows_tools.get_system_vitals()
+            import action_broker
+            ok, msg, res = action_broker.execute_action('homie_get_vitals', {}, caller_id='phone_gateway')
+            try:
+                vitals = json.loads(res) if ok and isinstance(res, str) else (res if isinstance(res, dict) else {})
+            except Exception:
+                vitals = {}
             data = {
                 "status": "online",
                 "phone_enabled": conf.get("enabled", True),

@@ -7,11 +7,129 @@ import sys
 import time
 import subprocess
 import tempfile
+import re
+from typing import Dict, Any, Tuple, List
 import win32gui
 import win32con
 import win32api
 import win32process
 from PIL import ImageGrab, Image, ImageDraw, ImageFont
+
+def canonicalize_keyboard_arguments(arguments: Dict[str, Any]) -> Tuple[bool, bool, List[int], List[str]]:
+    """Canonicalizes all keyboard and input arguments across all schemas at the injector level.
+    Returns: (enter_detected: bool, ctrl_alt_p_detected: bool, vks: List[int], tokens: List[str])
+    """
+    KEY_FIELDS = (
+        "key", "keys", "hotkey", "shortcut", "sequence",
+        "vk", "keycode", "key_code", "keys_to_press", "chars", "input"
+    )
+    ENTER_KEY_TOKENS = {
+        "enter", "return", "numpadenter", "numpad_enter",
+        "{enter}", "{return}", "cr", "ret", "\n", "\r"
+    }
+
+    def _flatten(v) -> List[Any]:
+        if v is None:
+            return []
+        if isinstance(v, (list, tuple, set)):
+            res = []
+            for item in v:
+                res.extend(_flatten(item))
+            return res
+        return [v]
+
+    enter_detected = False
+    ctrl_alt_p_detected = False
+    detected_vks = []
+    tokens = []
+
+    # 1. Text field inspection:
+    # If text is string: literal \n or \r indicates form submission / Enter
+    # If text is a list/tuple: flatten and check individual items (e.g. text=["enter"] or text=["\n"])
+    text_val = arguments.get("text")
+    if text_val is not None:
+        if isinstance(text_val, str):
+            if "\n" in text_val or "\r" in text_val:
+                enter_detected = True
+        else:
+            flat_text = _flatten(text_val)
+            for item in flat_text:
+                if item is None:
+                    continue
+                s_item = str(item)
+                if "\n" in s_item or "\r" in s_item:
+                    enter_detected = True
+                    break
+                s_clean = s_item.strip().lower()
+                if s_clean in ENTER_KEY_TOKENS or s_clean in ("13", "0x0d", "0xd", "13.0"):
+                    enter_detected = True
+                    break
+
+    # 2. Key fields inspection (flattening all nested lists/structures)
+    for k_field in KEY_FIELDS:
+        val = arguments.get(k_field)
+        if val is None or val == "":
+            continue
+        flat_items = _flatten(val)
+        for raw_item in flat_items:
+            if raw_item is None or raw_item == "":
+                continue
+
+            # Check numeric VK codes (handles int, float e.g. 13.0, and numeric/hex strings)
+            is_vk_13 = False
+            if isinstance(raw_item, (int, float)):
+                try:
+                    if int(raw_item) == 13:
+                        is_vk_13 = True
+                except (ValueError, OverflowError):
+                    pass
+            else:
+                s_raw = str(raw_item).strip().lower()
+                if s_raw in ("13", "0x0d", "0xd", "13.0"):
+                    is_vk_13 = True
+                else:
+                    try:
+                        if int(float(s_raw)) == 13:
+                            is_vk_13 = True
+                    except Exception:
+                        pass
+
+            if is_vk_13:
+                enter_detected = True
+                detected_vks.append(13)
+
+            # Check for unstripped newline / carriage return (e.g. key="\n")
+            str_item = str(raw_item)
+            if "\n" in str_item or "\r" in str_item:
+                enter_detected = True
+
+            raw_lower = str_item.lower().strip()
+            tokens.append(raw_lower)
+
+            if raw_lower in ENTER_KEY_TOKENS:
+                enter_detected = True
+                detected_vks.append(13)
+
+            # Check compound shortcuts (e.g. "ctrl+enter", "Ctrl + Return")
+            parts = [re.sub(r'[\+_\s\-]+', '', p) for p in re.split(r'[\+,\s\-]+', raw_lower) if p]
+            if any(p in ENTER_KEY_TOKENS for p in parts):
+                enter_detected = True
+
+            norm = re.sub(r'[\+_\s\-]+', '', raw_lower)
+            if norm.endswith("enter") or norm.endswith("return"):
+                enter_detected = True
+
+    # 3. Comprehensive Ctrl+Alt+P chord detection across all fields and tokens
+    all_raw = " ".join(tokens) + " " + str(arguments.get("text", "")).lower()
+    norm_all = re.sub(r'[\+_\s\-]+', '', all_raw)
+    if "ctrl" in norm_all and "alt" in norm_all and "p" in norm_all:
+        ctrl_alt_p_detected = True
+    elif any(norm == "ctrlaltp" for norm in [re.sub(r'[\+_\s\-]+', '', t) for t in tokens]):
+        ctrl_alt_p_detected = True
+    elif {"ctrl", "alt", "p"}.issubset(set(tokens)):
+        ctrl_alt_p_detected = True
+
+    return enter_detected, ctrl_alt_p_detected, detected_vks, tokens
 
 def enable_dpi_awareness():
     """Sets per-monitor DPI awareness (V2) to guarantee exact multi-monitor coordinate precision."""

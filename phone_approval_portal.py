@@ -714,4 +714,19 @@ def verify_action_approval(
     if not check_and_record_consumed_nonce(nonce, expiry):
         return False, "REPLAY_REJECTED: Approval nonce has already been consumed"
 
+    # Step 3: Production Approval Cache Relay (In-memory + cross-process SQLite)
+    target_caller = approval.get("caller_id") or "worker"
+    remaining_ttl = max(1.0, float(expiry - now))
+    try:
+        import homie_supervisor
+        homie_supervisor.record_approved_action(
+            caller_id=target_caller,
+            tool=expected_action,
+            args_hash=str(expected_payload_hash).lower(),
+            taint_epoch=approval_epoch,
+            ttl=min(remaining_ttl, 120.0)
+        )
+    except Exception as e:
+        logger.warning("Could not relay approved action to supervisor: %s", e)
+
     return True, "Approval signature and action binding verified"

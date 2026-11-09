@@ -92,6 +92,9 @@ class HomieApp:
         self.paused = False
         self.held_keys = set()
         self.hotkey_listener = None
+        self._ll_hook = None
+        self._hook_proc = None
+        self._running_hotkey = True
         self.tray = None
         self.telegram = None
 
@@ -237,9 +240,57 @@ class HomieApp:
             except Exception:
                 pass
 
-    def start_hotkey_listener(self):
-        """Listens for the hold-to-talk shortcut globally across Windows using native GetAsyncKeyState."""
+    def handle_keyboard_event(self, nCode: int, wParam: int, lParam: int) -> int:
+        """Low-level keyboard hook callback.
+        Guarantees physical console presence for pairing hotkey (Ctrl + Alt + P).
+        Rejects all synthetic/injected keystrokes (LLKHF_INJECTED | LLKHF_LOWER_IL_INJECTED).
+        """
         import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        WM_KEYDOWN = 0x0100
+        WM_SYSKEYDOWN = 0x0104
+        LLKHF_INJECTED = 0x00000001
+        LLKHF_LOWER_IL_INJECTED = 0x00000002
+
+        if nCode >= 0 and wParam in (WM_KEYDOWN, WM_SYSKEYDOWN):
+            class KBDLLHOOKSTRUCT(ctypes.Structure):
+                _fields_ = [
+                    ("vkCode", wintypes.DWORD),
+                    ("scanCode", wintypes.DWORD),
+                    ("flags", wintypes.DWORD),
+                    ("time", wintypes.DWORD),
+                    ("dwExtraInfo", ctypes.c_ulong),
+                ]
+            kb = KBDLLHOOKSTRUCT.from_address(lParam)
+            is_injected = bool(kb.flags & (LLKHF_INJECTED | LLKHF_LOWER_IL_INJECTED))
+            if is_injected:
+                # Reject any synthesized input attempting to trigger pairing ceremony
+                if self._ll_hook:
+                    return user32.CallNextHookEx(self._ll_hook, nCode, wParam, lParam)
+                return 0
+
+            # Only genuine physical hardware keystrokes reach here
+            if kb.vkCode == 0x50:  # VK_P
+                ctrl_down = bool(user32.GetAsyncKeyState(0x11) & 0x8000)
+                alt_down = bool(user32.GetAsyncKeyState(0x12) & 0x8000)
+                if ctrl_down and alt_down:
+                    import phone_approval_portal
+                    sess_id = phone_approval_portal.start_local_enrollment(ttl_seconds=120.0)
+                    if sess_id:
+                        # Display FULL session ID so mobile device can enroll
+                        self.eval_js(f"window.ui.notice('Pairing ceremony active: {sess_id}')")
+
+        if self._ll_hook:
+            return user32.CallNextHookEx(self._ll_hook, nCode, wParam, lParam)
+        return 0
+
+    def start_hotkey_listener(self):
+        """Listens for the hold-to-talk shortcut globally across Windows using native GetAsyncKeyState,
+        and installs a low-level keyboard hook (WH_KEYBOARD_LL) to enforce physical presence for pairing.
+        """
+        import ctypes
+        from ctypes import wintypes
         VK_CONTROL = 0x11
         VK_SHIFT = 0x10
         VK_MENU = 0x12   # Alt key
@@ -248,6 +299,26 @@ class HomieApp:
 
         def is_down(vk):
             return bool(ctypes.windll.user32.GetAsyncKeyState(vk) & 0x8000)
+
+        # 1. Dedicated low-level hook thread with message pump for physical-only Ctrl+Alt+P
+        def hook_worker():
+            try:
+                user32 = ctypes.windll.user32
+                HOOKPROC = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
+                self._hook_proc = HOOKPROC(self.handle_keyboard_event)
+                self._ll_hook = user32.SetWindowsHookExW(13, self._hook_proc, None, 0)
+                msg = wintypes.MSG()
+                while self._running_hotkey:
+                    b_ret = user32.GetMessageW(ctypes.byref(msg), None, 0, 0)
+                    if b_ret in (0, -1):
+                        break
+                    user32.TranslateMessage(ctypes.byref(msg))
+                    user32.DispatchMessageW(ctypes.byref(msg))
+            except Exception:
+                pass
+
+        t_hook = threading.Thread(target=hook_worker, daemon=True)
+        t_hook.start()
 
         def hotkey_worker():
             was_holding = False
@@ -288,14 +359,6 @@ class HomieApp:
                         else:
                             self.show_window()
                             self.eval_js("window.ui.notice('Quick Note scratchpad active')")
-                        time.sleep(0.4)
-
-                    # Phone Pairing Ceremony trigger: Ctrl + Alt + P (physical console presence only)
-                    if ctrl and alt and is_down(0x50): # VK_P
-                        import phone_approval_portal
-                        sess_id = phone_approval_portal.start_local_enrollment(ttl_seconds=120.0)
-                        if sess_id:
-                            self.eval_js(f"window.ui.notice('Pairing ceremony active: {sess_id[:8]}')")
                         time.sleep(0.4)
 
                 except Exception:

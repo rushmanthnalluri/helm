@@ -56,15 +56,27 @@ class ActionBroker:
 
     LEGACY_TOOL_MAP = {
         "media_control": "homie_control_media",
+        "control_media": "homie_control_media",
         "place_window": "homie_place_window",
         "play_youtube": "homie_play_youtube",
         "open_app_or_url": "homie_launch_app",
+        "launch_app": "homie_launch_app",
         "lock_pc": "homie_lock_workstation",
         "get_clipboard": "homie_get_clipboard",
         "set_clipboard": "homie_set_clipboard",
         "list_downloads": "homie_list_downloads",
         "get_system_vitals": "homie_get_vitals",
+        "get_vitals": "homie_get_vitals",
         "send_chat_message": "homie_send_chat",
+        "send_chat": "homie_send_chat",
+        "close_app": "homie_close_app",
+        "kill_process": "homie_kill_process",
+        "kill_process_by_pid": "homie_kill_process",
+        "capture_screen": "homie_capture_screen",
+        "capture_screens": "homie_capture_screen",
+        "safe_command": "homie_safe_command",
+        "execute_safe_command": "homie_safe_command",
+        "get_top_processes": "homie_get_top_processes",
     }
 
     def normalize_tool_name(self, name: str) -> str:

@@ -237,6 +237,16 @@ MCP_TOOLS = [
         }
     },
     {
+        "name": "homie_kill_process",
+        "description": "Terminates a Windows process safely by PID with protected process guardrails.",
+        "capabilityTier": "WRITE_EXEC",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"pid": {"type": "integer"}},
+            "required": ["pid"]
+        }
+    },
+    {
         "name": "homie_list_downloads",
         "description": "Lists recent files in the Windows Downloads directory.",
         "capabilityTier": "READ_ONLY",
@@ -559,6 +569,11 @@ def execute_mcp_tool(name, arguments, caller_id="mcp_client", client_token=None)
         elif name in ("homie_close_app", "close_app"):
             app = arguments.get("app_name", "") or arguments.get("target", "")
             ok, msg = windows_tools.close_app(app)
+            output = msg
+
+        elif name in ("homie_kill_process", "kill_process", "kill_process_by_pid"):
+            pid = arguments.get("pid")
+            ok, msg = windows_tools.kill_process_by_pid(pid)
             output = msg
 
         elif name in ("homie_list_downloads", "list_downloads"):

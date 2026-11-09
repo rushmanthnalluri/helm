@@ -80,6 +80,123 @@ def is_domain_allowed(candidate: str, allowed: str) -> bool:
     return c == a or c.endswith("." + a)
 
 
+def canonicalize_keyboard_arguments(arguments: Dict[str, Any]) -> Tuple[bool, bool, List[int], List[str]]:
+    """Canonicalizes all keyboard and input arguments across all schemas.
+    Returns: (enter_detected: bool, ctrl_alt_p_detected: bool, vks: List[int], tokens: List[str])
+    """
+    KEY_FIELDS = (
+        "key", "keys", "hotkey", "shortcut", "sequence",
+        "vk", "keycode", "key_code", "keys_to_press", "chars", "input"
+    )
+    ENTER_KEY_TOKENS = {
+        "enter", "return", "numpadenter", "numpad_enter",
+        "{enter}", "{return}", "cr", "ret", "\n", "\r"
+    }
+
+    def _flatten(v) -> List[Any]:
+        if v is None:
+            return []
+        if isinstance(v, (list, tuple, set)):
+            res = []
+            for item in v:
+                res.extend(_flatten(item))
+            return res
+        return [v]
+
+    enter_detected = False
+    ctrl_alt_p_detected = False
+    detected_vks = []
+    tokens = []
+
+    # 1. Text field inspection:
+    # If text is string: literal \n or \r indicates form submission / Enter
+    # If text is a list/tuple: flatten and check individual items (e.g. text=["enter"] or text=["\n"])
+    text_val = arguments.get("text")
+    if text_val is not None:
+        if isinstance(text_val, str):
+            if "\n" in text_val or "\r" in text_val:
+                enter_detected = True
+        else:
+            flat_text = _flatten(text_val)
+            for item in flat_text:
+                if item is None:
+                    continue
+                s_item = str(item)
+                if "\n" in s_item or "\r" in s_item:
+                    enter_detected = True
+                    break
+                s_clean = s_item.strip().lower()
+                if s_clean in ENTER_KEY_TOKENS or s_clean in ("13", "0x0d", "0xd", "13.0"):
+                    enter_detected = True
+                    break
+
+    # 2. Key fields inspection (flattening all nested lists/structures)
+    for k_field in KEY_FIELDS:
+        val = arguments.get(k_field)
+        if val is None or val == "":
+            continue
+        flat_items = _flatten(val)
+        for raw_item in flat_items:
+            if raw_item is None or raw_item == "":
+                continue
+
+            # Check numeric VK codes (handles int, float e.g. 13.0, and numeric/hex strings)
+            is_vk_13 = False
+            if isinstance(raw_item, (int, float)):
+                try:
+                    if int(raw_item) == 13:
+                        is_vk_13 = True
+                except (ValueError, OverflowError):
+                    pass
+            else:
+                s_raw = str(raw_item).strip().lower()
+                if s_raw in ("13", "0x0d", "0xd", "13.0"):
+                    is_vk_13 = True
+                else:
+                    try:
+                        if int(float(s_raw)) == 13:
+                            is_vk_13 = True
+                    except Exception:
+                        pass
+
+            if is_vk_13:
+                enter_detected = True
+                detected_vks.append(13)
+
+            # Check for unstripped newline / carriage return (e.g. key="\n")
+            str_item = str(raw_item)
+            if "\n" in str_item or "\r" in str_item:
+                enter_detected = True
+
+            raw_lower = str_item.lower().strip()
+            tokens.append(raw_lower)
+
+            if raw_lower in ENTER_KEY_TOKENS:
+                enter_detected = True
+                detected_vks.append(13)
+
+            # Check compound shortcuts (e.g. "ctrl+enter", "Ctrl + Return")
+            parts = [re.sub(r'[\+_\s\-]+', '', p) for p in re.split(r'[\+,\s\-]+', raw_lower) if p]
+            if any(p in ENTER_KEY_TOKENS for p in parts):
+                enter_detected = True
+
+            norm = re.sub(r'[\+_\s\-]+', '', raw_lower)
+            if norm.endswith("enter") or norm.endswith("return"):
+                enter_detected = True
+
+    # 3. Comprehensive Ctrl+Alt+P chord detection across all fields and tokens
+    all_raw = " ".join(tokens) + " " + str(arguments.get("text", "")).lower()
+    norm_all = re.sub(r'[\+_\s\-]+', '', all_raw)
+    if "ctrl" in norm_all and "alt" in norm_all and "p" in norm_all:
+        ctrl_alt_p_detected = True
+    elif any(norm == "ctrlaltp" for norm in [re.sub(r'[\+_\s\-]+', '', t) for t in tokens]):
+        ctrl_alt_p_detected = True
+    elif {"ctrl", "alt", "p"}.issubset(set(tokens)):
+        ctrl_alt_p_detected = True
+
+    return enter_detected, ctrl_alt_p_detected, detected_vks, tokens
+
+
 class PolicyEnvelope:
     """Represents a bounded workstation policy envelope signed cryptographically on phone."""
 
@@ -233,14 +350,16 @@ class PolicyEnvelope:
             if not any(is_domain_allowed(current_domain, d) for d in self.allowed_domains):
                 return False, f"DENY: Target domain '{current_domain}' outside envelope domain scope: {self.allowed_domains}", 0
 
+        # Canonicalize keyboard arguments for precision Enter submit and synthetic Ctrl+Alt+P detection
+        enter_detected, ctrl_alt_p_detected, _, _ = canonicalize_keyboard_arguments(arguments)
+
         # Physical console enrollment hotkey (Ctrl + Alt + P) can NEVER be synthesized
-        KEY_INPUT_FIELDS = ("key", "keys", "hotkey", "shortcut", "sequence", "keys_to_press", "text")
-        for k_field in KEY_INPUT_FIELDS:
-            kval = arguments.get(k_field)
-            if kval:
-                norm_str = re.sub(r'[\+_\s\-]+', '', str(kval).lower())
-                if "ctrl" in norm_str and "alt" in norm_str and "p" in norm_str:
-                    return False, "DENY: Synthetic simulation of physical console pairing hotkey (Ctrl+Alt+P) is strictly prohibited.", 0
+        if ctrl_alt_p_detected:
+            return False, "DENY: Synthetic simulation of physical console pairing hotkey (Ctrl+Alt+P) is strictly prohibited.", 0
+
+        # Check Enter-to-submit form pattern
+        if enter_detected:
+            return False, "DENY: Keystroke contains Enter-to-submit form submission. Requires per-step step-up human approval.", 0
 
         # Non-bypassable high-risk class check (tool name)
         for high_risk_kw in HIGH_RISK_PER_STEP_CLASSES:
@@ -249,61 +368,11 @@ class PolicyEnvelope:
 
         # Semantic High-Risk Control & Stealth Submission Detection
         elem_name = str(arguments.get("element_name", "")).lower()
-        text_arg = str(arguments.get("text", ""))
 
         # Check element name against high-risk keywords (e.g. "Continue", "Next", "Agree" in payment/submission context)
         for kw in HIGH_RISK_CONTROL_KEYWORDS:
             if kw in elem_name:
                 return False, f"DENY: Semantic high-risk control detected ('{elem_name}' matches '{kw}'). Requires per-step step-up human approval.", 0
-
-        # Check Enter-to-submit form pattern
-        enter_detected = False
-        # 1. Newline in prose text represents submission
-        if "\n" in text_arg or "\r" in text_arg:
-            enter_detected = True
-
-        # 2. Key / hotkey / keycode inspection (tokens, combos, VK 13)
-        if not enter_detected:
-            ENTER_KEY_TOKENS = {
-                "enter", "return", "numpadenter", "numpad_enter",
-                "{enter}", "{return}", "cr", "ret"
-            }
-            KEY_FIELDS = (
-                "key", "keys", "hotkey", "shortcut", "sequence",
-                "vk", "keycode", "key_code", "keys_to_press"
-            )
-            for k_field in KEY_FIELDS:
-                val = arguments.get(k_field)
-                if val is None or val == "":
-                    continue
-                # Direct numeric keycode 13 (VK_RETURN) or hex representation
-                is_vk_13 = (isinstance(val, int) and val == 13) or (str(val).strip().lower() in ("13", "0x0d", "0xd"))
-                if is_vk_13:
-                    enter_detected = True
-                    break
-                if isinstance(val, (list, tuple, set)):
-                    raw_items = [str(x) for x in val]
-                else:
-                    raw_items = [str(val)]
-                for raw_item in raw_items:
-                    raw_lower = raw_item.lower().strip()
-                    if raw_lower in ENTER_KEY_TOKENS:
-                        enter_detected = True
-                        break
-                    # Split compound combos like "ctrl+enter" or "Ctrl + Return"
-                    parts = [re.sub(r'[\+_\s\-]+', '', p) for p in re.split(r'[\+,\s\-]+', raw_lower) if p]
-                    if any(p in ENTER_KEY_TOKENS for p in parts):
-                        enter_detected = True
-                        break
-                    norm = re.sub(r'[\+_\s\-]+', '', raw_lower)
-                    if norm.endswith("enter") or norm.endswith("return"):
-                        enter_detected = True
-                        break
-                if enter_detected:
-                    break
-
-        if enter_detected:
-            return False, "DENY: Keystroke contains Enter-to-submit form submission. Requires per-step step-up human approval.", 0
 
         with self._envelope_lock:
             # Check step budget with active reservations

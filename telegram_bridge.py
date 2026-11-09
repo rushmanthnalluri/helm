@@ -21,6 +21,7 @@ if BASE_DIR not in sys.path:
 
 import homie
 import windows_tools
+import action_broker
 
 TELEGRAM_API_BASE = "https://api.telegram.org"
 _SHARED_WHISPER = None
@@ -329,53 +330,60 @@ class TelegramBridge:
         self.answer_callback_query(callback_query_id)
 
         if data == 'action_play_pause':
-            ok, msg = windows_tools.control_media('play_pause')
+            ok, msg, _ = action_broker.execute_action('homie_control_media', {'action': 'play_pause'}, caller_id='telegram_remote')
             self.send_message(chat_id, f"🎵 {msg}")
 
         elif data == 'action_next':
-            ok, msg = windows_tools.control_media('next')
+            ok, msg, _ = action_broker.execute_action('homie_control_media', {'action': 'next'}, caller_id='telegram_remote')
             self.send_message(chat_id, f"🎵 {msg}")
 
         elif data == 'action_mute':
-            ok, msg = windows_tools.control_media('mute')
+            ok, msg, _ = action_broker.execute_action('homie_control_media', {'action': 'mute'}, caller_id='telegram_remote')
             self.send_message(chat_id, f"🎵 {msg}")
 
         elif data == 'action_screen':
             self.send_message(chat_id, "📸 Capturing desktop...")
-            screens = windows_tools.capture_screens()
+            ok, msg, res = action_broker.execute_action('homie_capture_screen', {}, caller_id='telegram_remote')
+            screens = re.findall(r'([A-Za-z]:\\[^\s,]+\.png)', str(res)) if ok else []
             if screens:
                 for idx, sc in enumerate(screens):
                     self.send_photo(chat_id, sc, caption=f"Display {idx + 1} ({time.strftime('%I:%M:%S %p')})")
             else:
-                self.send_message(chat_id, "Could not capture display.")
+                self.send_message(chat_id, f"Could not capture display: {msg}")
 
         elif data == 'action_inspect':
             self.send_message(chat_id, "📸 Capturing desktop and analyzing...")
-            screens = windows_tools.capture_screens()
+            ok, msg, res = action_broker.execute_action('homie_capture_screen', {}, caller_id='telegram_remote')
+            screens = re.findall(r'([A-Za-z]:\\[^\s,]+\.png)', str(res)) if ok else []
             if screens and os.path.exists(screens[0]):
                 self.send_photo(chat_id, screens[0], caption="🖥️ Current Screen")
                 import ai_engine
                 analysis = ai_engine.run_gemini_vision("What is shown on this screen? Explain key windows and status concisely.", screens[0])
                 self.send_message(chat_id, f"👁️ **Screen Analysis**:\n\n{analysis}")
             else:
-                self.send_message(chat_id, "Could not capture screen.")
+                self.send_message(chat_id, f"Could not capture screen: {msg}")
 
         elif data == 'action_vitals':
-            v = windows_tools.get_system_vitals()
-            msg = (
-                f"💻 **PC Health Snapshot**:\n\n"
-                f"• 🧠 **RAM**: {v['ram_pct']}% used ({v['ram_avail_gb']} GB free / {v['ram_total_gb']} GB)\n"
-                f"• 💽 **Disk (C:)**: {v['disk_free_gb']} GB free / {v['disk_total_gb']} GB\n"
-                f"• 🔋 **Power**: {v['battery']}\n"
-                f"• ⏱️ **Uptime**: {v['uptime_hours']} hours\n"
-                f"• 🪟 **Active**: `{v['active_window']}`"
-            )
+            ok, msg, res = action_broker.execute_action('homie_get_vitals', {}, caller_id='telegram_remote')
+            try:
+                v = json.loads(res) if ok and isinstance(res, str) else (res if isinstance(res, dict) else {})
+            except Exception:
+                v = {}
+            if v:
+                msg = (
+                    f"💻 **PC Health Snapshot**:\n\n"
+                    f"• 🧠 **RAM**: {v.get('ram_pct', 0)}% used ({v.get('ram_avail_gb', 0)} GB free / {v.get('ram_total_gb', 0)} GB)\n"
+                    f"• 💽 **Disk (C:)**: {v.get('disk_free_gb', 0)} GB free / {v.get('disk_total_gb', 0)} GB\n"
+                    f"• 🔋 **Power**: {v.get('battery', 'Unknown')}\n"
+                    f"• ⏱️ **Uptime**: {v.get('uptime_hours', 0)} hours\n"
+                    f"• 🪟 **Active**: `{v.get('active_window', 'Desktop')}`"
+                )
             self.send_message(chat_id, msg)
 
         elif data == 'action_clip_read':
-            clip = windows_tools.get_clipboard_text()
-            if clip:
-                self.send_message(chat_id, f"📋 **PC Clipboard**:\n```\n{clip[:3000]}\n```")
+            ok, msg, clip = action_broker.execute_action('homie_get_clipboard', {}, caller_id='telegram_remote')
+            if ok and clip and str(clip).strip() != "(Clipboard is empty)":
+                self.send_message(chat_id, f"📋 **PC Clipboard**:\n```\n{str(clip)[:3000]}\n```")
             else:
                 self.send_message(chat_id, "📋 PC Clipboard is currently empty.")
 
@@ -384,7 +392,11 @@ class TelegramBridge:
             self.send_message(chat_id, analysis)
 
         elif data == 'action_downloads':
-            dl = windows_tools.list_downloads(limit=8)
+            ok, msg, res = action_broker.execute_action('homie_list_downloads', {'limit': 8}, caller_id='telegram_remote')
+            try:
+                dl = json.loads(res) if ok and isinstance(res, str) else (res if isinstance(res, list) else [])
+            except Exception:
+                dl = []
             if not dl:
                 self.send_message(chat_id, "📁 Downloads folder is empty.")
             else:
@@ -416,8 +428,9 @@ class TelegramBridge:
         elif data.startswith('act_pill_'):
             action_id = data[9:]
             import action_pill
-            clip = windows_tools.get_clipboard_text()
-            ok, msg = action_pill.execute_action(action_id, clip)
+            ok_c, msg_c, clip = action_broker.execute_action('homie_get_clipboard', {}, caller_id='telegram_remote')
+            clip_text = str(clip) if ok_c and clip and str(clip).strip() != "(Clipboard is empty)" else ""
+            ok, msg = action_pill.execute_action(action_id, clip_text)
             prefix = "✓" if ok else "⚠️"
             self.send_message(chat_id, f"{prefix} {msg}")
 
@@ -490,14 +503,14 @@ class TelegramBridge:
             act = item['action']
             payload = item['payload']
             if act == 'close_app':
-                ok, msg = windows_tools.close_app(payload)
+                ok, msg, _ = action_broker.execute_action('homie_close_app', {'app_name': payload}, caller_id='telegram_remote')
                 self.send_message(chat_id, f"🛑 {msg}")
             elif act == 'kill_pid':
-                ok, msg = windows_tools.kill_process_by_pid(payload)
+                ok, msg, _ = action_broker.execute_action('homie_kill_process', {'pid': payload}, caller_id='telegram_remote')
                 self.send_message(chat_id, f"🛑 {msg}")
             elif act == 'run_cmd':
-                ok, out = windows_tools.execute_safe_command(payload)
-                self.send_message(chat_id, f"⚡ **Executed**:\n```\n{out}\n```")
+                ok, msg, out = action_broker.execute_action('homie_safe_command', {'command': payload}, caller_id='telegram_remote')
+                self.send_message(chat_id, f"⚡ **Executed**:\n```\n{out or msg}\n```")
 
         elif data.startswith('cancel_action_'):
             action_id = data[14:]
@@ -510,7 +523,11 @@ class TelegramBridge:
         while self.running:
             try:
                 if self.allowed_users:
-                    v = windows_tools.get_system_vitals()
+                    ok, msg, res = action_broker.execute_action('homie_get_vitals', {}, caller_id='telegram_remote')
+                    try:
+                        v = json.loads(res) if ok and isinstance(res, str) else (res if isinstance(res, dict) else {})
+                    except Exception:
+                        v = {}
                     ram_pct = v.get('ram_pct', 0)
 
                     # RAM alert: trigger at >= 92%, clear at < 82%
@@ -725,14 +742,15 @@ class TelegramBridge:
             return
 
         if cmd in ('/smartclip', '/copilot'):
-            clip = windows_tools.get_clipboard_text()
-            if not clip or not clip.strip():
+            ok_c, msg_c, clip = action_broker.execute_action('homie_get_clipboard', {}, caller_id='telegram_remote')
+            clip_text = str(clip) if ok_c and clip and str(clip).strip() != "(Clipboard is empty)" else ""
+            if not clip_text or not clip_text.strip():
                 self.send_message(chat_id, "📋 Clipboard is currently empty.")
                 return
             import clipboard_classifier
             import action_pill
-            cls = clipboard_classifier.classify_clipboard_content(clip)
-            analysis = homie.analyze_clipboard(clip)
+            cls = clipboard_classifier.classify_clipboard_content(clip_text)
+            analysis = homie.analyze_clipboard(clip_text)
             acts = action_pill.get_actions_for_classification(cls)
             buttons = []
             if acts:
@@ -1016,25 +1034,25 @@ class TelegramBridge:
             if not target:
                 self.send_message(chat_id, "Usage: `/play <song or video name>` (e.g. `/play telugu music`)")
                 return
-            ok, msg = windows_tools.play_youtube(target)
+            ok, msg, _ = action_broker.execute_action('homie_play_youtube', {'query': target}, caller_id='telegram_remote')
             self.send_message(chat_id, f"▶️ {msg}")
             return
 
         if cmd in ('/screen', '/screens', '/screenshot'):
             self.send_message(chat_id, "📸 Capturing desktop...")
-            screens = windows_tools.capture_screens()
+            ok, msg, res = action_broker.execute_action('homie_capture_screen', {}, caller_id='telegram_remote')
+            screens = re.findall(r'([A-Za-z]:\\[^\s,]+\.png)', str(res)) if ok else []
             if screens:
                 for idx, sc in enumerate(screens):
                     caption = f"Display {idx + 1} ({time.strftime('%I:%M:%S %p')})"
                     self.send_photo(chat_id, sc, caption=caption)
             else:
-                self.send_message(chat_id, "Could not capture display.")
+                self.send_message(chat_id, f"Could not capture display: {msg}")
             return
 
         if cmd == '/lock':
-            import ctypes
-            ctypes.windll.user32.LockWorkStation()
-            self.send_message(chat_id, "🔒 Workstation locked successfully.")
+            ok, msg, _ = action_broker.execute_action('homie_lock_workstation', {}, caller_id='telegram_remote')
+            self.send_message(chat_id, f"🔒 {msg or 'Workstation locked successfully.'}")
             return
 
         if cmd in ('/media', '/pause', '/resume', '/playpause', '/next', '/prev', '/previous', '/mute', '/volup', '/voldown'):
@@ -1042,14 +1060,14 @@ class TelegramBridge:
                 action = args[0] if args else "play_pause"
             else:
                 action = cmd.lstrip('/')
-            ok, msg = windows_tools.control_media(action)
+            ok, msg, _ = action_broker.execute_action('homie_control_media', {'action': action}, caller_id='telegram_remote')
             self.send_message(chat_id, f"🎵 {msg}")
             return
 
         if cmd == '/snap':
             where = args[0] if args else "full"
             app = args[1] if len(args) > 1 else ""
-            ok, msg = windows_tools.place_window(app, where)
+            ok, msg, _ = action_broker.execute_action('homie_place_window', {'app_name': app, 'position': where}, caller_id='telegram_remote')
             self.send_message(chat_id, f"🪟 {msg}")
             return
 
@@ -1058,7 +1076,7 @@ class TelegramBridge:
             if not target:
                 self.send_message(chat_id, "Usage: `/open <app_name>`")
                 return
-            ok, msg = windows_tools.launch_app(target)
+            ok, msg, _ = action_broker.execute_action('homie_launch_app', {'target': target}, caller_id='telegram_remote')
             self.send_message(chat_id, f"🚀 {msg}")
             return
 
@@ -1071,14 +1089,18 @@ class TelegramBridge:
             if cmd in ('/kill', '/terminate') or 'force' in text.lower():
                 self.request_confirmation(chat_id, f"Terminate process '{target}'", "close_app", target)
                 return
-            ok, msg = windows_tools.close_app(target)
+            ok, msg, _ = action_broker.execute_action('homie_close_app', {'app_name': target}, caller_id='telegram_remote')
             self.send_message(chat_id, f"🛑 {msg}")
             return
 
         if cmd in ('/top', '/ps', '/processes'):
-            procs = windows_tools.get_top_processes(sort_by='memory', limit=8)
+            ok, msg, res = action_broker.execute_action('homie_get_top_processes', {'limit': 8}, caller_id='telegram_remote')
+            try:
+                procs = json.loads(res) if ok and isinstance(res, str) else (res if isinstance(res, list) else [])
+            except Exception:
+                procs = []
             if not procs:
-                self.send_message(chat_id, "No process metrics available.")
+                self.send_message(chat_id, f"No process metrics available: {msg}")
                 return
             lines = ["📊 **Top Resource Consumers (by RAM)**:\n"]
             buttons = []
@@ -1150,15 +1172,20 @@ class TelegramBridge:
             return
 
         if cmd in ('/status', '/pc', '/vitals', '/health'):
-            v = windows_tools.get_system_vitals()
-            msg = (
-                f"💻 **PC Health Snapshot**:\n\n"
-                f"• 🧠 **RAM**: {v['ram_pct']}% used ({v['ram_avail_gb']} GB free / {v['ram_total_gb']} GB)\n"
-                f"• 💽 **Disk (C:)**: {v['disk_free_gb']} GB free / {v['disk_total_gb']} GB\n"
-                f"• 🔋 **Power**: {v['battery']}\n"
-                f"• ⏱️ **Uptime**: {v['uptime_hours']} hours\n"
-                f"• 🪟 **Active**: `{v['active_window']}`"
-            )
+            ok, msg, res = action_broker.execute_action('homie_get_vitals', {}, caller_id='telegram_remote')
+            try:
+                v = json.loads(res) if ok and isinstance(res, str) else (res if isinstance(res, dict) else {})
+            except Exception:
+                v = {}
+            if v:
+                msg = (
+                    f"💻 **PC Health Snapshot**:\n\n"
+                    f"• 🧠 **RAM**: {v.get('ram_pct', 0)}% used ({v.get('ram_avail_gb', 0)} GB free / {v.get('ram_total_gb', 0)} GB)\n"
+                    f"• 💽 **Disk (C:)**: {v.get('disk_free_gb', 0)} GB free / {v.get('disk_total_gb', 0)} GB\n"
+                    f"• 🔋 **Power**: {v.get('battery', 'Unknown')}\n"
+                    f"• ⏱️ **Uptime**: {v.get('uptime_hours', 0)} hours\n"
+                    f"• 🪟 **Active**: `{v.get('active_window', 'Desktop')}`"
+                )
             self.send_message(chat_id, msg)
             return
 
@@ -1169,12 +1196,12 @@ class TelegramBridge:
         if cmd in ('/clip', '/clipboard'):
             if args:
                 to_copy = " ".join(args)
-                ok, msg = windows_tools.set_clipboard_text(to_copy)
+                ok, msg, _ = action_broker.execute_action('homie_set_clipboard', {'text': to_copy}, caller_id='telegram_remote')
                 self.send_message(chat_id, f"📋 {msg}")
             else:
-                clip = windows_tools.get_clipboard_text()
-                if clip:
-                    self.send_message(chat_id, f"📋 **PC Clipboard**:\n```\n{clip[:3000]}\n```")
+                ok, msg, clip = action_broker.execute_action('homie_get_clipboard', {}, caller_id='telegram_remote')
+                if ok and clip and str(clip).strip() != "(Clipboard is empty)":
+                    self.send_message(chat_id, f"📋 **PC Clipboard**:\n```\n{str(clip)[:3000]}\n```")
                 else:
                     self.send_message(chat_id, "📋 PC Clipboard is currently empty.")
             return
@@ -1185,9 +1212,9 @@ class TelegramBridge:
                 self.send_message(chat_id, "Usage: `/cmd <windows command>` (e.g. `/cmd git status` or `/cmd ipconfig`)")
                 return
             self.send_message(chat_id, f"⚡ Executing: `{command}`...")
-            ok, out = windows_tools.execute_safe_command(command)
+            ok, msg, out = action_broker.execute_action('homie_safe_command', {'command': command}, caller_id='telegram_remote')
             prefix = "✓" if ok else "⚠️"
-            self.send_message(chat_id, f"{prefix} **Output**:\n```\n{out}\n```")
+            self.send_message(chat_id, f"{prefix} **Output**:\n```\n{out or msg}\n```")
             return
 
         if cmd == '/get':
@@ -1215,9 +1242,13 @@ class TelegramBridge:
             return
 
         if cmd in ('/downloads', '/dl'):
-            dl = windows_tools.list_downloads(limit=10)
+            ok, msg, res = action_broker.execute_action('homie_list_downloads', {'limit': 10}, caller_id='telegram_remote')
+            try:
+                dl = json.loads(res) if ok and isinstance(res, str) else (res if isinstance(res, list) else [])
+            except Exception:
+                dl = []
             if not dl:
-                self.send_message(chat_id, "📁 Downloads folder is empty.")
+                self.send_message(chat_id, f"📁 Downloads folder is empty.")
                 return
             items = "\n".join(f"• `{d['name']}` ({d['size_mb']} MB, {d['mtime']})" for d in dl)
             self.send_message(chat_id, f"📁 **Recent PC Downloads**:\n{items}\n\nUse `/get <filename>` to send any file here.")
@@ -1226,14 +1257,15 @@ class TelegramBridge:
         if cmd == '/inspect':
             question = " ".join(args) or "What is currently on the screen?"
             self.send_message(chat_id, f"📸 Capturing desktop and analyzing: \"{question}\"...")
-            screens = windows_tools.capture_screens()
+            ok, msg, res = action_broker.execute_action('homie_capture_screen', {}, caller_id='telegram_remote')
+            screens = re.findall(r'([A-Za-z]:\\[^\s,]+\.png)', str(res)) if ok else []
             if screens and os.path.exists(screens[0]):
                 self.send_photo(chat_id, screens[0], caption="🖥️ Current Screen")
                 import ai_engine
                 analysis = ai_engine.run_gemini_vision(question, screens[0])
                 self.send_message(chat_id, f"👁️ **Screen Analysis**:\n\n{analysis}")
             else:
-                self.send_message(chat_id, "Could not capture screen for analysis.")
+                self.send_message(chat_id, f"Could not capture screen for analysis: {msg}")
             return
 
         if cmd in ('/rules', '/memory'):
@@ -1275,7 +1307,7 @@ class TelegramBridge:
             else:
                 recipient = args[1] if len(args) > 2 else ""
                 message = " ".join(args[2:]) if len(args) > 2 else args[1]
-            ok, res = windows_tools.send_chat_message(app, recipient=recipient, message=message)
+            ok, res, _ = action_broker.execute_action('homie_send_chat', {'app': app, 'recipient': recipient, 'message': message}, caller_id='telegram_remote')
             self.send_message(chat_id, f"💬 {res}")
             return
 

@@ -430,16 +430,22 @@ def try_fast_command(text, caller_id="desktop_user"):
 
     # 8. PC Vitals ("pc status", "system status", "vitals", "how is my pc", "is my pc ok")
     if re.search(r'\b(pc\s+status|system\s+status|pc\s+vitals|system\s+health|how\s+is\s+my\s+pc|how\s+is\s+my\s+computer|is\s+my\s+pc\s+ok(?:ay)?|is\s+my\s+computer\s+ok(?:ay)?|^vitals$|^diagnose$|health\s+check)\b', t):
-        v = windows_tools.get_system_vitals()
-        msg = (
-            f"💻 **PC Health Snapshot**:\n"
-            f"• 🧠 RAM: {v['ram_pct']}% used ({v['ram_avail_gb']} GB free / {v['ram_total_gb']} GB)\n"
-            f"• 💽 Disk (C:): {v['disk_free_gb']} GB free / {v['disk_total_gb']} GB\n"
-            f"• 🔋 Power: {v['battery']}\n"
-            f"• ⏱️ Uptime: {v['uptime_hours']} hours\n"
-            f"• 🪟 Active: {v['active_window']}"
-        )
-        return True, msg
+        ok, msg, res = action_broker.execute_action('homie_get_vitals', {}, caller_id=caller_id)
+        if ok and res:
+            try:
+                v = json.loads(res) if isinstance(res, str) else res
+                msg = (
+                    f"💻 **PC Health Snapshot**:\n"
+                    f"• 🧠 RAM: {v.get('ram_pct', 0)}% used ({v.get('ram_avail_gb', 0)} GB free / {v.get('ram_total_gb', 0)} GB)\n"
+                    f"• 💽 Disk (C:): {v.get('disk_free_gb', 0)} GB free / {v.get('disk_total_gb', 0)} GB\n"
+                    f"• 🔋 Power: {v.get('battery', 'Unknown')}\n"
+                    f"• ⏱️ Uptime: {v.get('uptime_hours', 0)} hours\n"
+                    f"• 🪟 Active: {v.get('active_window', 'Desktop')}"
+                )
+                return True, msg
+            except Exception:
+                pass
+        return True, f"💻 PC Vitals: {msg}"
 
     # 9. Clipboard Inspection & Setting
     if re.search(r'\b(smart\s+clipboard|analyze\s+clipboard|smartclip|check\s+clipboard|explain\s+clipboard)\b', t):
@@ -447,9 +453,9 @@ def try_fast_command(text, caller_id="desktop_user"):
         return True, analysis
 
     if re.search(r'\b(what\'?s?\s+in\s+my\s+clipboard|read\s+clipboard|get\s+clipboard|clipboard\s+content|^clipboard$)\b', t):
-        clip = windows_tools.get_clipboard_text()
-        if clip:
-            return True, f"📋 **PC Clipboard**:\n```\n{clip[:1000]}\n```"
+        ok, msg, clip = action_broker.execute_action('homie_get_clipboard', {}, caller_id=caller_id)
+        if ok and clip and str(clip).strip() != "(Clipboard is empty)":
+            return True, f"📋 **PC Clipboard**:\n```\n{str(clip)[:1000]}\n```"
         return True, "📋 Clipboard is currently empty."
 
     clip_set_m = re.match(r'^(?:copy|set\s+clipboard)\s+(?:this\s+)?(?:to\s+clipboard\s+)?(.+)$', t)
@@ -485,7 +491,11 @@ def try_fast_command(text, caller_id="desktop_user"):
 
     # 11. Recent Downloads
     if re.search(r'\b(recent\s+downloads|my\s+downloads|show\s+downloads|^downloads$)\b', t):
-        dl = windows_tools.list_downloads(limit=8)
+        ok, msg, res = action_broker.execute_action('homie_list_downloads', {'limit': 8}, caller_id=caller_id)
+        try:
+            dl = json.loads(res) if ok and isinstance(res, str) else (res if isinstance(res, list) else [])
+        except Exception:
+            dl = []
         if not dl:
             return True, "📁 Downloads folder is empty."
         items = "\n".join(f"• `{d['name']}` ({d['size_mb']} MB, {d['mtime']})" for d in dl)
@@ -493,7 +503,8 @@ def try_fast_command(text, caller_id="desktop_user"):
 
     # 11. Screen Inspection ("what's on my screen", "inspect screen", "look at my screen")
     if re.search(r'\b(what\'?s?\s+on\s+my\s+screen|inspect\s+(?:my\s+)?screen|look\s+at\s+(?:my\s+)?screen|describe\s+(?:my\s+)?screen|read\s+(?:my\s+)?screen)\b', t):
-        screens = windows_tools.capture_screens()
+        ok, msg, res = action_broker.execute_action('homie_capture_screen', {}, caller_id=caller_id)
+        screens = re.findall(r'([A-Za-z]:\\[^\s,]+\.png)', str(res)) if ok else []
         if screens and os.path.exists(screens[0]):
             import ai_engine
             analysis = ai_engine.run_gemini_vision("Describe what is shown on this screen, noting any open windows, applications, errors, or active tasks.", screens[0])
@@ -528,12 +539,17 @@ def try_fast_command(text, caller_id="desktop_user"):
 
     # 15. Top Resource Consumers ("top processes", "resource hogs", "top tasks")
     if re.search(r'\b(top\s+processes|top\s+tasks|resource\s+hogs|cpu\s+hogs|ram\s+hogs)\b', t):
-        procs = windows_tools.get_top_processes(limit=5)
+        ok, msg, res = action_broker.execute_action('homie_get_top_processes', {'limit': 5}, caller_id=caller_id)
+        try:
+            procs = json.loads(res) if ok and isinstance(res, str) else (res if isinstance(res, list) else [])
+        except Exception:
+            procs = []
         if procs:
             lines = ["📊 **Top Resource Consumers**:\n"]
             for p in procs:
                 lines.append(f"• `{p['name']}`: {p['mem_pct']}% RAM ({p['mem_mb']} MB) | {p['cpu_pct']}% CPU")
             return True, "\n".join(lines)
+        return True, "No top process resource consumers found."
 
     # 16. Focus Report / Screen Time ("focus report", "screen time", "productivity report")
     if re.search(r'\b(focus\s+report|screen\s*time|productivity\s+report|my\s+screen\s*time)\b', t):
@@ -926,25 +942,32 @@ def main():
 
     cmd = args[0]
 
-    if cmd in ('--pairing-unlock', 'pairing-unlock'):
+    if cmd in ('--pairing-unlock', 'pairing-unlock', '--recover-device'):
         import phone_approval_portal
         # Interactive confirmation required to ensure automated background processes or agents cannot invoke it
         force = '--yes' in args or '-y' in args
         if not force:
             if sys.stdin.isatty():
-                confirmation = input("Type 'CONFIRM-RESET' to unlock pairing: ").strip()
+                confirmation = input("Type 'CONFIRM-RESET' to unlock pairing / generate recovery token: ").strip()
                 if confirmation != "CONFIRM-RESET":
-                    print("✗ [HOMIE SECURITY] Pairing unlock cancelled: confirmation code mismatch.")
+                    print("✗ [HOMIE SECURITY] Operation cancelled: confirmation code mismatch.")
                     return
             else:
                 print("✗ [HOMIE SECURITY] Interactive console presence required to unlock pairing.")
                 return
-        ok, msg = phone_approval_portal.reset_pairing_lockout()
+        
+        recovery_token = phone_approval_portal.generate_console_recovery_token(ttl_seconds=300.0)
+        ok, msg = phone_approval_portal.reset_pairing_lockout(recovery_token=recovery_token)
         print(f"✓ [HOMIE SECURITY] {msg}")
+        if cmd == '--recover-device':
+            new_rec_token = phone_approval_portal.generate_console_recovery_token(ttl_seconds=300.0)
+            print(f"✓ [HOMIE SECURITY] Device recovery token (valid 5m): {new_rec_token}")
+            print("  Use this recovery token during phone enrollment to restore access.")
         return
 
     if cmd == '--look':
-        files = windows_tools.capture_screens()
+        ok, msg, res = action_broker.execute_action('homie_capture_screen', {}, caller_id="desktop_user")
+        files = re.findall(r'([A-Za-z]:\\[^\s,]+\.png)', str(res)) if ok else []
         for f in files:
             print(f)
         return
@@ -952,7 +975,7 @@ def main():
     if cmd == '--place':
         app = args[1] if len(args) > 1 else ""
         where = args[2] if len(args) > 2 else "full"
-        ok, msg = windows_tools.place_window(app, where)
+        ok, msg, _ = action_broker.execute_action('homie_place_window', {'app_name': app, 'position': where}, caller_id="desktop_user")
         print(msg)
         return
 
@@ -968,7 +991,7 @@ def main():
 
     if cmd == '--media':
         action = args[1] if len(args) > 1 else "play_pause"
-        ok, msg = windows_tools.control_media(action)
+        ok, msg, _ = action_broker.execute_action('homie_control_media', {'action': action}, caller_id="desktop_user")
         print(msg)
         return
 

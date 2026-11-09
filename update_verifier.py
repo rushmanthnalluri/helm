@@ -44,6 +44,14 @@ PINNED_PUBLISHER_KEY_PEM = """-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAXBYS0+c64gbsT95CnpeMWWQVQkfK7xSjwbld5xs4MGU=
 -----END PUBLIC KEY-----"""
 PINNED_PUBLISHER_PUBLIC_KEY = PINNED_PUBLISHER_KEY_PEM
+PINNED_PUBLISHER_KEY_SHA256 = "32278129e14141b57aa28fd6a6888f77b492cdd88e3b7b6229872b7f11e123fb"
+
+def get_publisher_key_der_hash() -> str:
+    """Computes SHA-256 fingerprint of the pinned publisher public key SPKI DER."""
+    key_obj = ECC.import_key(PINNED_PUBLISHER_KEY_PEM)
+    return hashlib.sha256(key_obj.export_key(format='DER')).hexdigest()
+
+assert get_publisher_key_der_hash() == PINNED_PUBLISHER_KEY_SHA256, "Publisher key integrity violation: SHA256 mismatch!"
 
 PROTECTED_SYSTEM_FILES = {
     ".homie_vault.key",

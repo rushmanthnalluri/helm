@@ -431,24 +431,24 @@ MUTATIONS = [
         "id": "MUTATION_47_ENVELOPE_STEP_RESERVATION_RELEASE_BYPASS",
         "name": "Bypass Single-Point Step Reservation Release on Proposal Denial in _handle_propose",
         "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
-        "target": "        finally:\n            # Single-point guaranteed reservation release for all early returns, denials, and exceptions\n            if res_token and not step_committed:",
-        "replacement": "        finally:\n            # Single-point guaranteed reservation release for all early returns, denials, and exceptions\n            if False and res_token and not step_committed:",
+        "target": "        finally:\n            # Single-point guaranteed reservation release for all early returns, denials, and exceptions.\n            # Release reservation ONLY if the actuator was NEVER invoked!\n            if res_token and not step_committed and not actuator_invoked:",
+        "replacement": "        finally:\n            # Single-point guaranteed reservation release for all early returns, denials, and exceptions.\n            # Release reservation ONLY if the actuator was NEVER invoked!\n            if False and res_token and not step_committed and not actuator_invoked:",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch34_security_hardening.py::TestBatch34SecurityHardening::test_3_envelope_reservation_token_single_point_release_across_supervisor_exits"]
     },
     {
         "id": "MUTATION_48_KEYCODE_13_ENTER_BYPASS",
-        "name": "Bypass Numeric Keycode 13 Enter-to-Submit Detection in check_boundary",
+        "name": "Bypass Numeric Keycode 13 Enter-to-Submit Detection in canonicalize_keyboard_arguments",
         "file": os.path.join(BASE_DIR, "policy_envelope.py"),
-        "target": "                is_vk_13 = (isinstance(val, int) and val == 13) or (str(val).strip().lower() in (\"13\", \"0x0d\", \"0xd\"))\n                if is_vk_13:",
-        "replacement": "                is_vk_13 = (isinstance(val, int) and val == 13) or (str(val).strip().lower() in (\"13\", \"0x0d\", \"0xd\"))\n                if False and is_vk_13:",
+        "target": "            if is_vk_13:\n                enter_detected = True\n                detected_vks.append(13)",
+        "replacement": "            if False and is_vk_13:\n                enter_detected = True\n                detected_vks.append(13)",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch34_security_hardening.py::TestBatch34SecurityHardening::test_2_enter_detection_no_false_positives_on_words_and_catches_keycode_13"]
     },
     {
         "id": "MUTATION_49_SYNTHETIC_CTRL_ALT_P_BYPASS",
         "name": "Bypass Synthetic Ctrl+Alt+P Injection Prevention in check_boundary",
         "file": os.path.join(BASE_DIR, "policy_envelope.py"),
-        "target": "                if \"ctrl\" in norm_str and \"alt\" in norm_str and \"p\" in norm_str:\n                    return False, \"DENY: Synthetic simulation of physical console pairing hotkey (Ctrl+Alt+P) is strictly prohibited.\", 0",
-        "replacement": "                if False and \"ctrl\" in norm_str and \"alt\" in norm_str and \"p\" in norm_str:\n                    return False, \"DENY: Synthetic simulation of physical console pairing hotkey (Ctrl+Alt+P) is strictly prohibited.\", 0",
+        "target": "        # Physical console enrollment hotkey (Ctrl + Alt + P) can NEVER be synthesized\n        if ctrl_alt_p_detected:\n            return False, \"DENY: Synthetic simulation of physical console pairing hotkey (Ctrl+Alt+P) is strictly prohibited.\", 0",
+        "replacement": "        # Physical console enrollment hotkey (Ctrl + Alt + P) can NEVER be synthesized\n        if False and ctrl_alt_p_detected:\n            return False, \"DENY: Synthetic simulation of physical console pairing hotkey (Ctrl+Alt+P) is strictly prohibited.\", 0",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch34_security_hardening.py::TestBatch34SecurityHardening::test_5_synthetic_ctrl_alt_p_rejected"]
     },
     {
@@ -458,6 +458,46 @@ MUTATIONS = [
         "target": "        # Atomically consume session from registry the instant pairing code matches (TOCTOU elimination)\n        del _LOCAL_ENROLLMENT_SESSIONS[session_id]",
         "replacement": "        # MUTATION BYPASS: delay session deletion allowing replay/race\n        pass",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch34_security_hardening.py::TestBatch34SecurityHardening::test_4_concurrent_session_reuse_blocked_by_atomic_pop"]
+    },
+    {
+        "id": "MUTATION_51_UNKNOWN_OUTCOME_STEP_CONSUMPTION_BYPASS",
+        "name": "Bypass Step Budget Consumption on Actuator Invocation / UNKNOWN Outcomes in _handle_propose",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": "            if actuator_invoked:\n                if getattr(self, \"envelope\", None) and getattr(self.envelope, \"is_active\", False):\n                    self.envelope.commit_step(ks_to_commit, res_token)\n                    step_committed = True",
+        "replacement": "            if False and actuator_invoked:\n                if getattr(self, \"envelope\", None) and getattr(self.envelope, \"is_active\", False):\n                    self.envelope.commit_step(ks_to_commit, res_token)\n                    step_committed = True",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch35_security_hardening.py::TestBatch35SecurityHardening::test_3_unknown_outcome_consumes_step_budget"]
+    },
+    {
+        "id": "MUTATION_52_PRODUCTION_APPROVAL_RELAY_BYPASS",
+        "name": "Bypass Phone Approval Relay to Supervisor Cache in verify_action_approval",
+        "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
+        "target": "        homie_supervisor.record_approved_action(\n            caller_id=target_caller,\n            tool=expected_action,\n            args_hash=str(expected_payload_hash).lower(),\n            taint_epoch=approval_epoch,\n            ttl=min(remaining_ttl, 120.0)\n        )",
+        "replacement": "        pass # MUTATION BYPASS: drop approval relay to supervisor",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch35_security_hardening.py::TestBatch35SecurityHardening::test_4_production_approval_relay_to_supervisor_cache_and_db"]
+    },
+    {
+        "id": "MUTATION_53_PUBLISHER_KEY_SHA256_FINGERPRINT_PINNING_BYPASS",
+        "name": "Bypass Publisher Public Key SPKI DER SHA-256 Fingerprint Check in update_verifier.py",
+        "file": os.path.join(BASE_DIR, "update_verifier.py"),
+        "target": "assert get_publisher_key_der_hash() == PINNED_PUBLISHER_KEY_SHA256, \"Publisher key integrity violation: SHA256 mismatch!\"",
+        "replacement": "# MUTATION BYPASS: drop key fingerprint assertion\npass",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch35_security_hardening.py::TestBatch35SecurityHardening::test_1_pinned_publisher_key_der_sha256_fingerprint"]
+    },
+    {
+        "id": "MUTATION_54_CONSOLE_RECOVERY_TOKEN_TTY_CHECK_BYPASS",
+        "name": "Bypass Console Presence Verification in homie.py --pairing-unlock",
+        "file": os.path.join(BASE_DIR, "homie.py"),
+        "target": "            if sys.stdin.isatty():\n                confirmation = input(\"Type 'CONFIRM-RESET' to unlock pairing / generate recovery token: \").strip()",
+        "replacement": "            if True or sys.stdin.isatty():\n                confirmation = 'CONFIRM-RESET'",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch35_security_hardening.py::TestBatch35SecurityHardening::test_5_console_recovery_token_cli_caller"]
+    },
+    {
+        "id": "MUTATION_55_TELEGRAM_MEDIATION_BROKER_BYPASS",
+        "name": "Bypass ActionBroker Complete Mediation in Telegram Bridge Callback",
+        "file": os.path.join(BASE_DIR, "telegram_bridge.py"),
+        "target": "            ok, msg, _ = action_broker.execute_action('homie_control_media', {'action': 'play_pause'}, caller_id='telegram_remote')",
+        "replacement": "            ok, msg = windows_tools.control_media('play_pause') # MUTATION BYPASS: bypass action_broker",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_entry_point_enumeration.py::TestEntryPointEnumeration::test_1_telegram_callback_entry_points_dispatch_via_broker"]
     }
 ]
 

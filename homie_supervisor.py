@@ -140,8 +140,9 @@ class SupervisorActuator:
         req_seq = seq
 
         # Prohibit synthetic simulation of console enrollment hotkey (Ctrl + Alt + P)
-        norm_key = re.sub(r'[\+_\s\-]+', '', str(args.get("key", "") or args.get("hotkey", "") or args.get("keys", "") or args.get("text", "")).lower())
-        if "ctrl" in norm_key and "alt" in norm_key and "p" in norm_key:
+        import policy_envelope
+        _, ctrl_alt_p_detected, _, _ = policy_envelope.canonicalize_keyboard_arguments(args)
+        if ctrl_alt_p_detected:
             raise CompleteMediationBreachError("Complete mediation breach: Synthetic simulation of physical console pairing hotkey (Ctrl+Alt+P) is strictly prohibited.")
 
         if tier != "READ_ONLY":
@@ -217,6 +218,60 @@ def get_active_supervisor() -> Optional['PolicySupervisor']:
     """Returns the globally active PolicySupervisor instance if running."""
     global _ACTIVE_SUPERVISOR
     return _ACTIVE_SUPERVISOR
+
+
+def record_approved_action(caller_id: str, tool: str, args_hash: str, taint_epoch: int, ttl: float = 120.0):
+    """Module-level production helper: records direct action approval across memory and SQLite."""
+    sup = get_active_supervisor()
+    if sup:
+        sup.record_approved_action(caller_id, tool, args_hash, taint_epoch, ttl=ttl)
+    else:
+        try:
+            import db_utils
+            with db_utils.get_db() as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS approved_actions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        caller_id TEXT NOT NULL,
+                        tool TEXT NOT NULL,
+                        args_hash TEXT NOT NULL,
+                        taint_epoch INTEGER NOT NULL,
+                        expiry REAL NOT NULL,
+                        consumed INTEGER NOT NULL DEFAULT 0
+                    );
+                """)
+                conn.execute("""
+                    INSERT INTO approved_actions (caller_id, tool, args_hash, taint_epoch, expiry, consumed)
+                    VALUES (?, ?, ?, ?, ?, 0)
+                """, (caller_id, tool, args_hash.lower(), int(taint_epoch), time.time() + ttl))
+                conn.commit()
+        except Exception as e:
+            logger.warning("Could not persist module-level approved action to SQLite: %s", e)
+
+
+def consume_approved_action(caller_id: str, tool: str, args_hash: str, taint_epoch: int) -> bool:
+    """Module-level production helper: checks and consumes direct action approval across memory and SQLite."""
+    sup = get_active_supervisor()
+    if sup and sup.consume_approved_action(caller_id, tool, args_hash, taint_epoch):
+        return True
+    try:
+        import db_utils
+        now = time.time()
+        with db_utils.get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT id FROM approved_actions
+                WHERE caller_id = ? AND tool = ? AND args_hash = ? AND taint_epoch = ? AND consumed = 0 AND expiry >= ?
+                ORDER BY id ASC LIMIT 1
+            """, (caller_id, tool, args_hash.lower(), int(taint_epoch), now))
+            row = cur.fetchone()
+            if row:
+                cur.execute("UPDATE approved_actions SET consumed = 1 WHERE id = ?", (row["id"],))
+                conn.commit()
+                return True
+    except Exception as e:
+        logger.warning("Could not consume module-level approved action from SQLite: %s", e)
+    return False
 
 
 class PolicySupervisor:
@@ -408,23 +463,67 @@ class PolicySupervisor:
         return False
 
     def record_approved_action(self, caller_id: str, tool: str, args_hash: str, taint_epoch: int, ttl: float = 120.0):
-        """Directive 14 & Batch 32: Stores direct challenge approval bound to (caller_id, tool, args_hash, taint_epoch)."""
+        """Directive 14 & Batch 32 & 35: Stores direct challenge approval bound to (caller_id, tool, args_hash, taint_epoch)."""
+        exp_time = time.time() + ttl
         with self._approved_lock:
-            self._approved_actions[(caller_id, tool, args_hash.lower(), int(taint_epoch))] = time.time() + ttl
+            self._approved_actions[(caller_id, tool, args_hash.lower(), int(taint_epoch))] = exp_time
+        # Cross-process durable SQLite persistence
+        try:
+            import db_utils
+            with db_utils.get_db() as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS approved_actions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        caller_id TEXT NOT NULL,
+                        tool TEXT NOT NULL,
+                        args_hash TEXT NOT NULL,
+                        taint_epoch INTEGER NOT NULL,
+                        expiry REAL NOT NULL,
+                        consumed INTEGER NOT NULL DEFAULT 0
+                    );
+                """)
+                conn.execute("""
+                    INSERT INTO approved_actions (caller_id, tool, args_hash, taint_epoch, expiry, consumed)
+                    VALUES (?, ?, ?, ?, ?, 0)
+                """, (caller_id, tool, args_hash.lower(), int(taint_epoch), exp_time))
+                conn.commit()
+        except Exception as e:
+            logger.warning("Could not persist approved action to SQLite: %s", e)
 
     def consume_approved_action(self, caller_id: str, tool: str, args_hash: str, taint_epoch: int) -> bool:
-        """Directive 14 & Batch 32: Atomically checks and consumes a direct approved action without worker bearer token."""
+        """Directive 14 & Batch 32 & 35: Atomically checks and consumes a direct approved action without worker bearer token."""
+        now = time.time()
+        in_memory_found = False
         with self._approved_lock:
             key = (caller_id, tool, args_hash.lower(), int(taint_epoch))
             exp = self._approved_actions.pop(key, None)
-            now = time.time()
             # Prune expired
             to_del = [k for k, v in self._approved_actions.items() if now > v]
             for k in to_del:
                 self._approved_actions.pop(k, None)
             if exp and now <= exp:
-                return True
-            return False
+                in_memory_found = True
+
+        # Atomically consume in SQLite as well to prevent double-spending between memory and DB
+        db_consumed = False
+        try:
+            import db_utils
+            with db_utils.get_db() as conn:
+                cur = conn.cursor()
+                cur.execute("""
+                    SELECT id FROM approved_actions
+                    WHERE caller_id = ? AND tool = ? AND args_hash = ? AND taint_epoch = ? AND consumed = 0 AND expiry >= ?
+                    ORDER BY id ASC LIMIT 1
+                """, (caller_id, tool, args_hash.lower(), int(taint_epoch), now))
+                row = cur.fetchone()
+                if row:
+                    cur.execute("UPDATE approved_actions SET consumed = 1 WHERE id = ?", (row["id"],))
+                    conn.commit()
+                    db_consumed = True
+        except Exception as e:
+            logger.warning("Could not consume approved action from SQLite: %s", e)
+
+        return in_memory_found or db_consumed
 
     def clear_taint_and_reboot_worker(self, human_auth_token: str) -> Tuple[bool, str]:
         """Supervisor-side taint clearing: Clears workstation taint, bumps session epoch,
@@ -802,11 +901,13 @@ class PolicySupervisor:
                 })
 
             # Phase 2: Privileged Supervisor Actuator executes effect WITH verified intent token
+            actuator_invoked = False
             execution_success = False
             exception_occurred = False
             result = ""
             try:
                 try:
+                    actuator_invoked = True
                     result = self.actuator.execute_actuator(
                         tool, args, caller_id=caller_id, client_token=client_token, intent_token=intent_token, seq=frame_seq
                     )
@@ -838,8 +939,10 @@ class PolicySupervisor:
 
                 self.active_request_id = None
 
-            # Commit policy envelope step budget ONLY upon verified execution success
-            if execution_success:
+            # Commit policy envelope step budget if actuator was invoked (SUCCESS or UNKNOWN outcome).
+            # If the actuator was invoked, side-effects may have taken place on the desktop/OS;
+            # the step budget MUST be consumed to prevent free retries on partial actions.
+            if actuator_invoked:
                 if getattr(self, "envelope", None) and getattr(self.envelope, "is_active", False):
                     self.envelope.commit_step(ks_to_commit, res_token)
                     step_committed = True
@@ -853,8 +956,9 @@ class PolicySupervisor:
             })
 
         finally:
-            # Single-point guaranteed reservation release for all early returns, denials, and exceptions
-            if res_token and not step_committed:
+            # Single-point guaranteed reservation release for all early returns, denials, and exceptions.
+            # Release reservation ONLY if the actuator was NEVER invoked!
+            if res_token and not step_committed and not actuator_invoked:
                 if getattr(self, "envelope", None) and getattr(self.envelope, "is_active", False):
                     self.envelope.release_reservation(res_token)
 
