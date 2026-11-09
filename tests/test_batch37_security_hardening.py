@@ -108,31 +108,18 @@ class TestBatch37SecurityHardening(unittest.TestCase):
         self.assertFalse(consumed_forged, "Supervisor accepted tampered signature blob!")
 
     def test_2_recovery_cli_requires_uac_secure_desktop_elevation(self):
-        """Directive 2: Recovery CLI requires Windows UAC Secure Desktop administrative elevation."""
+        """Directive 2: Recovery CLI requires administrative elevation and refuses unhardened script elevation."""
         import homie
 
-        # Case A: Non-elevated invocation triggers ShellExecuteW(runas)
+        # Non-elevated invocation fails closed immediately to prevent privilege escalation via user-writable scripts
         with patch.object(sys, "argv", ["homie.py", "--pairing-unlock"]):
             with patch.object(sys.stdin, "isatty", return_value=True):
                 with patch("ctypes.windll.shell32.IsUserAnAdmin", return_value=0):
-                    with patch("ctypes.windll.shell32.ShellExecuteW", return_value=42) as mock_shell:
-                        with patch("builtins.print") as mock_print:
-                            homie.main()
-                            # Assert ShellExecute was called with "runas"
-                            self.assertEqual(mock_shell.call_count, 1)
-                            self.assertEqual(mock_shell.call_args[0][1], "runas")
-                            output = " ".join(str(c[0][0]) for c in mock_print.call_args_list if c[0])
-                            self.assertIn("Administrative elevation required", output)
-
-        # Case B: Elevation cancelled or declined by user (ShellExecute returns <= 32)
-        with patch.object(sys, "argv", ["homie.py", "--pairing-unlock"]):
-            with patch.object(sys.stdin, "isatty", return_value=True):
-                with patch("ctypes.windll.shell32.IsUserAnAdmin", return_value=0):
-                    with patch("ctypes.windll.shell32.ShellExecuteW", return_value=0):  # SE_ERR_FNF / cancelled
-                        with patch("builtins.print") as mock_print:
-                            homie.main()
-                            output = " ".join(str(c[0][0]) for c in mock_print.call_args_list if c[0])
-                            self.assertIn("Elevation declined or cancelled", output)
+                    with patch("builtins.print") as mock_print:
+                        homie.main()
+                        output = " ".join(str(c[0][0]) for c in mock_print.call_args_list if c[0])
+                        self.assertIn("Administrative elevation required", output)
+                        self.assertIn("automatic script elevation is barred", output)
 
     def test_3_uia_domain_resolution_strictly_scoped_to_hwnd_descendants(self):
         """Directive 3: get_browser_active_domain strictly scopes search to hwnd descendants (no root fallback)."""

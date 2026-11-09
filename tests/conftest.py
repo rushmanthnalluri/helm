@@ -24,6 +24,7 @@ import action_broker
 @pytest.fixture(autouse=True)
 def clean_homie_test_isolation():
     """Autouse fixture providing test isolation for supervisor and kill switch states."""
+    os.environ["HOMIE_TEST_ENV"] = "1"
     for p in [homie_supervisor.DIRTY_FLAG_PATH, homie_supervisor.CRASH_HISTORY_PATH]:
         if os.path.exists(p):
             try:

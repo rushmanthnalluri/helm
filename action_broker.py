@@ -48,11 +48,48 @@ logger = logging.getLogger("homie.action_broker")
 class ActionBroker:
     """The central unified execution broker mediating all Homie capabilities."""
 
-    def __init__(self, supervisor_instance: Optional[homie_supervisor.PolicySupervisor] = None):
-        self.supervisor = supervisor_instance or homie_supervisor.PolicySupervisor()
-        if self.supervisor.state != homie_supervisor.STATE_LOCKED:
-            self.supervisor.state = homie_supervisor.STATE_ARMED
+    def __init__(
+        self,
+        supervisor_instance: Optional[homie_supervisor.PolicySupervisor] = None,
+        pipe_client: Optional[Any] = None,
+        pipe_name: str = r"\\.\pipe\homie_supervisor"
+    ):
+        self.pipe_name = pipe_name
+        self.pipe_client = pipe_client
         self.envelope: Optional[PolicyEnvelope] = None
+
+        if pipe_client:
+            self.supervisor = None
+            self.client = pipe_client
+        elif supervisor_instance is not None:
+            # Explicit test harness supervisor injection
+            self.supervisor = supervisor_instance
+            if self.supervisor.state != homie_supervisor.STATE_LOCKED:
+                self.supervisor.state = homie_supervisor.STATE_ARMED
+            self.client = homie_supervisor.SupervisorClient(self.supervisor)
+            self.client.connect()
+        else:
+            # Check if running in strict pipe mode / target architecture
+            require_pipe = os.environ.get("HOMIE_REQUIRE_PIPE") == "1"
+            is_test_env = os.environ.get("HOMIE_TEST_ENV") == "1"
+
+            if require_pipe or not is_test_env:
+                # Production / target architecture: STRICT PIPE CLIENT.
+                # Process holds NO in-process supervisor, NO intent key, NO actuators!
+                self.supervisor = None
+                self.pipe_client = homie_supervisor.NamedPipeSupervisorClient(pipe_name=self.pipe_name)
+                self.client = self.pipe_client
+                try:
+                    self.client.connect(timeout_sec=0.2)
+                except Exception:
+                    pass
+            else:
+                # In-memory test suite backward compatibility
+                self.supervisor = homie_supervisor.PolicySupervisor()
+                if self.supervisor.state != homie_supervisor.STATE_LOCKED:
+                    self.supervisor.state = homie_supervisor.STATE_ARMED
+                self.client = homie_supervisor.SupervisorClient(self.supervisor)
+                self.client.connect()
 
     LEGACY_TOOL_MAP = {
         "media_control": "homie_control_media",
@@ -105,6 +142,35 @@ class ActionBroker:
         args = arguments or {}
         canonical_tool = self.normalize_tool_name(tool_name)
         req_id = f"req_{int(time.time()*1000)}"
+
+        # 0. Out-of-Process Pipe Client Branch (Fail-Closed)
+        if self.supervisor is None and isinstance(getattr(self, "client", None), homie_supervisor.NamedPipeSupervisorClient):
+            if not self.client.handle:
+                try:
+                    if not self.client.connect(timeout_sec=0.1):
+                        return False, "Security Gate: Supervisor process is unreachable or disconnected (fail-closed).", None
+                except Exception as conn_err:
+                    return False, f"Security Gate: Supervisor connection error (fail-closed): {conn_err}", None
+
+            try:
+                reply = self.client.propose(
+                    canonical_tool, args, caller_id=caller_id, client_token=client_token, step_up_token=step_up_token
+                )
+                if not reply or not isinstance(reply, dict):
+                    return False, "Security Gate: Malformed supervisor response (fail-closed).", None
+
+                status = reply.get("status")
+                if status == "ALLOW":
+                    res_val = reply.get("result")
+                    return True, reply.get("reason", "Success: Action executed"), res_val
+                elif status == "SHADOW":
+                    return True, reply.get("reason", "Shadow mode simulated"), reply.get("result")
+                else:
+                    reason = reply.get("reason") or reply.get("error", "Security Gate: Action rejected by supervisor.")
+                    return False, reason, reply.get("result")
+            except Exception as pe:
+                logger.error("Pipe communication error with supervisor: %s", pe)
+                return False, f"Security Gate: Supervisor communication failure (fail-closed): {pe}", None
 
         # 1. State Gate: Supervisor LOCKED fails closed
         if self.supervisor.state == homie_supervisor.STATE_LOCKED:

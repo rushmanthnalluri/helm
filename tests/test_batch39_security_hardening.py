@@ -125,25 +125,36 @@ class TestBatch39SecurityHardening(unittest.TestCase):
             self.assertTrue(cfg.is_confirmation_required("launch_app"))
 
     def test_6_human_confirmation_rejects_worker_and_agent_callers(self):
-        """Directive 6: ConfirmationGate.confirm() rejects worker and agent callers."""
-        gate = rails_confirmation.ConfirmationGate()
-        req = gate.create_request("homie_set_clipboard", {"text": "secret"})
+        """Directive 6: ConfirmationGate.confirm() rejects worker and agent callers and requires verified presence."""
+        with patch("device_registry.get_enrolled_devices", return_value={}):
+            gate = rails_confirmation.ConfirmationGate()
+            req = gate.create_request("homie_set_clipboard", {"text": "secret"})
 
-        # Worker caller must be denied
-        ok1, msg1, tok1 = gate.confirm(req.request_id, human_caller_id="worker_compromised")
-        self.assertFalse(ok1)
-        self.assertIsNone(tok1)
-        self.assertIn("verified human operator", msg1)
+            # Worker caller must be denied
+            ok1, msg1, tok1 = gate.confirm(req.request_id, human_caller_id="worker_compromised")
+            self.assertFalse(ok1)
+            self.assertIsNone(tok1)
+            self.assertIn("verified human operator", msg1)
 
-        # Agent caller must be denied
-        ok2, msg2, tok2 = gate.confirm(req.request_id, human_caller_id="agent_loop")
-        self.assertFalse(ok2)
-        self.assertIsNone(tok2)
+            # Agent caller must be denied
+            ok2, msg2, tok2 = gate.confirm(req.request_id, human_caller_id="agent_loop")
+            self.assertFalse(ok2)
+            self.assertIsNone(tok2)
 
-        # Human operator must be accepted
-        ok3, msg3, tok3 = gate.confirm(req.request_id, human_caller_id="human_user")
-        self.assertTrue(ok3)
-        self.assertIsNotNone(tok3)
+            # Missing presence gesture when no device is enrolled is denied
+            ok_none, msg_none, _ = gate.confirm(req.request_id)
+            self.assertFalse(ok_none)
+            self.assertIn("presence", msg_none.lower())
+
+            # Invalid presence gesture is denied
+            ok_bad, msg_bad, _ = gate.confirm(req.request_id, presence_gesture="wrong_gesture")
+            self.assertFalse(ok_bad)
+            self.assertIn("invalid", msg_bad.lower())
+
+            # Verified presence gesture matching ephemeral challenge is accepted
+            ok3, msg3, tok3 = gate.confirm(req.request_id, presence_gesture=req.presence_challenge)
+            self.assertTrue(ok3)
+            self.assertIsNotNone(tok3)
 
 
 if __name__ == "__main__":

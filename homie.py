@@ -957,27 +957,10 @@ def main():
             is_admin = False
 
         if not is_admin:
-            print("✗ [HOMIE SECURITY] Administrative elevation required (UAC Secure Desktop).")
-            print("Requesting Windows UAC Secure Desktop elevation...")
-            try:
-                params = " ".join([f'"{a}"' if " " in a else a for a in sys.argv[1:]])
-                res = ctypes.windll.shell32.ShellExecuteW(
-                    None,
-                    "runas",
-                    sys.executable,
-                    f'"{os.path.abspath(__file__)}" {params}',
-                    None,
-                    1  # SW_SHOWNORMAL
-                )
-                if res > 32:
-                    print("✓ [HOMIE SECURITY] Elevated recovery process launched on Secure Desktop.")
-                    return
-                else:
-                    print("✗ [HOMIE SECURITY] Elevation declined or cancelled.")
-                    return
-            except Exception as e:
-                print(f"✗ [HOMIE SECURITY] UAC Secure Desktop elevation failed: {e}")
-                return
+            print("✗ [HOMIE SECURITY] Administrative elevation required.")
+            print("To prevent user-space hijacking of user-writable scripts, automatic script elevation is barred.")
+            print("Please open an elevated terminal (Run as Administrator) and re-run this command.")
+            return
 
         confirmation = input("Type 'CONFIRM-RESET' to unlock pairing / generate recovery token: ").strip()
         if confirmation != "CONFIRM-RESET":

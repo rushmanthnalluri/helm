@@ -573,10 +573,10 @@ MUTATIONS = [
     },
     {
         "id": "MUTATION_65_RECOVERY_CLI_UAC_ELEVATION_CHECK_BYPASS",
-        "name": "Bypass Windows UAC Secure Desktop Elevation Check in homie.py --pairing-unlock",
+        "name": "Bypass Windows UAC Administrative Elevation Check in homie.py --pairing-unlock",
         "file": os.path.join(BASE_DIR, "homie.py"),
-        "target": "        if not is_admin:\n            print(\"✗ [HOMIE SECURITY] Administrative elevation required (UAC Secure Desktop).\")",
-        "replacement": "        if False and not is_admin: # MUTATION BYPASS: allow standard non-elevated user\n            print(\"✗ [HOMIE SECURITY] Administrative elevation required (UAC Secure Desktop).\")",
+        "target": "        if not is_admin:\n            print(\"✗ [HOMIE SECURITY] Administrative elevation required.\")",
+        "replacement": "        if False and not is_admin: # MUTATION BYPASS: allow standard non-elevated user\n            print(\"✗ [HOMIE SECURITY] Administrative elevation required.\")",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch37_security_hardening.py::TestBatch37SecurityHardening::test_2_recovery_cli_requires_uac_secure_desktop_elevation"]
     },
     {
@@ -623,8 +623,8 @@ MUTATIONS = [
         "id": "MUTATION_71_POINT_UNDER_CURSOR_BYPASS",
         "name": "Bypass WindowFromPoint Point-Under-Cursor Self-Targeting Defense in homie_supervisor.py",
         "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
-        "target": "            if tool in (\"homie_agent_click\", \"homie_agent_mouse_move\") and \"x\" in args and \"y\" in args:",
-        "replacement": "            if False and tool in (\"homie_agent_click\", \"homie_agent_mouse_move\") and \"x\" in args and \"y\" in args: # MUTATION BYPASS: allow point-under-cursor click on Homie UI\n                pass",
+        "target": "            if target_x is not None and target_y is not None:",
+        "replacement": "            if False and target_x is not None and target_y is not None: # MUTATION BYPASS: allow point-under-cursor click on Homie UI\n                pass",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch39_security_hardening.py::TestBatch39SecurityHardening::test_1_point_under_cursor_windowfrompoint_self_targeting_defense"]
     },
     {
@@ -658,6 +658,46 @@ MUTATIONS = [
         "target": "        if canonical in COMPILED_IN_CONSEQUENTIAL_TOOLS or tool_name in COMPILED_IN_CONSEQUENTIAL_TOOLS:\n            return True",
         "replacement": "        if False: # MUTATION BYPASS: bypass compiled-in floor and permit weakened disk config\n            return True",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch39_security_hardening.py::TestBatch39SecurityHardening::test_5_compiled_in_safety_floor_covers_all_consequential_and_fact_tools"]
+    },
+    {
+        "id": "MUTATION_76_PHONE_SIGNATURE_MANDATORY_BYPASS",
+        "name": "Bypass Mandatory Mobile Signature Check When Hardware Device Is Enrolled",
+        "file": os.path.join(BASE_DIR, "rails_confirmation.py"),
+        "target": "                if not signed_evidence:\n                    return False, \"DENIED: Action confirmation strictly requires verified out-of-band signature from enrolled mobile device.\", None",
+        "replacement": "                if False and not signed_evidence: # MUTATION BYPASS: make mobile signature optional\n                    pass",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch41_security_hardening.py::TestBatch41SecurityHardening::test_1_verified_mobile_signature_strictly_required_when_device_enrolled"]
+    },
+    {
+        "id": "MUTATION_77_PHYSICAL_PRESENCE_GESTURE_BYPASS",
+        "name": "Bypass Physical Presence Gesture Requirement When No Mobile Device Is Enrolled",
+        "file": os.path.join(BASE_DIR, "rails_confirmation.py"),
+        "target": "                if not presence_gesture:\n                    return False, \"DENIED: No enrolled device. Physical presence challenge gesture required for confirmation.\", None",
+        "replacement": "                if False and not presence_gesture: # MUTATION BYPASS: allow confirmation without physical presence\n                    pass",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch41_security_hardening.py::TestBatch41SecurityHardening::test_2_physical_presence_gesture_strictly_required_when_no_device_enrolled"]
+    },
+    {
+        "id": "MUTATION_78_SUPERVISOR_PIPE_FAIL_CLOSED_BYPASS",
+        "name": "Bypass Out-of-Process Pipe Client Fail-Closed Behavior on Supervisor Death",
+        "file": os.path.join(BASE_DIR, "action_broker.py"),
+        "target": "                        return False, \"Security Gate: Supervisor process is unreachable or disconnected (fail-closed).\", None",
+        "replacement": "                        return True, \"MUTATION BYPASS: allow execution without supervisor\", None",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch41_security_hardening.py::TestBatch41SecurityHardening::test_3_supervisor_killed_all_channels_fail_closed"]
+    },
+    {
+        "id": "MUTATION_79_BASE_DIR_PROCESS_IMAGE_BYPASS",
+        "name": "Bypass WindowFromPoint Application Image (BASE_DIR) Detection in homie_supervisor.py",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": "                    if BASE_DIR.lower() in pt_exe:\n                        raise CompleteMediationBreachError(",
+        "replacement": "                    if False and BASE_DIR.lower() in pt_exe: # MUTATION BYPASS: allow clicking Homie window when title is spoofed\n                        raise CompleteMediationBreachError(",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch41_security_hardening.py::TestBatch41SecurityHardening::test_6_windowfrompoint_detects_homie_by_process_path"]
+    },
+    {
+        "id": "MUTATION_80_RECOVERY_TOKEN_DELETE_DACL_DOS_BYPASS",
+        "name": "Reintroduce Unelevated DELETE Permission on Admin Recovery Token in phone_approval_portal.py",
+        "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
+        "target": "            dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_READ, users_sid)",
+        "replacement": "            dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_READ | win32con.DELETE, users_sid) # MUTATION BYPASS: reintroduce unelevated DoS deletion",
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch41_security_hardening.py::TestBatch41SecurityHardening::test_5_recovery_token_dacl_denies_unelevated_delete"]
     }
 ]
 

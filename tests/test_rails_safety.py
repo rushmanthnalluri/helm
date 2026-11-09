@@ -50,7 +50,8 @@ def rails_test_env():
 
         with patch("rails_config.get_rails_config", return_value=cfg), \
              patch("rails_audit.get_rails_audit", return_value=audit), \
-             patch("rails_confirmation.get_confirmation_gate", return_value=gate):
+             patch("rails_confirmation.get_confirmation_gate", return_value=gate), \
+             patch("device_registry.get_enrolled_devices", return_value={}):
             yield {
                 "tmp_path": tmp_path,
                 "cfg_file": cfg_file,
@@ -90,8 +91,9 @@ def test_consequential_action_stops_and_requires_confirmation(rails_test_env):
     assert "Will overwrite system clipboard with 15 characters" in res["impact_summary"]
     req_id = res["request_id"]
 
-    # 2. Human explicitly confirms
-    ok, msg, token = gate.confirm(req_id, human_caller_id="human_user")
+    # 2. Human explicitly confirms with physical presence gesture
+    req_obj = gate.get_request(req_id)
+    ok, msg, token = gate.confirm(req_id, presence_gesture=req_obj.presence_challenge)
     assert ok is True
     assert token is not None
 

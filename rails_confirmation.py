@@ -10,6 +10,8 @@ Enforces:
 
 from __future__ import annotations
 
+import os
+import json
 import hashlib
 import hmac
 import logging
@@ -69,6 +71,9 @@ class ConfirmationRequest:
     created_at: float
     status: str = "PENDING"  # PENDING, APPROVED, CONSUMED, DENIED, EXPIRED
     approval_token: Optional[str] = None
+    presence_challenge: Optional[str] = None
+    dispatched_phone: bool = False
+    dispatch_error: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -79,6 +84,9 @@ class ConfirmationRequest:
             "impact_summary": self.impact_summary,
             "created_at": self.created_at,
             "status": self.status,
+            "presence_challenge": self.presence_challenge,
+            "dispatched_phone": self.dispatched_phone,
+            "dispatch_error": self.dispatch_error,
         }
 
 
@@ -114,18 +122,30 @@ class ConfirmationGate:
             # Out-of-band mobile binding: if paired phone enrolled, dispatch challenge
             try:
                 import device_registry
-                import phone_approval_portal
                 devices = device_registry.get_enrolled_devices()
                 if devices:
+                    import phone_approval_portal
+                    import taint_tracker
                     primary = device_registry.get_primary_device_id() or list(devices.keys())[0]
-                    clean_args = json.dumps(arguments, sort_keys=True, separators=(',', ':'))
-                    args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
+                    current_epoch = taint_tracker.get_taint_epoch()
                     chal = phone_approval_portal.generate_approval_challenge(
-                        primary, tool_name, args_hash, caller_id=caller_id, ttl_seconds=300
+                        step_up_id=req_id,
+                        tool_name=tool_name,
+                        arguments=arguments if isinstance(arguments, dict) else {},
+                        session_id=req_id,
+                        taint_epoch=current_epoch,
+                        device_id=primary,
+                        caller_id=caller_id,
+                        ttl_seconds=300
                     )
+                    req.dispatched_phone = True
                     req.impact_summary += f" [Dispatched to paired phone: seq {chal.get('challenge_seq', 1)}]"
-            except Exception:
-                pass
+                else:
+                    # When no mobile device is paired, generate high-entropy physical presence challenge
+                    req.presence_challenge = f"{secrets.randbelow(1000000):06d}"
+            except Exception as disp_err:
+                req.dispatch_error = str(disp_err)
+                logger.error("Error evaluating device pairing or dispatching challenge for %s: %s", req_id, disp_err)
 
             logger.info("Created confirmation request %s for %s: %s", req_id, tool_name, summary)
             return req
@@ -149,16 +169,86 @@ class ConfirmationGate:
                         res.append(r)
             return res
 
-    def confirm(self, request_id: str, human_caller_id: str = "human_user") -> Tuple[bool, str, Optional[str]]:
-        """Human explicitly confirms request. Generates a single-use execution token."""
-        if not human_caller_id or str(human_caller_id).startswith(("worker", "agent", "ai_", "script", "bot")):
+    def confirm(
+        self,
+        request_id: str,
+        signed_evidence: Optional[Dict[str, Any]] = None,
+        presence_gesture: Optional[str] = None,
+        human_caller_id: Optional[str] = None,
+    ) -> Tuple[bool, str, Optional[str]]:
+        """Human explicitly confirms request. Generates a single-use execution token.
+        Security Invariants:
+        1. If one or more mobile devices are enrolled in device_registry:
+           Confirmation STRICTLY REQUIRES a cryptographically verified signed approval blob
+           from the enrolled device. Unsigned or missing signatures are unconditionally denied.
+        2. If no mobile devices are enrolled:
+           Confirmation requires an explicit physical presence gesture (matching ephemeral challenge code).
+        3. Bot / worker callers are strictly denied.
+        """
+        # Strict anti-bot/anti-worker enforcement: AI agents and background workers CANNOT confirm actions
+        if human_caller_id and str(human_caller_id).startswith(("worker", "agent", "ai_", "script", "bot")):
             return False, f"DENIED: Confirmation must be issued by a verified human operator, not '{human_caller_id}'.", None
+
         with self._lock:
             req = self.get_request(request_id)
             if not req:
                 return False, f"Request '{request_id}' not found.", None
             if req.status != "PENDING":
                 return False, f"Request '{request_id}' is already {req.status}.", None
+
+            # 1. Check enrolled hardware devices
+            try:
+                import device_registry
+                devices = device_registry.get_enrolled_devices()
+            except Exception:
+                devices = {}
+
+            if devices:
+                # When devices are enrolled, phone cryptographic proof is strictly required
+                if not signed_evidence:
+                    return False, "DENIED: Action confirmation strictly requires verified out-of-band signature from enrolled mobile device.", None
+
+                clean_args = json.dumps(req.arguments, sort_keys=True, separators=(',', ':')) if isinstance(req.arguments, dict) else str(req.arguments)
+                args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
+
+                verified = False
+                err_detail = "Signature verification failed"
+
+                # Path A: Verify via phone_approval_portal action approval
+                try:
+                    import phone_approval_portal
+                    ok, msg = phone_approval_portal.verify_action_approval(
+                        signed_evidence, req.tool_name, args_hash
+                    )
+                    if ok:
+                        verified = True
+                    else:
+                        err_detail = msg
+                except Exception as e:
+                    err_detail = str(e)
+
+                # Path B: Verify via homie_supervisor Signed Approval Blob (CHALLENGE_V3)
+                if not verified:
+                    try:
+                        import homie_supervisor
+                        import taint_tracker
+                        t_epoch = taint_tracker.get_taint_epoch()
+                        if homie_supervisor.verify_signed_approval_evidence(
+                            signed_evidence, req.caller_id, req.tool_name, args_hash, t_epoch
+                        ):
+                            verified = True
+                    except Exception as e:
+                        err_detail = f"{err_detail}; {e}"
+
+                if not verified:
+                    return False, f"DENIED: Mobile signature verification failed: {err_detail}", None
+
+            else:
+                # No enrolled mobile device: requires physical presence gesture matching ephemeral challenge
+                if not presence_gesture:
+                    return False, "DENIED: No enrolled device. Physical presence challenge gesture required for confirmation.", None
+                if not req.presence_challenge or not hmac.compare_digest(str(presence_gesture).strip(), str(req.presence_challenge).strip()):
+                    return False, "DENIED: Invalid physical presence challenge gesture.", None
 
             token = f"tok_{secrets.token_hex(16)}"
             req.status = "APPROVED"
@@ -172,7 +262,7 @@ class ConfirmationGate:
             except Exception:
                 pass
 
-            logger.info("Request %s confirmed by %s. Issued token %s", request_id, human_caller_id, token)
+            logger.info("Request %s confirmed via verified proof. Issued token %s", request_id, token)
             return True, f"Action confirmed: {req.impact_summary}", token
 
     def deny(self, request_id: str, reason: str = "") -> bool:

@@ -170,25 +170,32 @@ class SupervisorActuator:
                     f"Complete mediation breach: Synthetic UI interaction targeting Homie window '{fg_title}' is strictly prohibited."
                 )
 
-            # WindowFromPoint check: verify target window under physical coordinates for click/move actions
-            if tool in ("homie_agent_click", "homie_agent_mouse_move") and "x" in args and "y" in args:
+            # WindowFromPoint check: verify target window under physical coordinates for all coordinate-bearing actions
+            target_x = args.get("x", args.get("click_x", args.get("target_x", args.get("to_x"))))
+            target_y = args.get("y", args.get("click_y", args.get("target_y", args.get("to_y"))))
+            if target_x is not None and target_y is not None:
                 try:
-                    _, pt_info = windows_tools.get_window_under_point(args["x"], args["y"])
+                    _, pt_info = windows_tools.get_window_under_point(int(target_x), int(target_y))
                     pt_pid = pt_info.get("pid")
                     pt_proc = os.path.basename(pt_info.get("proc_name") or "").lower()
                     pt_title = (pt_info.get("title") or "").lower()
+                    pt_exe = (pt_info.get("exe_path") or "").lower()
 
                     if pt_pid and pt_pid == os.getpid():
                         raise CompleteMediationBreachError(
-                            f"Complete mediation breach: Point-under-cursor ({args['x']}, {args['y']}) targets Homie assistant process (PID: {pt_pid})!"
+                            f"Complete mediation breach: Point-under-cursor ({target_x}, {target_y}) targets Homie assistant process (PID: {pt_pid})!"
+                        )
+                    if BASE_DIR.lower() in pt_exe:
+                        raise CompleteMediationBreachError(
+                            f"Complete mediation breach: Point-under-cursor ({target_x}, {target_y}) targets Homie application image '{pt_exe}'!"
                         )
                     if "homie" in pt_title or "trillion" in pt_title:
                         raise CompleteMediationBreachError(
-                            f"Complete mediation breach: Point-under-cursor ({args['x']}, {args['y']}) targets Homie window '{pt_title}'!"
+                            f"Complete mediation breach: Point-under-cursor ({target_x}, {target_y}) targets Homie window '{pt_title}'!"
                         )
                     if pt_proc and pt_proc in policy_envelope.PROHIBITED_ENVELOPE_IMAGES:
                         raise CompleteMediationBreachError(
-                            f"Complete mediation breach: Point-under-cursor ({args['x']}, {args['y']}) targets prohibited process image '{pt_proc}'!"
+                            f"Complete mediation breach: Point-under-cursor ({target_x}, {target_y}) targets prohibited process image '{pt_proc}'!"
                         )
                 except CompleteMediationBreachError:
                     raise
@@ -902,8 +909,11 @@ class PolicySupervisor:
                 "reason_code": REASON_MALFORMED_FRAME
             })
 
-        # Supervisor derives caller_id from connection identity, ignoring worker spoofing
-        caller_id = getattr(self, "authorized_worker_name", "worker") or "worker"
+        # Supervisor derives caller_id from connection identity when pinned, or from proposal
+        if getattr(self, "authorized_worker_name", None):
+            caller_id = self.authorized_worker_name
+        else:
+            caller_id = payload.get("caller_id") or "worker"
         # Supervisor derives args_hash internally, ignoring worker spoofing
         clean_args = json.dumps(args, sort_keys=True, separators=(',', ':'))
         args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
@@ -1317,12 +1327,25 @@ class NamedPipeSupervisorServer:
     def stop(self):
         self.running = False
         import win32file
+        # Connect a dummy client to unblock ConnectNamedPipe if waiting
+        try:
+            h = win32file.CreateFile(
+                self.pipe_name,
+                win32file.GENERIC_READ | win32file.GENERIC_WRITE,
+                0, None, win32file.OPEN_EXISTING, 0, None
+            )
+            win32file.CloseHandle(h)
+        except Exception:
+            pass
+
         if self.server_pipe:
             try:
                 win32file.CloseHandle(self.server_pipe)
             except Exception:
                 pass
             self.server_pipe = None
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=1.0)
 
 
 class NamedPipeSupervisorClient:

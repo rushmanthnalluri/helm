@@ -82,7 +82,8 @@ def write_admin_recovery_token(token: str, ttl_seconds: float = 300.0) -> bool:
             dacl = win32security.ACL()
             dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_ALL, admin_sid)
             dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_ALL, system_sid)
-            dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_READ | win32con.DELETE, users_sid)
+            # Users SID granted read-only access (NO DELETE permission to prevent unelevated DoS attack)
+            dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_READ, users_sid)
             try:
                 tok = win32security.OpenProcessToken(win32api.GetCurrentProcess(), win32con.TOKEN_QUERY)
                 my_sid = win32security.GetTokenInformation(tok, win32security.TokenUser)[0]

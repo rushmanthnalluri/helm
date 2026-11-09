@@ -83,6 +83,24 @@ def _load_device_registry() -> Dict[str, Any]:
     return {}
 
 
+def get_enrolled_devices() -> Dict[str, Any]:
+    """Returns all active, non-revoked enrolled devices."""
+    with _REGISTRY_LOCK:
+        reg = _load_device_registry()
+        return {d_id: info for d_id, info in reg.items() if not info.get("revoked", False)}
+
+
+def get_primary_device_id() -> Optional[str]:
+    """Returns the primary enrolled device ID, or the first active enrolled device ID."""
+    devices = get_enrolled_devices()
+    for d_id, info in devices.items():
+        if info.get("primary", False):
+            return d_id
+    if devices:
+        return list(devices.keys())[0]
+    return None
+
+
 def _save_device_registry(registry: Dict[str, Any]):
     """Persists device public keys with owner-only DACL protection."""
     try:
