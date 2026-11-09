@@ -519,9 +519,9 @@ MUTATIONS = [
         "id": "MUTATION_58_RECOVERY_TOKEN_CROSS_PROCESS_SQLITE_BYPASS",
         "name": "Bypass Recovery Token Cross-Process SQLite Consumption in consume_console_recovery_token",
         "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
-        "target": "    # 3. Try cross-process SQLite table\n    try:\n        import db_utils",
-        "replacement": "    # 3. Try cross-process SQLite table\n    return False # MUTATION BYPASS: drop SQLite recovery token consumption\n    try:\n        import db_utils",
-        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch36_security_hardening.py::TestBatch36SecurityHardening::test_3_recovery_cli_non_interactive_fails_closed_and_sqlite_cross_process"]
+        "target": '        with db_utils.get_db() as conn:\n            cursor = conn.execute(\n                "UPDATE console_recovery_tokens SET consumed = 1 WHERE token_hash = ? AND consumed = 0 AND expires_at > ?",\n                (tok_hash, now)\n            )',
+        "replacement": '        with db_utils.get_db() as conn:\n            cursor = conn.execute(\n                "UPDATE console_recovery_tokens SET consumed = 0 WHERE token_hash = ? AND consumed = 0 AND expires_at > ?",\n                (tok_hash, now)\n            ) # MUTATION BYPASS: don\'t mark consumed',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch43_security_hardening.py::TestBatch43SecurityHardening::test_5_recovery_token_single_use_via_authoritative_db_record"]
     },
     {
         "id": "MUTATION_59_EXACT_VK_CHORD_DETECTION_BYPASS",
@@ -648,7 +648,7 @@ MUTATIONS = [
         "name": "Swallow Unlink Failure in consume_admin_recovery_token (Multi-Use Replay Bypass)",
         "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
         "target": "        except Exception as rm_err:\n            logger.critical(\"Failed to unlink admin recovery token; single use invariant failed: %s\", rm_err)\n            return False",
-        "replacement": "        except Exception as rm_err: # MUTATION BYPASS: swallow error and allow token reuse\n            pass",
+        "replacement": "        except Exception as rm_err: # MUTATION BYPASS: return True on unlink failure\n            return True",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch39_security_hardening.py::TestBatch39SecurityHardening::test_4_recovery_token_single_use_unlink_failure_fails_closed"]
     },
     {
@@ -668,12 +668,12 @@ MUTATIONS = [
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch41_security_hardening.py::TestBatch41SecurityHardening::test_1_verified_mobile_signature_strictly_required_when_device_enrolled"]
     },
     {
-        "id": "MUTATION_77_PHYSICAL_PRESENCE_GESTURE_BYPASS",
-        "name": "Bypass Physical Presence Gesture Requirement When No Mobile Device Is Enrolled",
+        "id": "MUTATION_77_ZERO_TRUST_NO_DEVICE_BYPASS",
+        "name": "Bypass Zero-Trust No-Device Consequential Action Denial in rails_confirmation.py",
         "file": os.path.join(BASE_DIR, "rails_confirmation.py"),
-        "target": "                if not presence_gesture:\n                    return False, \"DENIED: No enrolled device. Physical presence challenge gesture required for confirmation.\", None",
-        "replacement": "                if False and not presence_gesture: # MUTATION BYPASS: allow confirmation without physical presence\n                    pass",
-        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch41_security_hardening.py::TestBatch41SecurityHardening::test_2_physical_presence_gesture_strictly_required_when_no_device_enrolled"]
+        "target": '                return False, "DENIED: No mobile device enrolled. All consequential tools strictly require approval from an enrolled phone.", None',
+        "replacement": '                pass  # MUTATION BYPASS: allow confirmation without enrolled phone',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_rails_safety.py::test_consequential_action_stops_and_requires_confirmation"]
     },
     {
         "id": "MUTATION_78_SUPERVISOR_PIPE_FAIL_CLOSED_BYPASS",
@@ -687,8 +687,8 @@ MUTATIONS = [
         "id": "MUTATION_79_BASE_DIR_PROCESS_IMAGE_BYPASS",
         "name": "Bypass WindowFromPoint Application Image (BASE_DIR) Detection in homie_supervisor.py",
         "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
-        "target": "                    if BASE_DIR.lower() in pt_exe:\n                        raise CompleteMediationBreachError(",
-        "replacement": "                    if False and BASE_DIR.lower() in pt_exe: # MUTATION BYPASS: allow clicking Homie window when title is spoofed\n                        raise CompleteMediationBreachError(",
+        "target": "                            if os.path.commonpath([cand, base]) == base:\n                                raise CompleteMediationBreachError(",
+        "replacement": "                            if False and os.path.commonpath([cand, base]) == base: # MUTATION BYPASS\n                                raise CompleteMediationBreachError(",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch41_security_hardening.py::TestBatch41SecurityHardening::test_6_windowfrompoint_detects_homie_by_process_path"]
     },
     {
@@ -738,6 +738,226 @@ MUTATIONS = [
         "target": '        result = homie_credential_stripper.redact_secrets(result)',
         "replacement": '        pass # MUTATION BYPASS: allow credentials to leak into logs and model context',
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_openjarvis_integration.py::TestOpenJarvisIntegration::test_6_tool_registry_redacts_secrets_from_results"]
+    },
+    {
+        "id": "MUTATION_86_CONFIRM_CLIENT_PID_ROLE_BYPASS",
+        "name": "Bypass Kernel-Attested Client PID Role Check in _handle_confirm",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": '            if not self.is_ui_pid_valid(client_pid):',
+        "replacement": '            if False: # MUTATION BYPASS: allow unregistered PID to confirm',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch43_security_hardening.py::TestBatch43SecurityHardening::test_6_supervisor_named_pipe_confirm_and_taint_query"]
+    },
+    {
+        "id": "MUTATION_87_CONFIRM_ZERO_TRUST_NO_DEVICE_BYPASS",
+        "name": "Bypass Zero-Trust No-Device Denial in homie_supervisor._handle_confirm",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": """            return self._encode_reply(MSG_DECISION, {
+                "status": "DENY",
+                "reason_code": REASON_UNAUTHORIZED_TOKEN,
+                "reason": "DENIED: No mobile device enrolled. All consequential tools strictly require approval from an enrolled phone."
+            })""",
+        "replacement": '            pass  # MUTATION BYPASS: accept confirmation without enrolled phone',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch43_security_hardening.py::TestBatch43SecurityHardening::test_6_supervisor_named_pipe_confirm_and_taint_query"]
+    },
+    {
+        "id": "MUTATION_88_NONCE_ANTI_REPLAY_BYPASS",
+        "name": "Bypass Anti-Replay Nonce Check in verify_signed_approval_evidence",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": '        if not device_registry.check_and_record_consumed_nonce(str(nonce), expiry):',
+        "replacement": '        if False: # MUTATION BYPASS: allow replayed nonces to mint unlimited tokens',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch43_security_hardening.py::TestBatch43SecurityHardening::test_6_supervisor_named_pipe_confirm_and_taint_query"]
+    },
+    {
+        "id": "MUTATION_89_DEVICE_REGISTRY_TAMPERING_DETECTION_BYPASS",
+        "name": "Bypass Device Registry Deletion Tamper Detection in _load_device_registry",
+        "file": os.path.join(BASE_DIR, "device_registry.py"),
+        "target": '    if not os.path.exists(DEVICE_REGISTRY_PATH):\n        if has_marker:',
+        "replacement": '    if not os.path.exists(DEVICE_REGISTRY_PATH):\n        if False: # MUTATION BYPASS: ignore deleted registry',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch43_security_hardening.py::TestBatch43SecurityHardening::test_8_device_registry_tampering_or_deletion_fails_closed"]
+    },
+    {
+        "id": "MUTATION_90_SSRF_RESOLVE_AND_PIN_ALL_RECORDS_BYPASS",
+        "name": "Bypass All-Records A/AAAA Validation in homie_ssrf.resolve_and_pin_ip",
+        "file": os.path.join(BASE_DIR, "homie_ssrf.py"),
+        "target": '        if is_private_ip(ip):\n            return False, f"SSRF violation: resolved to private or reserved IP {ip}", None',
+        "replacement": '        if False and is_private_ip(ip): # MUTATION BYPASS: ignore private IP in multi-homed DNS\n            pass',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_openjarvis_integration.py::TestOpenJarvisIntegration::test_12_ssrf_resolve_and_pin_validates_all_records"]
+    },
+    {
+        "id": "MUTATION_91_SESSION_COMPRESSION_TAINT_INHERITANCE_BYPASS",
+        "name": "Bypass Origin Metadata Taint Inheritance in homie_session_compression.py",
+        "file": os.path.join(BASE_DIR, "homie_session_compression.py"),
+        "target": '            if src in UNTRUSTED_MESSAGE_ORIGINS or m.get("role") in ("tool", "system_external"):',
+        "replacement": '            if False: # MUTATION BYPASS: ignore untrusted message origin metadata',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_openjarvis_integration.py::TestOpenJarvisIntegration::test_9_context_compression_taint_inheritance_and_nonce_wrapping"]
+    },
+    {
+        "id": "MUTATION_92_MSG_CREATE_CONFIRM_REQUEST_ROLE_BYPASS",
+        "name": "Bypass Attested UI PID Check in _handle_create_confirm_request",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": '        if client_pid is not None and not self.is_ui_pid_valid(client_pid):',
+        "replacement": '        if False: # MUTATION BYPASS: allow un-attested process to create authoritative requests',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch43_security_hardening.py::TestBatch43SecurityHardening::test_9_two_process_confirmation_request_creation_and_gesture_verification"]
+    },
+    {
+        "id": "MUTATION_93_REGISTER_UI_INDEPENDENT_IDENTITY_BYPASS",
+        "name": "Bypass Kernel Child and Session Token Attestation in _handle_register_ui",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": '            if not (is_authorized_child or has_valid_token):',
+        "replacement": '            if False: # MUTATION BYPASS: allow arbitrary scripts without token or child status',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch43_security_hardening.py::TestBatch43SecurityHardening::test_11_unauthorized_process_cannot_register_as_ui"]
+    },
+    {
+        "id": "MUTATION_94_DEVICE_REGISTRY_WINREG_TAMPER_DETECTION_BYPASS",
+        "name": "Bypass Windows Registry Enrollment Check in _load_device_registry",
+        "file": os.path.join(BASE_DIR, "device_registry.py"),
+        "target": '    has_marker = os.path.exists(DEVICE_ENROLLED_MARKER) or _check_windows_registry_marker() or _EVER_ENROLLED',
+        "replacement": '    has_marker = os.path.exists(DEVICE_ENROLLED_MARKER) # MUTATION BYPASS: omit Windows registry check',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch43_security_hardening.py::TestBatch43SecurityHardening::test_10_device_registry_tampering_fails_closed_across_windows_registry"]
+    },
+    {
+        "id": "MUTATION_95_MCP_TOOL_HTTP_FETCH_SSRF_BYPASS",
+        "name": "Bypass SSRF Validation in homie_http_fetch Tool",
+        "file": os.path.join(BASE_DIR, "homie_mcp.py"),
+        "target": '            ok_f, code_f, body_f = homie_ssrf.pinned_fetch(u, method=m, headers=hdrs, timeout_sec=tmo)',
+        "replacement": '            ok_f, code_f, body_f = True, 200, "MUTATION_LEAK" # MUTATION BYPASS: ignore SSRF check',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch43_security_hardening.py::TestBatch43SecurityHardening::test_12_homie_http_fetch_pinned_egress_and_taint"]
+    },
+    {
+        "id": "MUTATION_96_MEETING_NOTES_PROVENANCE_TAINT_BYPASS",
+        "name": "Omit returns_untrusted from homie_get_meeting_notes in MCP_TOOLS",
+        "file": os.path.join(BASE_DIR, "homie_mcp.py"),
+        "target": '        "name": "homie_get_meeting_notes",\n        "description": "Retrieves recent meeting audio transcripts and summaries recorded via WASAPI loopback.",\n        "capabilityTier": "READ_ONLY",\n        "returns_untrusted": True,',
+        "replacement": '        "name": "homie_get_meeting_notes",\n        "description": "Retrieves recent meeting audio transcripts and summaries recorded via WASAPI loopback.",\n        "capabilityTier": "READ_ONLY", # MUTATION BYPASS: omit returns_untrusted',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch43_security_hardening.py::TestBatch43SecurityHardening::test_12_homie_http_fetch_pinned_egress_and_taint"]
+    },
+    {
+        "id": "MUTATION_97_LOCAL_HARDWARE_RECOMMENDATION_BYPASS",
+        "name": "Bypass Local Hardware Inference Tier Recommendation in homie_hardware_profiler.py",
+        "file": os.path.join(BASE_DIR, "homie_hardware_profiler.py"),
+        "target": '        if has_ollama and vram >= 6000:',
+        "replacement": '        if False and has_ollama and vram >= 6000: # MUTATION BYPASS: disable local GPU inference tier',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_openjarvis_integration.py::TestOpenJarvisIntegration::test_14_hardware_profiler_runtime_recommendation"]
+    },
+    {
+        "id": "MUTATION_98_RESOURCE_BUDGET_CIRCUIT_BREAKER_BYPASS",
+        "name": "Bypass Dollar Budget Circuit Breaker in homie_resource_tracker.py",
+        "file": os.path.join(BASE_DIR, "homie_resource_tracker.py"),
+        "target": '        budget_exceeded = self._daily_spend > self.daily_budget_usd',
+        "replacement": '        budget_exceeded = False # MUTATION BYPASS: disable budget circuit breaker',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_openjarvis_integration.py::TestOpenJarvisIntegration::test_16_resource_tracker_budget_circuit_breaker"]
+    },
+    {
+        "id": "MUTATION_99_FOREGROUND_WINDOW_MISSING_PROC_FAIL_CLOSED_BYPASS",
+        "name": "Bypass Foreground Window Missing Proc/PID Fail-Closed Check in homie_supervisor.py",
+        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "target": '            if not fg_act or not fg_act.get("pid") or not fg_act.get("proc_name"):',
+        "replacement": '            if False and (not fg_act or not fg_act.get("pid") or not fg_act.get("proc_name")): # MUTATION BYPASS',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_tier_a_adversarial.py::TestTierAAdversarialSuite::test_6_actuator_denies_when_foreground_missing_proc_name_or_pid"]
+    },
+    {
+        "id": "MUTATION_100_OWNER_RIGHTS_ACE_DROP",
+        "name": "Drop OWNER RIGHTS ACE (S-1-3-4) in homie_confinement.py",
+        "file": os.path.join(BASE_DIR, "homie_confinement.py"),
+        "target": '    dacl.AddAccessAllowedAce(win32security.ACL_REVISION, limited_mask, sid_owner_rights)',
+        "replacement": '    pass # MUTATION DROP OWNER RIGHTS ACE',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_tier_a_adversarial.py::TestTierAAdversarialSuite::test_5_windows_owner_rights_ace_denies_write_dac"]
+    },
+    {
+        "id": "MUTATION_101_TOOLSPEC_CONTRACT_NO_DEFAULTS_BYPASS",
+        "name": "Bypass ToolSpec Capability Tier Validation in agent_tools.py",
+        "file": os.path.join(BASE_DIR, "agent_tools.py"),
+        "target": '        if self.capability_tier not in VALID_CAPABILITY_TIERS:',
+        "replacement": '        if False: # MUTATION BYPASS VALID_CAPABILITY_TIERS',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_agent_tools.py::TestAgentTools::test_toolspec_contract_enforces_no_defaults_and_validates_fields"]
+    },
+    {
+        "id": "MUTATION_102_CONTEXT_SEARCH_SENSITIVE_READ_DOWNGRADE",
+        "name": "Downgrade Context Search from SENSITIVE_READ to READ_ONLY in agent_tools.py",
+        "file": os.path.join(BASE_DIR, "agent_tools.py"),
+        "target": '        capability_tier="SENSITIVE_READ",',
+        "replacement": '        capability_tier="READ_ONLY", # MUTATION BYPASS',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_context_search.py::TestContextSearch::test_5_tool_registry_and_mcp_execution"]
+    },
+    {
+        "id": "MUTATION_103_QUARANTINE_READER_HANDLE_LEAK",
+        "name": "Leak Raw Email Body into Planner Schema in homie_quarantine_reader.py",
+        "file": os.path.join(BASE_DIR, "homie_quarantine_reader.py"),
+        "target": '        body_handle = self.handle_store.store(body, prefix="EMAIL")',
+        "replacement": '        body_handle = self.handle_store.store(body, prefix="EMAIL")\n        schema["raw_body_leak"] = body # MUTATION LEAK',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_tier_a_adversarial.py::TestTierAAdversarialSuite::test_1_adversarial_email_injection_zero_tool_call"]
+    },
+    {
+        "id": "MUTATION_104_STRUCTURED_APPROVAL_BIDI_BYPASS",
+        "name": "Bypass Prohibited Bidi/Zero-Width Characters Check in homie_structured_approval.py",
+        "file": os.path.join(BASE_DIR, "homie_structured_approval.py"),
+        "target": '        if cp in PROHIBITED_CODEPOINTS:',
+        "replacement": '        if False: # MUTATION BYPASS PROHIBITED_CODEPOINTS',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_structured_approval.py::TestStructuredApprovals::test_2_prohibits_bidi_override_characters"]
+    },
+    {
+        "id": "MUTATION_105_BROWSER_BROKER_TOCTOU_BYPASS",
+        "name": "Bypass DOM Mutation Anti-TOCTOU Check in homie_browser_broker.py",
+        "file": os.path.join(BASE_DIR, "homie_browser_broker.py"),
+        "target": '        if current_snap.snapshot_hash != prior_snapshot.snapshot_hash:',
+        "replacement": '        if False: # MUTATION BYPASS DOM TOCTOU CHECK',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_browser_broker.py::TestBrowserBroker::test_5_form_submission_anti_toctou_defense"]
+    },
+    {
+        "id": "MUTATION_106_PLAN_ENVELOPE_TAINT_BYPASS",
+        "name": "Bypass Plan Envelope Unexpected Taint Invalidation in homie_plan_envelopes.py",
+        "file": os.path.join(BASE_DIR, "homie_plan_envelopes.py"),
+        "target": '        if unexpected_taint_detected or current_taint_epoch > self.plan.taint_epoch:',
+        "replacement": '        if False: # MUTATION BYPASS UNEXPECTED TAINT CHECK',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_plan_envelopes.py::TestPlanEnvelopes::test_4_unexpected_taint_invalidates_plan"]
+    },
+    {
+        "id": "MUTATION_107_WEBAUTHN_UV_BYPASS",
+        "name": "Bypass WebAuthn User Verification (UV) Requirement in webauthn_verifier.py",
+        "file": os.path.join(BASE_DIR, "webauthn_verifier.py"),
+        "target": '    if rp.require_uv and not ad.flags & FLAG_UV:',
+        "replacement": '    if False: # MUTATION_107_BYPASS_UV',
+        "test_cmd": [sys.executable, "-m", "unittest", "tests.test_webauthn_verifier.TestWebAuthnVerifier.test_6_user_presence_and_verification_enforced"]
+    },
+    {
+        "id": "MUTATION_108_WEBAUTHN_SYNCED_PASSKEY_BE_BYPASS",
+        "name": "Bypass Device-Bound Backup-Eligible Rejection in webauthn_verifier.py",
+        "file": os.path.join(BASE_DIR, "webauthn_verifier.py"),
+        "target": '    if rp.require_device_bound and be:',
+        "replacement": '    if False: # MUTATION_108_BYPASS_BE',
+        "test_cmd": [sys.executable, "-m", "unittest", "tests.test_webauthn_verifier.TestWebAuthnVerifier.test_7_synced_passkey_backup_eligible_rejected"]
+    },
+    {
+        "id": "MUTATION_109_WEBAUTHN_SIGN_COUNT_ROLLBACK_BYPASS",
+        "name": "Bypass Monotonic Sign Counter Rollback Detection in webauthn_verifier.py",
+        "file": os.path.join(BASE_DIR, "webauthn_verifier.py"),
+        "target": '        if ad.sign_count <= cred.sign_count:',
+        "replacement": '        if False: # MUTATION_109_BYPASS_SIGN_COUNT_ROLLBACK',
+        "test_cmd": [sys.executable, "-m", "unittest", "tests.test_webauthn_verifier.TestWebAuthnVerifier.test_8_sign_count_rollback_detected"]
+    },
+    {
+        "id": "MUTATION_110_INJECTION_BASELINE_ZERO_POLICY_ASR_BYPASS",
+        "name": "Bypass Complete Mediation Gating in injection_baseline_harness.py",
+        "file": os.path.join(BASE_DIR, "injection_baseline_harness.py"),
+        "target": '                return "DENIED", f"Supervisor complete mediation blocked tool {tool}"',
+        "replacement": '                return "ALLOWED", "MUTATION_110_BYPASS_MEDIATION"',
+        "test_cmd": [sys.executable, "-m", "unittest", "tests.test_injection_baseline_harness.TestInjectionBaselineHarness.test_3_zero_policy_asr_invariant"]
+    },
+    {
+        "id": "MUTATION_111_MAIL_SEND_WEBAUTHN_BYPASS",
+        "name": "Bypass WebAuthn Assertion Check in MailConnector.send",
+        "file": os.path.join(BASE_DIR, "homie_mail_calendar.py"),
+        "target": '        webauthn_verifier.verify_assertion(rp, cred, assertion_response, challenge_bytes, challenge_store)',
+        "replacement": '        pass # MUTATION_111_BYPASS_MAIL_SEND_WEBAUTHN',
+        "test_cmd": [sys.executable, "-m", "unittest", "tests.test_mail_calendar.TestMailCalendarWorkflows.test_10_send_denied_with_wrong_challenge_or_forged_assertion"]
+    },
+    {
+        "id": "MUTATION_112_BROWSER_TOCTOU_WEBAUTHN_BYPASS",
+        "name": "Bypass Gated Submit TOCTOU Check in homie_browser_broker.py",
+        "file": os.path.join(BASE_DIR, "homie_browser_broker.py"),
+        "target": '        if current_snap.snapshot_hash != prior_snapshot.snapshot_hash:',
+        "replacement": '        if False: # MUTATION_112_BYPASS_TOCTOU',
+        "test_cmd": [sys.executable, "-m", "unittest", "tests.test_browser_broker.TestBrowserBroker.test_7_browser_gated_submit_with_webauthn_and_toctou"]
     }
 ]
 

@@ -30,6 +30,19 @@ from chat_core import AgentCore, ModelTurn, ToolCall, build_system_prompt
 class TestDurableMemory(unittest.TestCase):
 
     def setUp(self):
+        import homie_supervisor
+        for p in [homie_supervisor.DIRTY_FLAG_PATH, homie_supervisor.CRASH_HISTORY_PATH]:
+            if os.path.exists(p):
+                try: os.remove(p)
+                except Exception: pass
+        import kill_switch
+        kill_switch._KILL_SWITCH_ACTIVE = False
+        kill_switch._ENGAGED_REASON = ""
+        import taint_tracker
+        taint_tracker.clear_all_taints()
+        taint_tracker.set_standalone_mode(True)
+        import action_broker
+        action_broker.set_action_broker(action_broker.ActionBroker(standalone_mode=True))
         self.temp_dir = tempfile.TemporaryDirectory()
         self.facts_file = Path(self.temp_dir.name) / "facts.json"
         self.store = DurableMemoryStore(self.facts_file)
@@ -37,6 +50,11 @@ class TestDurableMemory(unittest.TestCase):
 
     def tearDown(self):
         durable_memory.set_default_memory_store(None)
+        import homie_supervisor
+        for p in [homie_supervisor.DIRTY_FLAG_PATH, homie_supervisor.CRASH_HISTORY_PATH]:
+            if os.path.exists(p):
+                try: os.remove(p)
+                except Exception: pass
         try:
             self.temp_dir.cleanup()
         except Exception:
@@ -126,16 +144,29 @@ class TestDurableMemory(unittest.TestCase):
     def test_5_agent_core_tool_roundtrip_remembers_and_forgets(self):
         """Agent can execute homie_remember_fact, homie_forget_fact, and homie_list_facts."""
         import rails_confirmation
+        import device_registry
+        import hashlib
+        from tests.phone_testing_keys import enroll_test_device, mint_test_action_approval
+
         gate = rails_confirmation.get_confirmation_gate()
         registry = build_default_registry()
 
-        with patch("device_registry.get_enrolled_devices", return_value={}):
+        priv_pem, pub_pem = enroll_test_device("test_memory_phone")
+        try:
             # Step 1: Execute homie_remember_fact (consequential tool requiring confirmation)
             res1 = registry.execute("homie_remember_fact", {"key": "pet_name", "fact": "The user has a golden retriever named Max."})
             if res1.get("needs_confirmation"):
                 req_id = res1["request_id"]
                 req_obj = gate.get_request(req_id)
-                ok, msg, token = gate.confirm(req_id, presence_gesture=req_obj.presence_challenge)
+                clean_args = json.dumps(req_obj.arguments, sort_keys=True, separators=(',', ':'))
+                args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
+                sig_blob = mint_test_action_approval(
+                    priv_pem,
+                    req_obj.tool_name,
+                    args_hash,
+                    device_id="test_memory_phone"
+                )
+                ok, msg, token = gate.confirm(req_id, signed_evidence=sig_blob)
                 self.assertTrue(ok, msg)
                 res1 = registry.execute("homie_remember_fact", {"key": "pet_name", "fact": "The user has a golden retriever named Max."}, approval_token=token)
             self.assertTrue(res1["ok"])
@@ -152,25 +183,48 @@ class TestDurableMemory(unittest.TestCase):
             if res3.get("needs_confirmation"):
                 req_id = res3["request_id"]
                 req_obj = gate.get_request(req_id)
-                ok, msg, token = gate.confirm(req_id, presence_gesture=req_obj.presence_challenge)
+                clean_args = json.dumps(req_obj.arguments, sort_keys=True, separators=(',', ':'))
+                args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
+                sig_blob = mint_test_action_approval(
+                    priv_pem,
+                    req_obj.tool_name,
+                    args_hash,
+                    device_id="test_memory_phone"
+                )
+                ok, msg, token = gate.confirm(req_id, signed_evidence=sig_blob)
                 self.assertTrue(ok, msg)
                 res3 = registry.execute("homie_forget_fact", {"key": "pet_name"}, approval_token=token)
             self.assertTrue(res3["ok"])
             self.assertIsNone(self.store.get_fact("pet_name"))
+        finally:
+            device_registry.clear_registry_for_testing()
 
     def test_6_dynamic_prompt_refresh_during_conversation(self):
         """AgentCore dynamically refreshes system prompt when facts are learned mid-session."""
         import rails_confirmation
+        import device_registry
+        import hashlib
+        from tests.phone_testing_keys import enroll_test_device, mint_test_action_approval
+
         gate = rails_confirmation.get_confirmation_gate()
         registry = build_default_registry()
 
-        with patch("device_registry.get_enrolled_devices", return_value={}):
+        priv_pem, pub_pem = enroll_test_device("test_memory_phone_6")
+        try:
             orig_execute = registry.execute
             def auto_confirm_execute(name, arguments, caller_id="ai_text_agent", approval_token=None):
                 res = orig_execute(name, arguments, caller_id=caller_id, approval_token=approval_token)
                 if res.get("needs_confirmation"):
                     req_obj = gate.get_request(res["request_id"])
-                    ok, msg, tok = gate.confirm(res["request_id"], presence_gesture=req_obj.presence_challenge)
+                    clean_args = json.dumps(req_obj.arguments, sort_keys=True, separators=(',', ':'))
+                    args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
+                    sig_blob = mint_test_action_approval(
+                        priv_pem,
+                        req_obj.tool_name,
+                        args_hash,
+                        device_id="test_memory_phone_6"
+                    )
+                    ok, msg, tok = gate.confirm(res["request_id"], signed_evidence=sig_blob)
                     if ok and tok:
                         return orig_execute(name, arguments, caller_id=caller_id, approval_token=tok)
                 return res
@@ -210,6 +264,8 @@ class TestDurableMemory(unittest.TestCase):
             self.assertEqual(self.store.get_fact("preferred_drink"), "The user prefers sparkling water with lime.")
             # Ensure core's active system prompt was updated dynamically
             self.assertIn("preferred_drink", core.system_prompt)
+        finally:
+            device_registry.clear_registry_for_testing()
 
     def test_7_anti_taint_memory_laundering_defense(self):
         """Directive: When workstation or session is tainted, fact mutations are denied to prevent prompt laundering."""

@@ -14,7 +14,7 @@ import action_broker
 import homie_supervisor
 
 
-def spec(runner, timeout=1.0, tier="READ_ONLY"):
+def spec(runner, timeout=1.0, tier="READ_ONLY", returns_untrusted=False, egress="none", approval="none"):
     return ToolSpec(
         name="sample_read",
         description="Read one bounded sample value.",
@@ -25,6 +25,9 @@ def spec(runner, timeout=1.0, tier="READ_ONLY"):
         },
         capability_tier=tier,
         runner=runner,
+        returns_untrusted=returns_untrusted,
+        egress=egress,
+        approval=approval,
         timeout_seconds=timeout,
     )
 
@@ -83,6 +86,10 @@ class TestAgentTools(unittest.TestCase):
                 "homie_remember_fact",
                 "homie_forget_fact",
                 "homie_list_facts",
+                "homie_list_skills",
+                "homie_read_skill",
+                "homie_generate_briefing",
+                "homie_search_context",
             },
         )
         self.assertIn("recent files", schema["homie_list_downloads"]["description"])
@@ -106,6 +113,81 @@ class TestAgentTools(unittest.TestCase):
             locked_registry.close()
             locked_supervisor.clean_shutdown.assert_not_called()
             self.assertIs(action_broker._GLOBAL_BROKER, locked_broker)
+
+
+
+    def test_toolspec_contract_enforces_no_defaults_and_validates_fields(self):
+        """ToolSpec requires returns_untrusted, egress, and approval without defaults; rejects open egress."""
+        # 1. Missing required field raises TypeError
+        with self.assertRaises(TypeError):
+            ToolSpec(
+                name="invalid_tool",
+                description="test",
+                parameters={"type": "object", "properties": {}, "required": []},
+                capability_tier="READ_ONLY",
+                runner=lambda a, c: None,
+            )
+
+        # 2. Open egress 'user_specified' or arbitrary URL is strictly rejected
+        with self.assertRaisesRegex(ValueError, "Invalid egress policy"):
+            ToolSpec(
+                name="bad_egress",
+                description="test",
+                parameters={"type": "object", "properties": {}, "required": []},
+                capability_tier="READ_ONLY",
+                runner=lambda a, c: None,
+                returns_untrusted=False,
+                egress="user_specified",
+                approval="none",
+            )
+
+        # 3. Invalid capability tier is rejected
+        with self.assertRaisesRegex(ValueError, "Invalid capability_tier"):
+            ToolSpec(
+                name="bad_tier",
+                description="test",
+                parameters={"type": "object", "properties": {}, "required": []},
+                capability_tier="UNKNOWN_TIER",
+                runner=lambda a, c: None,
+                returns_untrusted=False,
+                egress="none",
+                approval="none",
+            )
+
+        # 4. Valid supervisor_proxy egress is accepted
+        valid_proxy_tool = ToolSpec(
+            name="proxy_tool",
+            description="test",
+            parameters={"type": "object", "properties": {}, "required": []},
+            capability_tier="SENSITIVE_READ",
+            runner=lambda a, c: None,
+            returns_untrusted=True,
+            egress="supervisor_proxy:api.example.com",
+            approval="none",
+        )
+        self.assertEqual(valid_proxy_tool.egress, "supervisor_proxy:api.example.com")
+        self.assertEqual(valid_proxy_tool.capability_tier, "SENSITIVE_READ")
+
+    def test_default_registry_tools_comply_with_strict_5_field_contract(self):
+        """Every tool registered in build_default_registry must satisfy strict contract."""
+        registry = build_default_registry()
+        for name, tool in registry._tools.items():
+            self.assertIn(tool.capability_tier, {"READ_ONLY", "SENSITIVE_READ", "CONSEQUENTIAL", "WRITE_EXEC"})
+            self.assertIsInstance(tool.returns_untrusted, bool)
+            self.assertTrue(tool.egress == "none" or tool.egress.startswith("supervisor_proxy:"))
+            self.assertIn(tool.approval, {"none", "step_up", "explicit", "phone_signed"})
+            self.assertGreater(tool.max_output_chars, 0)
+
+        # Context search is SENSITIVE_READ with taint
+        cs = registry._tools["homie_search_context"]
+        self.assertEqual(cs.capability_tier, "SENSITIVE_READ")
+        self.assertTrue(cs.returns_untrusted)
+        self.assertTrue(cs.taint_on_read)
+
+        # Briefing tool carries taint
+        briefing = registry._tools["homie_generate_briefing"]
+        self.assertTrue(briefing.returns_untrusted)
+        self.assertTrue(briefing.taint_on_read)
 
 
 if __name__ == "__main__":

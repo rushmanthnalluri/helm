@@ -130,6 +130,9 @@ class TestOpenJarvisIntegration(unittest.TestCase):
                 parameters={"type": "object", "properties": {}, "required": []},
                 capability_tier="READ_ONLY",
                 runner=lambda args, cid: {"ok": True, "token": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...secret"},
+                returns_untrusted=False,
+                egress="none",
+                approval="none",
             )
         )
         with patch("homie_supervisor.get_allowed_tools_map", return_value={"leak_secret_tool": "READ_ONLY"}):
@@ -172,19 +175,21 @@ class TestOpenJarvisIntegration(unittest.TestCase):
         self.assertEqual(attack_facts, [])
 
     def test_9_context_compression_taint_inheritance_and_nonce_wrapping(self):
-        """Directive: When any older turn is tainted, the summary inherits taint and is enclosed in a nonce envelope."""
+        """Directive: When any older turn is untrusted by origin metadata, the summary inherits taint and is enclosed in a nonce envelope."""
+        taint_tracker.clear_all_taints()
         compressor = homie_session_compression.ContextCompressor(tool_output_max=50, trigger_turns=3, recent_turns=1)
 
+        # Message with untrusted origin 'web' but without explicit 'tainted: True' flag
         messages = [
             {"role": "user", "content": "Search web"},
-            {"role": "tool", "content": '<untrusted_data nonce="abc12345" source="web">Untrusted page content</untrusted_data nonce="abc12345">', "tainted": True},
+            {"role": "user", "source": "web", "content": "External web search results"},
             {"role": "assistant", "content": "I found this information"},
             {"role": "user", "content": "Next request"},
         ]
 
         processed = compressor.process(messages)
         first_msg = processed[0]
-        self.assertTrue(first_msg.get("tainted"))
+        self.assertTrue(first_msg.get("tainted"), "Summary must inherit taint from untrusted origin metadata")
         self.assertIn('<untrusted_data nonce=', str(first_msg.get("content")))
         self.assertIn('tainted="true"', str(first_msg.get("content")))
         self.assertTrue(taint_tracker.is_workstation_tainted())
@@ -212,6 +217,97 @@ class TestOpenJarvisIntegration(unittest.TestCase):
         self.assertEqual(status, 403)
         self.assertIn("SSRF Blocked", msg)
 
+
+    def test_12_ssrf_resolve_and_pin_validates_all_records(self):
+        """Directive: resolve_and_pin_ip fails closed if ANY returned DNS record resolves to private/reserved IP."""
+        import socket
+        from unittest.mock import patch
+
+        mock_dual_homed = [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('93.184.216.34', 80)),
+            (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('10.0.0.1', 80)),
+        ]
+        with patch('socket.getaddrinfo', return_value=mock_dual_homed):
+            ok, msg, pinned = homie_ssrf.resolve_and_pin_ip('dual-homed.example.com', 80)
+            self.assertFalse(ok, "Must fail closed when any returned A/AAAA record is private")
+            self.assertIsNone(pinned)
+            self.assertIn("resolved to private or reserved IP", msg)
+
+
+
+    def test_13_hardware_profiler_system_specs_and_gpu_detection(self):
+        """OpenJarvis Directive: HardwareProfiler accurately profiles RAM, CPU cores, and GPU VRAM."""
+        import homie_hardware_profiler
+        profiler = homie_hardware_profiler.HardwareProfiler()
+        specs = profiler.get_system_specs()
+        self.assertGreater(specs["total_ram_gb"], 0)
+        self.assertGreater(specs["cpu_cores_logical"], 0)
+        self.assertIsInstance(specs["gpus"], list)
+        self.assertGreaterEqual(specs["total_vram_mb"], 0)
+
+    def test_14_hardware_profiler_runtime_recommendation(self):
+        """OpenJarvis Directive: Recommends local runtime when sufficient GPU VRAM & Ollama available, cloud otherwise."""
+        import homie_hardware_profiler
+        profiler = homie_hardware_profiler.HardwareProfiler()
+
+        # Case A: Ample VRAM (8GB) and Ollama running with llama3
+        mock_specs = {
+            "total_ram_gb": 32.0, "available_ram_gb": 16.0,
+            "cpu_cores_logical": 16, "cpu_cores_physical": 8,
+            "gpus": [{"name": "NVIDIA GeForce RTX 4080", "vram_mb": 8192}],
+            "total_vram_mb": 8192
+        }
+        mock_engines = {"ollama": {"available": True, "models": ["llama3:8b"]}, "llama_cpp": {"available": False, "models": []}}
+
+        with patch.object(profiler, "get_system_specs", return_value=mock_specs), \
+             patch.object(profiler, "probe_local_engines", return_value=mock_engines):
+            rec = profiler.recommend_runtime()
+            self.assertEqual(rec["preferred_tier"], "LOCAL")
+            self.assertEqual(rec["recommended_engine"], "ollama")
+            self.assertEqual(rec["model_candidate"], "llama3:8b")
+
+        # Case B: No local engine running -> defaults to CLOUD (Gemini Flash)
+        mock_engines_none = {"ollama": {"available": False, "models": []}, "llama_cpp": {"available": False, "models": []}}
+        with patch.object(profiler, "get_system_specs", return_value=mock_specs), \
+             patch.object(profiler, "probe_local_engines", return_value=mock_engines_none):
+            rec_cloud = profiler.recommend_runtime()
+            self.assertEqual(rec_cloud["preferred_tier"], "CLOUD")
+            self.assertEqual(rec_cloud["model_candidate"], "gemini-2.5-flash")
+
+    def test_15_resource_tracker_cost_and_flops_evaluation(self):
+        """OpenJarvis Directive: ResourceTracker calculates FLOPs (6*N*P) and token dollar costs."""
+        import homie_resource_tracker
+        tracker = homie_resource_tracker.ResourceTracker(daily_budget_usd=10.0)
+
+        # 1000 prompt tokens, 500 completion tokens on gemini-2.5-flash
+        t = tracker.record_turn(
+            model_name="gemini-2.5-flash",
+            prompt_tokens=1000,
+            completion_tokens=500,
+            latency_ms=350.5,
+            caller_id="assistant"
+        )
+        self.assertEqual(t["total_tokens"], 1500)
+        self.assertGreater(t["estimated_cost_usd"], 0)
+        self.assertGreater(t["estimated_flops"], 0)
+        self.assertFalse(t["budget_exceeded"])
+        self.assertEqual(tracker.daily_spend, t["estimated_cost_usd"])
+
+    def test_16_resource_tracker_budget_circuit_breaker(self):
+        """OpenJarvis Directive: Circuit breaker triggers when daily expenditure exceeds configured limit."""
+        import homie_resource_tracker
+        tracker = homie_resource_tracker.ResourceTracker(daily_budget_usd=0.001)
+
+        # Large turn on claude-3-5-sonnet exceeding $0.001 limit
+        t = tracker.record_turn(
+            model_name="claude-3-5-sonnet",
+            prompt_tokens=10000,
+            completion_tokens=5000,
+            latency_ms=1200.0,
+            caller_id="assistant"
+        )
+        self.assertTrue(t["budget_exceeded"])
+        self.assertGreater(tracker.daily_spend, 0.001)
 
 if __name__ == "__main__":
     unittest.main()

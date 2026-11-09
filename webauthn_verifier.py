@@ -1,0 +1,355 @@
+"""
+webauthn_verifier.py - DRAFT. A person must read this before it is merged.
+
+Purpose: verify WebAuthn registration and assertion responses where the
+challenge IS the SHA-256 of a supervisor-built canonical approval object
+("transaction approval"). Runs inside the supervisor, never in the UI/gateway.
+
+What a valid assertion proves:   the authenticator holding an enrolled key
+produced a signature, with user presence (and verification), for exactly the
+32-byte challenge the supervisor computed, from the expected origin / RP ID.
+What it does NOT prove:          that the person READ the text. The page that
+renders the approval must come from an origin the PC cannot alter, and must
+recompute the hash from the displayed fields before calling credentials.get().
+
+Policy defaults are strict:
+  * UV required (PIN / biometric), not just UP.
+  * Device-bound only: Backup-Eligible (BE) flag must be 0. Synced passkeys
+    (iCloud Keychain, Google Password Manager) set BE=1 and live in a cloud.
+  * ES256 only unless you widen allowed_algs.
+  * Attestation is recorded, never trusted. Hardware-backing claims need chain
+    validation against trust anchors (e.g. FIDO MDS); use py_webauthn's
+    verify_registration_response(pem_root_certs_bytes_by_fmt=...) for that.
+
+Dependencies: cryptography, cbor2. No hand-written CBOR or ASN.1.
+"""
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
+import io
+import json
+import re
+import struct
+import threading
+import time
+from dataclasses import dataclass
+from typing import Callable, Optional
+from urllib.parse import urlparse
+
+import cbor2
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519
+
+FLAG_UP, FLAG_UV, FLAG_BE, FLAG_BS = 0x01, 0x04, 0x08, 0x10
+FLAG_AT, FLAG_ED = 0x40, 0x80
+COSE_ES256, COSE_EDDSA = -7, -8
+
+MAX_CLIENT_DATA = 4096
+MAX_AUTH_DATA = 4096
+MAX_SIGNATURE = 512
+MAX_ATTESTATION_OBJECT = 16384
+
+_B64U = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+class WebAuthnError(Exception):
+    """Every failure is an exception with a stable code. Callers fail closed."""
+
+    def __init__(self, code: str, detail: str = ""):
+        super().__init__(f"{code}: {detail}" if detail else code)
+        self.code = code
+
+
+def b64u_decode(value, max_len: int) -> bytes:
+    if not isinstance(value, str) or not value or len(value) > max_len:
+        raise WebAuthnError("MALFORMED_FIELD", "missing, wrong type, or too long")
+    if not _B64U.match(value):          # urlsafe_b64decode silently drops junk
+        raise WebAuthnError("MALFORMED_BASE64")
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+def b64u_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+@dataclass(frozen=True)
+class RelyingParty:
+    rp_id: str
+    origins: frozenset
+    allowed_algs: frozenset = frozenset({COSE_ES256})
+    require_uv: bool = True
+    require_device_bound: bool = True
+
+    def __post_init__(self):
+        if not self.origins:
+            raise ValueError("at least one origin required")
+        for origin in self.origins:
+            u = urlparse(origin)
+            host = u.hostname or ""
+            secure = u.scheme == "https" or (u.scheme == "http" and host == "localhost")
+            if not secure or u.path not in ("", "/") or u.query or u.fragment:
+                raise ValueError(f"origin must be a bare https origin: {origin}")
+            if not (host == self.rp_id or host.endswith("." + self.rp_id)):
+                raise ValueError(f"origin host {host} is not within rp_id {self.rp_id}")
+
+
+@dataclass
+class Credential:
+    credential_id: bytes
+    cose_key_cbor: bytes
+    alg: int
+    sign_count: int
+    device_id: str
+    backup_eligible: bool
+    aaguid: bytes
+    attestation_fmt: str
+    attestation_trust: str      # "none" | "self" | "unverified"  (never "hardware")
+    revoked: bool = False
+
+
+@dataclass(frozen=True)
+class AssertionResult:
+    new_sign_count: int
+    flags: int
+    user_verified: bool
+
+
+@dataclass(frozen=True)
+class AuthData:
+    rp_id_hash: bytes
+    flags: int
+    sign_count: int
+    aaguid: Optional[bytes] = None
+    credential_id: Optional[bytes] = None
+    cose_key: Optional[dict] = None
+
+
+def parse_authenticator_data(data: bytes) -> AuthData:
+    if not isinstance(data, (bytes, bytearray)) or not 37 <= len(data) <= MAX_AUTH_DATA:
+        raise WebAuthnError("BAD_AUTH_DATA", "length")
+    data = bytes(data)
+    rp_id_hash, flags = data[:32], data[32]
+    (sign_count,) = struct.unpack(">I", data[33:37])
+    offset = 37
+    aaguid = cred_id = cose = None
+    if flags & FLAG_AT:
+        if len(data) < offset + 18:
+            raise WebAuthnError("BAD_AUTH_DATA", "truncated attested credential data")
+        aaguid = data[offset:offset + 16]
+        offset += 16
+        (cred_len,) = struct.unpack(">H", data[offset:offset + 2])
+        offset += 2
+        if cred_len == 0 or cred_len > 1023 or len(data) < offset + cred_len:
+            raise WebAuthnError("BAD_AUTH_DATA", "credential id length")
+        cred_id = data[offset:offset + cred_len]
+        offset += cred_len
+        stream = io.BytesIO(data[offset:])
+        try:
+            cose = cbor2.CBORDecoder(stream).decode()
+        except Exception as exc:
+            raise WebAuthnError("BAD_AUTH_DATA", f"credential public key CBOR: {exc}")
+        offset += stream.tell()
+    if flags & FLAG_ED:
+        stream = io.BytesIO(data[offset:])
+        try:
+            cbor2.CBORDecoder(stream).decode()
+        except Exception as exc:
+            raise WebAuthnError("BAD_AUTH_DATA", f"extensions CBOR: {exc}")
+        offset += stream.tell()
+    if offset != len(data):
+        raise WebAuthnError("BAD_AUTH_DATA", "trailing bytes")
+    return AuthData(rp_id_hash, flags, sign_count, aaguid, cred_id, cose)
+
+
+def cose_to_public_key(cose, allowed_algs):
+    """Returns (public_key, alg). Accepts only ES256/P-256 and EdDSA/Ed25519."""
+    if not isinstance(cose, dict):
+        raise WebAuthnError("BAD_COSE_KEY", "not a map")
+    kty, alg = cose.get(1), cose.get(3)
+    if alg not in allowed_algs:
+        raise WebAuthnError("ALG_NOT_ALLOWED", str(alg))
+    if alg == COSE_ES256:
+        x, y = cose.get(-2), cose.get(-3)
+        if kty != 2 or cose.get(-1) != 1:
+            raise WebAuthnError("BAD_COSE_KEY", "not EC2/P-256")
+        if not (isinstance(x, bytes) and isinstance(y, bytes) and len(x) == len(y) == 32):
+            raise WebAuthnError("BAD_COSE_KEY", "coordinate size")
+        try:  # raises ValueError if the point is not on the curve
+            key = ec.EllipticCurvePublicNumbers(
+                int.from_bytes(x, "big"), int.from_bytes(y, "big"), ec.SECP256R1()
+            ).public_key()
+        except ValueError:
+            raise WebAuthnError("BAD_COSE_KEY", "point not on curve")
+        return key, alg
+    if alg == COSE_EDDSA:
+        x = cose.get(-2)
+        if kty != 1 or cose.get(-1) != 6 or not (isinstance(x, bytes) and len(x) == 32):
+            raise WebAuthnError("BAD_COSE_KEY", "not OKP/Ed25519")
+        return ed25519.Ed25519PublicKey.from_public_bytes(x), alg
+    raise WebAuthnError("ALG_NOT_ALLOWED", str(alg))
+
+
+def _verify_signature(key, alg: int, signature: bytes, signed: bytes) -> None:
+    try:
+        if alg == COSE_ES256:
+            key.verify(signature, signed, ec.ECDSA(hashes.SHA256()))
+        else:
+            key.verify(signature, signed)
+    except (InvalidSignature, ValueError):
+        raise WebAuthnError("BAD_SIGNATURE")
+
+
+class ChallengeStore:
+    """Supervisor-side single-use challenges. In memory on purpose: a daemon
+    restart invalidates every pending approval, which fails closed."""
+
+    def __init__(self, max_pending: int = 256, clock: Callable[[], float] = time.time):
+        self._lock = threading.Lock()
+        self._pending: dict = {}
+        self._max = max_pending
+        self._clock = clock
+
+    def register(self, challenge: bytes, device_id: str, ttl: float = 120.0) -> None:
+        if len(challenge) != 32:
+            raise ValueError("challenge must be the 32-byte approval hash")
+        with self._lock:
+            now = self._clock()
+            self._pending = {c: v for c, v in self._pending.items() if v[1] > now}
+            if len(self._pending) >= self._max:
+                raise WebAuthnError("TOO_MANY_PENDING")
+            self._pending[bytes(challenge)] = (device_id, now + min(ttl, 300.0))
+
+    def peek(self, challenge: bytes, device_id: str) -> None:
+        with self._lock:
+            entry = self._pending.get(bytes(challenge))
+            if entry is None or entry[1] <= self._clock() or entry[0] != device_id:
+                raise WebAuthnError("CHALLENGE_UNKNOWN_OR_EXPIRED")
+
+    def consume(self, challenge: bytes, device_id: str) -> None:
+        """Atomic. Called only AFTER the signature verified, so an
+        unauthenticated party cannot burn a pending approval."""
+        with self._lock:
+            entry = self._pending.pop(bytes(challenge), None)
+            if entry is None or entry[1] <= self._clock() or entry[0] != device_id:
+                raise WebAuthnError("CHALLENGE_UNKNOWN_OR_EXPIRED")
+
+
+def _parse_client_data(raw_b64u, expected_type: str, rp: RelyingParty, expected_challenge: bytes):
+    raw = b64u_decode(raw_b64u, MAX_CLIENT_DATA)
+    try:
+        cd = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise WebAuthnError("BAD_CLIENT_DATA", "not JSON")
+    if not isinstance(cd, dict) or cd.get("type") != expected_type:
+        raise WebAuthnError("BAD_CLIENT_DATA", "type")
+    got = b64u_decode(cd.get("challenge"), 128)
+    if not hmac.compare_digest(got, expected_challenge):
+        raise WebAuthnError("CHALLENGE_MISMATCH")
+    if cd.get("origin") not in rp.origins:
+        raise WebAuthnError("ORIGIN_MISMATCH", str(cd.get("origin")))
+    if cd.get("crossOrigin") is True or "topOrigin" in cd:
+        raise WebAuthnError("CROSS_ORIGIN")
+    return raw
+
+
+def _check_flags(rp: RelyingParty, ad: AuthData, cred_backup_eligible: Optional[bool]):
+    if not hmac.compare_digest(ad.rp_id_hash, hashlib.sha256(rp.rp_id.encode()).digest()):
+        raise WebAuthnError("RP_ID_HASH_MISMATCH")
+    if not ad.flags & FLAG_UP:
+        raise WebAuthnError("USER_NOT_PRESENT")
+    if rp.require_uv and not ad.flags & FLAG_UV:
+        raise WebAuthnError("USER_NOT_VERIFIED")
+    be = bool(ad.flags & FLAG_BE)
+    if rp.require_device_bound and be:
+        raise WebAuthnError("SYNCED_CREDENTIAL_REJECTED", "BE flag set")
+    if cred_backup_eligible is not None and be != cred_backup_eligible:
+        raise WebAuthnError("BACKUP_ELIGIBILITY_CHANGED")
+    if not be and ad.flags & FLAG_BS:
+        raise WebAuthnError("BAD_FLAGS", "BS set without BE")
+
+
+def verify_assertion(rp: RelyingParty, cred: Credential, response: dict,
+                     expected_challenge: bytes, challenges: ChallengeStore) -> AssertionResult:
+    """expected_challenge MUST be computed by the supervisor from its own stored
+    approval object, never taken from the client. The caller must persist
+    new_sign_count under a lock before acting on the approval."""
+    if cred.revoked:
+        raise WebAuthnError("CREDENTIAL_REVOKED")
+    if not isinstance(response, dict):
+        raise WebAuthnError("MALFORMED_RESPONSE")
+    challenges.peek(expected_challenge, cred.device_id)            # fail fast, don't burn
+
+    client_data = _parse_client_data(response.get("clientDataJSON"), "webauthn.get",
+                                     rp, expected_challenge)
+    auth_data_raw = b64u_decode(response.get("authenticatorData"), MAX_AUTH_DATA)
+    signature = b64u_decode(response.get("signature"), MAX_SIGNATURE)
+    ad = parse_authenticator_data(auth_data_raw)
+    if ad.flags & (FLAG_AT | FLAG_ED):
+        raise WebAuthnError("BAD_FLAGS", "AT/ED not allowed in assertions")
+    _check_flags(rp, ad, cred.backup_eligible)
+
+    key, alg = cose_to_public_key(cbor2.loads(cred.cose_key_cbor), rp.allowed_algs)
+    if alg != cred.alg:
+        raise WebAuthnError("ALG_MISMATCH")
+    _verify_signature(key, alg, signature,
+                      auth_data_raw + hashlib.sha256(client_data).digest())
+
+    # Many authenticators (all synced passkeys, some security keys) always report 0.
+    if cred.sign_count != 0 or ad.sign_count != 0:
+        if ad.sign_count <= cred.sign_count:
+            raise WebAuthnError("SIGN_COUNT_ROLLBACK", "possible cloned authenticator")
+    challenges.consume(expected_challenge, cred.device_id)          # atomic, single use
+    return AssertionResult(ad.sign_count, ad.flags, bool(ad.flags & FLAG_UV))
+
+
+def verify_registration(rp: RelyingParty, response: dict, expected_challenge: bytes,
+                        challenges: ChallengeStore, device_id: str) -> Credential:
+    """Run only inside the physical-presence enrollment ceremony. The caller
+    must reject an already-enrolled credential_id / device_id."""
+    if not isinstance(response, dict):
+        raise WebAuthnError("MALFORMED_RESPONSE")
+    challenges.peek(expected_challenge, device_id)
+    client_data = _parse_client_data(response.get("clientDataJSON"), "webauthn.create",
+                                     rp, expected_challenge)
+    att_raw = b64u_decode(response.get("attestationObject"), MAX_ATTESTATION_OBJECT)
+    try:
+        att = cbor2.loads(att_raw)
+    except Exception as exc:
+        raise WebAuthnError("BAD_ATTESTATION_OBJECT", str(exc))
+    if not isinstance(att, dict) or not isinstance(att.get("authData"), bytes) \
+            or not isinstance(att.get("fmt"), str) or not isinstance(att.get("attStmt"), dict):
+        raise WebAuthnError("BAD_ATTESTATION_OBJECT", "shape")
+
+    auth_data_raw = att["authData"]
+    ad = parse_authenticator_data(auth_data_raw)
+    if not ad.flags & FLAG_AT or ad.credential_id is None or ad.cose_key is None:
+        raise WebAuthnError("BAD_AUTH_DATA", "no attested credential data")
+    _check_flags(rp, ad, None)
+    if response.get("credentialId") is not None and \
+            b64u_decode(response["credentialId"], 2048) != ad.credential_id:
+        raise WebAuthnError("CREDENTIAL_ID_MISMATCH")
+    key, alg = cose_to_public_key(ad.cose_key, rp.allowed_algs)
+
+    fmt, stmt = att["fmt"], att["attStmt"]
+    client_hash = hashlib.sha256(client_data).digest()
+    if fmt == "none":
+        if stmt:
+            raise WebAuthnError("BAD_ATTESTATION", "none must have empty statement")
+        trust = "none"
+    elif fmt == "packed" and "x5c" not in stmt and "ecdaaKeyId" not in stmt:
+        if stmt.get("alg") != alg or not isinstance(stmt.get("sig"), bytes):
+            raise WebAuthnError("BAD_ATTESTATION", "self attestation")
+        _verify_signature(key, alg, stmt["sig"], auth_data_raw + client_hash)
+        trust = "self"
+    else:
+        trust = "unverified"      # recorded only; chain NOT validated here
+
+    challenges.consume(expected_challenge, device_id)
+    return Credential(
+        credential_id=ad.credential_id, cose_key_cbor=cbor2.dumps(ad.cose_key), alg=alg,
+        sign_count=ad.sign_count, device_id=device_id,
+        backup_eligible=bool(ad.flags & FLAG_BE), aaguid=ad.aaguid or b"",
+        attestation_fmt=fmt, attestation_trust=trust)

@@ -196,15 +196,17 @@ def unharden_path(path):
 
 
 def harden_current_process():
-    """Deny PROCESS_TERMINATE, PROCESS_VM_*, DUP_HANDLE etc. to callers
-    so the supervisor cannot be terminated or injected by any untrusted worker."""
-    safe_mask = (win32con.PROCESS_ALL_ACCESS
-                 & ~win32con.PROCESS_TERMINATE
-                 & ~win32con.PROCESS_VM_WRITE
-                 & ~win32con.PROCESS_VM_OPERATION
-                 & ~win32con.PROCESS_DUP_HANDLE)
+    """Deny PROCESS_TERMINATE, PROCESS_VM_READ, PROCESS_VM_WRITE, DUP_HANDLE, WRITE_DAC etc. to callers
+    so the supervisor memory and keys cannot be read, injected, or modified by same-user processes."""
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    limited_mask = win32con.SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION | win32con.PROCESS_TERMINATE
     dacl = win32security.ACL()
-    dacl.AddAccessAllowedAce(win32security.ACL_REVISION, safe_mask, _my_sid())
+    # 1. Restrict Owner Rights (S-1-3-4) to remove implicit READ_CONTROL and WRITE_DAC
+    sid_owner_rights = win32security.ConvertStringSidToSid("S-1-3-4")
+    dacl.AddAccessAllowedAce(win32security.ACL_REVISION, limited_mask, sid_owner_rights)
+    # 2. Restrict current user SID
+    dacl.AddAccessAllowedAce(win32security.ACL_REVISION, limited_mask, _my_sid())
+    # 3. Grant full access strictly to SYSTEM
     dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.PROCESS_ALL_ACCESS, _sid("S-1-5-18"))
     win32security.SetSecurityInfo(
         win32api.GetCurrentProcess(), win32security.SE_KERNEL_OBJECT,

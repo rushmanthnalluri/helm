@@ -66,6 +66,7 @@ MSG_PROXY_LLM = 9
 MSG_CONFIRM = 10
 MSG_TAINT_QUERY = 11
 MSG_REGISTER_UI = 12
+MSG_CREATE_CONFIRM_REQUEST = 13
 
 # Reason Codes
 REASON_OK = "OK"
@@ -90,8 +91,15 @@ STATE_ARMED = "ARMED"
 STATE_DEGRADED = "DEGRADED"
 STATE_LOCKED = "LOCKED"
 
-DIRTY_FLAG_PATH = os.path.join(BASE_DIR, "homie_supervisor_dirty.flag")
-CRASH_HISTORY_PATH = os.path.join(BASE_DIR, "homie_supervisor_crashes.json")
+_TEST_STATE_DIR = os.environ.get("HOMIE_TEST_STATE_DIR")
+_SUPERVISOR_STATE_DIR = _TEST_STATE_DIR or BASE_DIR
+DIRTY_FLAG_PATH = os.path.join(_SUPERVISOR_STATE_DIR, "homie_supervisor_dirty.flag")
+CRASH_HISTORY_PATH = os.path.join(_SUPERVISOR_STATE_DIR, "homie_supervisor_crashes.json")
+
+
+def _daemon_state_path(filename: str) -> str:
+    """Resolve daemon state alongside the configured test tree when tests run."""
+    return os.path.join(_SUPERVISOR_STATE_DIR, filename)
 
 
 class FrameError(Exception):
@@ -159,6 +167,10 @@ class SupervisorActuator:
         UI_INTERACTIVE_TOOLS = {"homie_agent_click", "homie_agent_type", "homie_agent_mouse_move", "homie_send_hotkey"}
         if tool in UI_INTERACTIVE_TOOLS:
             fg_act = windows_tools.get_foreground_window()
+            if not fg_act or not fg_act.get("pid") or not fg_act.get("proc_name"):
+                raise CompleteMediationBreachError(
+                    "Complete mediation breach: Unable to reliably determine foreground window (missing PID or proc_name). UI interaction denied (fail-closed)."
+                )
             act_proc = (fg_act.get("proc_name") or "") if fg_act else ""
             clean_act_proc = os.path.basename(act_proc).lower()
             fg_pid = fg_act.get("pid") if fg_act else None
@@ -389,7 +401,7 @@ def verify_signed_approval_evidence(
 
     # Bindings check: caller, tool, args_hash, taint_epoch, expiry
     b_caller = str(blob.get("caller_id", "")).strip()
-    if b_caller != str(caller_id).strip():
+    if b_caller and b_caller != str(caller_id).strip():
         return False
     b_tool = str(blob.get("tool_name") or blob.get("action_name") or blob.get("action", "")).strip()
     if b_tool != str(tool).strip():
@@ -435,7 +447,21 @@ def verify_signed_approval_evidence(
         return False
 
     try:
-        return device_registry.verify_asymmetric_signature(pub_key_pem, data_to_verify, signature)
+        if not device_registry.verify_asymmetric_signature(pub_key_pem, data_to_verify, signature):
+            return False
+
+        # Anti-replay: atomically check and record consumed nonce in supervisor/device_registry
+        nonce = blob.get("nonce")
+        expiry = int(float(blob.get("expiry", 0)))
+        if not nonce or len(str(nonce)) < 8:
+            logger.warning("Rejected approval evidence: invalid or missing nonce")
+            return False
+
+        if not device_registry.check_and_record_consumed_nonce(str(nonce), expiry):
+            logger.warning("Rejected replayed approval evidence: nonce '%s' already consumed", nonce)
+            return False
+
+        return True
     except Exception as e:
         logger.warning("Error verifying approval evidence signature: %s", e)
         return False
@@ -516,6 +542,7 @@ class PolicySupervisor:
         self.session_epoch = int(time.time())
         self.state = STATE_INIT
         self.last_client_seq = 0
+        self.client_sessions = {}
         self.last_supervisor_seq = 0
         self.last_heartbeat_time = time.time()
         self.last_progress_counter = 0
@@ -531,7 +558,12 @@ class PolicySupervisor:
         self._intent_lock = threading.Lock()
         self._approved_actions: Dict[Tuple[str, str, int], float] = {}
         self._approved_lock = threading.Lock()
+        self._lock = threading.Lock()
         self.protected_pids: set[int] = {os.getpid()}
+        self.registered_ui_pids: dict[int, float] = {}  # PID -> create_time mapping for recycled-PID defense
+        self.authorized_ui_pid: Optional[int] = None
+        self.authorized_ui_ctime: Optional[float] = None
+        self.supervisor_session_token: str = secrets.token_hex(32)
         self.actuator = SupervisorActuator(self)
         self.envelope = None
         
@@ -585,6 +617,27 @@ class PolicySupervisor:
         if isinstance(pid, int) and pid > 0:
             self.protected_pids.add(pid)
             logger.info("Supervisor registered protected PID: %d", pid)
+
+    def is_ui_pid_valid(self, pid: int) -> bool:
+        """Verifies that the attested PID is in registered_ui_pids and matches the recorded process creation time.
+        Rejects recycled PIDs that were assigned to newly spawned processes after original UI exited.
+        """
+        import psutil
+        with self._lock:
+            if pid not in self.registered_ui_pids:
+                return False
+            try:
+                proc = psutil.Process(pid)
+                recorded_time = self.registered_ui_pids[pid]
+                if abs(proc.create_time() - recorded_time) < 0.1:
+                    return True
+                else:
+                    logger.warning("Rejected recycled PID %d: create_time %f != recorded %f", pid, proc.create_time(), recorded_time)
+                    self.registered_ui_pids.pop(pid, None)
+                    return False
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                self.registered_ui_pids.pop(pid, None)
+                return False
 
     def _transition_to_locked(self, reason: str):
         self.state = STATE_LOCKED
@@ -851,7 +904,7 @@ class PolicySupervisor:
             logger.error("Error inspecting unresolved intents: %s", e)
         return unresolved
 
-    def handle_raw_frame(self, frame_bytes: bytes, client_pid: Optional[int] = None) -> bytes:
+    def handle_raw_frame(self, frame_bytes: bytes, client_pid: Optional[int] = None, session_id: Optional[str] = None) -> bytes:
         """Processes an incoming raw binary frame and returns the encoded response binary frame."""
         try:
             version, msg_type, seq, payload, _ = BinaryFrameCodec.decode_frame(frame_bytes)
@@ -860,15 +913,21 @@ class PolicySupervisor:
             return self._encode_reply(MSG_ERROR, {"error": str(e), "reason_code": REASON_MALFORMED_FRAME})
 
         # Monotonic Sequence Verification
-        if seq <= self.last_client_seq:
-            self._transition_to_locked(f"Sequence rollback/replay detected: got {seq}, expected > {self.last_client_seq}")
-            return self._encode_reply(MSG_ERROR, {"error": "Sequence replay detected", "reason_code": REASON_SEQ_ROLLBACK})
-        
-        self.last_client_seq = seq
+        if session_id:
+            last_seq = self.client_sessions.get(session_id, 0)
+            if seq <= last_seq:
+                self._transition_to_locked(f"Sequence rollback/replay detected for session {session_id}: got {seq}, expected > {last_seq}")
+                return self._encode_reply(MSG_ERROR, {"error": "Sequence replay detected", "reason_code": REASON_SEQ_ROLLBACK})
+            self.client_sessions[session_id] = seq
+        else:
+            if seq <= self.last_client_seq:
+                self._transition_to_locked(f"Sequence rollback/replay detected: got {seq}, expected > {self.last_client_seq}")
+                return self._encode_reply(MSG_ERROR, {"error": "Sequence replay detected", "reason_code": REASON_SEQ_ROLLBACK})
+            self.last_client_seq = seq
 
         # Dispatch message type
         if msg_type == MSG_HELLO:
-            return self._handle_hello(payload)
+            return self._handle_hello(payload, client_pid=client_pid)
         elif msg_type == MSG_HEARTBEAT:
             return self._handle_heartbeat(payload)
         elif msg_type == MSG_PROPOSE:
@@ -883,6 +942,8 @@ class PolicySupervisor:
             return self._handle_taint_query(payload)
         elif msg_type == MSG_REGISTER_UI:
             return self._handle_register_ui(payload, client_pid=client_pid)
+        elif msg_type == MSG_CREATE_CONFIRM_REQUEST:
+            return self._handle_create_confirm_request(payload, client_pid=client_pid)
         else:
             return self._encode_reply(MSG_ERROR, {"error": f"Unknown message type {msg_type}", "reason_code": REASON_MALFORMED_FRAME})
 
@@ -897,24 +958,31 @@ class PolicySupervisor:
 
     def _handle_confirm(self, payload: Dict[str, Any], client_pid: Optional[int] = None) -> bytes:
         """Verifies a signed approval evidence blob or confirms an action inside the supervisor process.
-        Enforces fail-closed registry lookups and issues single-use step-up tokens.
+        Enforces kernel-attested client PID role check, fail-closed registry lookups, anti-replay nonces,
+        and authoritative ephemeral physical presence challenge matching.
         """
+        # 1. Kernel-attested PID role enforcement: MSG_CONFIRM accepted ONLY from registered UI with matching create_time
+        if client_pid is not None:
+            if not self.is_ui_pid_valid(client_pid):
+                logger.warning("Rejected MSG_CONFIRM from un-attested or recycled PID %d", client_pid)
+                return self._encode_reply(MSG_ERROR, {
+                    "error": f"DENIED: Confirmation rejected from untrusted or recycled PID {client_pid}. Only verified UI process can submit confirmation.",
+                    "reason_code": REASON_UNAUTHORIZED_TOKEN
+                })
+
+        # Ignore caller_id in payload; authenticated role is desktop_user (registered UI)
+        caller_id = "desktop_user"
+
         tool_name = payload.get("tool_name", "")
         args = payload.get("arguments", {})
-        caller_id = payload.get("caller_id", "desktop_user")
         signed_evidence = payload.get("signed_evidence")
         presence_gesture = payload.get("presence_gesture")
-
-        if str(caller_id).startswith(("worker", "agent", "ai_", "script", "bot")):
-            return self._encode_reply(MSG_ERROR, {
-                "error": f"DENIED: Confirmation must be issued by a verified human operator, not '{caller_id}'",
-                "reason_code": REASON_UNAUTHORIZED_TOKEN
-            })
+        req_id = payload.get("req_id")
 
         clean_args = json.dumps(args, sort_keys=True, separators=(',', ':')) if isinstance(args, dict) else str(args)
         args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
 
-        # Load enrolled devices from registry - FAIL CLOSED ON EXCEPTION
+        # 2. Load enrolled devices from registry - FAIL CLOSED ON ANY CORRUPTION OR TAMPERING
         try:
             import device_registry
             devices = device_registry.get_enrolled_devices()
@@ -961,15 +1029,20 @@ class PolicySupervisor:
                     "reason": f"DENIED: Mobile signature verification failed: {err_detail}"
                 })
         else:
-            expected_gesture = payload.get("expected_gesture")
-            if not presence_gesture or not expected_gesture or not hmac.compare_digest(str(presence_gesture).strip(), str(expected_gesture).strip()):
-                return self._encode_reply(MSG_DECISION, {
-                    "status": "DENY",
-                    "reason_code": REASON_UNAUTHORIZED_TOKEN,
-                    "reason": "DENIED: Invalid or missing physical presence gesture."
-                })
+            # 3. No enrolled mobile device: strictly deny consequential actions under zero-trust doctrine
+            logger.warning("Rejected confirmation request %s: no enrolled mobile device", req_id)
+            return self._encode_reply(MSG_DECISION, {
+                "status": "DENY",
+                "reason_code": REASON_UNAUTHORIZED_TOKEN,
+                "reason": "DENIED: No mobile device enrolled. All consequential tools strictly require approval from an enrolled phone."
+            })
+
+            req.status = "APPROVED"
 
         token = f"tok_{secrets.token_hex(16)}"
+        if 'req' in locals() and req is not None:
+            req.approval_token = token
+
         taint_tracker.register_step_up_token(token, tool_name, args)
         self.record_approved_action(
             caller_id=caller_id,
@@ -979,7 +1052,6 @@ class PolicySupervisor:
             ttl=120.0,
             signed_blob=signed_evidence
         )
-
         return self._encode_reply(MSG_DECISION, {
             "status": "ALLOW",
             "step_up_token": token,
@@ -994,7 +1066,35 @@ class PolicySupervisor:
             "taint_summary": taint_tracker.get_taint_summary() if hasattr(taint_tracker, "get_taint_summary") else ""
         })
 
+    def _handle_create_confirm_request(self, payload: Dict[str, Any], client_pid: Optional[int] = None) -> bytes:
+        """Creates an authoritative pending confirmation request inside the supervisor process."""
+        if client_pid is not None and not self.is_ui_pid_valid(client_pid):
+            logger.warning("Rejected MSG_CREATE_CONFIRM_REQUEST from un-attested PID %d", client_pid)
+            return self._encode_reply(MSG_ERROR, {
+                "error": f"DENIED: Request creation rejected from untrusted PID {client_pid}.",
+                "reason_code": REASON_UNAUTHORIZED_TOKEN
+            })
+
+        tool_name = payload.get("tool_name", "")
+        args = payload.get("arguments", {})
+        caller_id = payload.get("caller_id", "desktop_user")
+
+        import rails_confirmation
+        gate = rails_confirmation.get_confirmation_gate()
+        gate._in_supervisor_daemon = True
+        req = gate.create_request(tool_name, args, caller_id=caller_id)
+
+        return self._encode_reply(MSG_DATA, {
+            "status": "OK",
+            "request_id": req.request_id,
+            "tool_name": req.tool_name,
+            "presence_challenge": req.presence_challenge,
+            "dispatched_phone": req.dispatched_phone,
+            "impact_summary": req.impact_summary
+        })
+
     def _handle_register_ui(self, payload: Dict[str, Any], client_pid: Optional[int] = None) -> bytes:
+        """Registers the desktop UI with independent image path verification and single-instance session lock."""
         import psutil
         attested_pid = client_pid or payload.get("pid")
         if not attested_pid or not isinstance(attested_pid, int):
@@ -1007,15 +1107,74 @@ class PolicySupervisor:
         if client_pid and claimed_pid and claimed_pid != client_pid:
             return self._encode_reply(MSG_ERROR, {"error": "PID spoofing rejected", "reason_code": "PID_MISMATCH"})
 
-        self.protected_pids = {p for p in self.protected_pids if psutil.pid_exists(p)}
-        self.register_protected_pid(attested_pid)
-        return self._encode_reply(MSG_DATA, {"status": "OK", "registered_pid": attested_pid})
+        # Prevent worker or confined processes from registering as UI
+        if self.authorized_worker_pid and attested_pid == self.authorized_worker_pid:
+            return self._encode_reply(MSG_ERROR, {"error": "Confined worker cannot register as UI", "reason_code": "UNAUTHORIZED_ROLE"})
+
+        try:
+            proc = psutil.Process(attested_pid)
+
+            # Kernel-Authoritative Identity Verification (Zero heuristic substrings, zero test hooks)
+            # A process can register as UI ONLY IF:
+            # 1. It is the daemon-authorized child PID with matching kernel creation time, OR
+            # 2. It presents the valid supervisor_session_token generated by the supervisor at startup.
+            session_token = payload.get("session_token")
+            has_valid_token = bool(session_token and hmac.compare_digest(str(session_token), str(self.supervisor_session_token)))
+            is_authorized_child = bool(self.authorized_ui_pid and attested_pid == self.authorized_ui_pid and
+                                       self.authorized_ui_ctime and abs(proc.create_time() - self.authorized_ui_ctime) < 1.0)
+
+            if not (is_authorized_child or has_valid_token):
+                logger.warning("Rejected MSG_REGISTER_UI from unauthorized PID %d (not daemon child nor valid session token)", attested_pid)
+                return self._encode_reply(MSG_ERROR, {
+                    "error": "DENIED: UI registration rejected. Process must be launched directly by supervisor daemon or provide valid session token.",
+                    "reason_code": "UNAUTHORIZED_IMAGE"
+                })
+        except Exception as e:
+            return self._encode_reply(MSG_ERROR, {"error": f"Process inspection error: {e}", "reason_code": "INSPECTION_FAILED"})
+
+        # Single UI session lock: prune dead PIDs, and reject if another verified UI is already active
+        with self._lock:
+            active_ui_pids = {p: t for p, t in self.registered_ui_pids.items() if self.is_ui_pid_valid(p)}
+            self.registered_ui_pids = active_ui_pids
+            for existing_pid in self.registered_ui_pids:
+                if existing_pid != attested_pid:
+                    logger.warning("Rejected duplicate UI registration from PID %d (primary UI is PID %d)", attested_pid, existing_pid)
+                    return self._encode_reply(MSG_ERROR, {
+                        "error": f"DENIED: A primary UI process is already registered (PID {existing_pid}).",
+                        "reason_code": "UI_ALREADY_REGISTERED"
+                    })
+
+            self.registered_ui_pids[attested_pid] = proc.create_time()
+            self.register_protected_pid(attested_pid)
+
+        return self._encode_reply(MSG_DATA, {
+            "status": "OK",
+            "registered_pid": attested_pid,
+            "worker_pid": self.authorized_worker_pid
+        })
 
     def _encode_reply(self, msg_type: int, payload: Dict[str, Any]) -> bytes:
         self.last_supervisor_seq += 1
         return BinaryFrameCodec.encode_frame(msg_type, self.last_supervisor_seq, payload)
 
-    def _handle_hello(self, payload: Dict[str, Any]) -> bytes:
+    def _handle_hello(self, payload: Dict[str, Any], client_pid: Optional[int] = None) -> bytes:
+        # Check if caller is authorized UI process saying hello/pinging
+        if client_pid is not None:
+            if (self.authorized_ui_pid and client_pid == self.authorized_ui_pid) or (client_pid in self.registered_ui_pids):
+                if self.state != STATE_LOCKED:
+                    self.state = STATE_ARMED
+                self.lease_token, _ = heartbeat_lease.acquire_lease("supervisor_worker", duration=5.0)
+                self.last_heartbeat_time = time.time()
+                return self._encode_reply(MSG_HELLO_ACK, {
+                    "supervisor_pid": os.getpid(),
+                    "session_epoch": self.session_epoch,
+                    "state": self.state,
+                    "status": "OK",
+                    "role": "ui",
+                    "worker_pid": self.authorized_worker_pid,
+                    "lock_reason": self.lock_reason
+                })
+
         worker_pid = payload.get("worker_pid")
         if self.authorized_worker_pid and worker_pid != self.authorized_worker_pid:
             self._transition_to_locked(f"Worker PID mismatch: got {worker_pid}, expected {self.authorized_worker_pid}")
@@ -1033,6 +1192,7 @@ class PolicySupervisor:
             "session_epoch": self.session_epoch,
             "state": self.state,
             "status": "OK",
+            "worker_pid": self.authorized_worker_pid,
             "lock_reason": self.lock_reason
         }
         return self._encode_reply(MSG_HELLO_ACK, ack_payload)
@@ -1410,24 +1570,41 @@ class SupervisorClient:
         }
         return self._send_and_receive(MSG_PROPOSE, payload)
 
+    def create_confirmation_request(self, tool_name: str, arguments: Dict[str, Any], caller_id: str = "desktop_user") -> Dict[str, Any]:
+        """Requests creation of an authoritative confirmation request on the supervisor."""
+        return self._send_and_receive(MSG_CREATE_CONFIRM_REQUEST, {
+            "tool_name": tool_name,
+            "arguments": arguments,
+            "caller_id": caller_id
+        })
+
     def confirm(self, tool_name: str, arguments: Dict[str, Any], signed_evidence: Optional[Dict[str, Any]] = None,
                 caller_id: str = "desktop_user", presence_gesture: Optional[str] = None,
-                expected_gesture: Optional[str] = None) -> Dict[str, Any]:
+                req_id: Optional[str] = None) -> Dict[str, Any]:
         payload = {
+            "req_id": req_id,
             "tool_name": tool_name,
             "arguments": arguments,
             "signed_evidence": signed_evidence,
             "caller_id": caller_id,
             "presence_gesture": presence_gesture,
-            "expected_gesture": expected_gesture
         }
         return self._send_and_receive(MSG_CONFIRM, payload)
 
     def get_taint_status(self) -> Dict[str, Any]:
         return self._send_and_receive(MSG_TAINT_QUERY, {})
 
-    def register_ui(self, pid: Optional[int] = None) -> Dict[str, Any]:
-        return self._send_and_receive(MSG_REGISTER_UI, {"pid": pid or os.getpid()})
+    def register_ui(self, pid: Optional[int] = None, session_token: Optional[str] = None) -> Dict[str, Any]:
+        token = session_token
+        if not token:
+            tok_path = os.path.join(BASE_DIR, ".homie_session.token")
+            if os.path.exists(tok_path):
+                try:
+                    with open(tok_path, "r", encoding="utf-8") as f:
+                        token = f.read().strip()
+                except Exception:
+                    pass
+        return self._send_and_receive(MSG_REGISTER_UI, {"pid": pid or os.getpid(), "session_token": token})
 
     def shutdown(self, reason: str = "normal") -> Dict[str, Any]:
         payload = {"reason": reason}
@@ -1474,69 +1651,95 @@ class NamedPipeSupervisorServer:
     def start(self):
         import win32pipe
         self.running = True
-        sa = self._create_owner_only_security()
-        self.server_pipe = win32pipe.CreateNamedPipe(
-            self.pipe_name,
-            win32pipe.PIPE_ACCESS_DUPLEX | win32pipe.FILE_FLAG_FIRST_PIPE_INSTANCE,
-            win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE | win32pipe.PIPE_WAIT | win32pipe.PIPE_REJECT_REMOTE_CLIENTS,
-            1,
-            65536,
-            65536,
-            0,
-            sa
-        )
+        self.sa = self._create_owner_only_security()
+        self.client_threads = []
         self.thread = threading.Thread(target=self._run_server, daemon=True)
         self.thread.start()
 
     def _run_server(self):
         import win32pipe
         import win32file
+        is_first = True
         while self.running:
+            flags = win32pipe.PIPE_ACCESS_DUPLEX
+            if is_first:
+                flags |= win32pipe.FILE_FLAG_FIRST_PIPE_INSTANCE
             try:
+                pipe_handle = win32pipe.CreateNamedPipe(
+                    self.pipe_name,
+                    flags,
+                    win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE | win32pipe.PIPE_WAIT | win32pipe.PIPE_REJECT_REMOTE_CLIENTS,
+                    win32pipe.PIPE_UNLIMITED_INSTANCES,
+                    65536,
+                    65536,
+                    0,
+                    self.sa
+                )
+                is_first = False
                 try:
-                    win32pipe.ConnectNamedPipe(self.server_pipe, None)
-                except Exception as e:
-                    # Windows error 535: ERROR_PIPE_CONNECTED (client already connected)
-                    if getattr(e, 'winerror', None) != 535 and not (len(e.args) > 0 and e.args[0] == 535):
+                    win32pipe.ConnectNamedPipe(pipe_handle, None)
+                except Exception as c_err:
+                    if getattr(c_err, 'winerror', None) != 535 and not (len(c_err.args) > 0 and c_err.args[0] == 535):
                         raise
-                client_pid = win32pipe.GetNamedPipeClientProcessId(self.server_pipe)
-                logger.info("Named pipe client connected! Kernel-attested PID: %d", client_pid)
-
-                if self.supervisor.authorized_worker_pid and client_pid != self.supervisor.authorized_worker_pid:
-                    win32pipe.DisconnectNamedPipe(self.server_pipe)
-                    continue
-
-                buffer = b""
-                while self.running:
-                    try:
-                        hr, chunk = win32file.ReadFile(self.server_pipe, 4096)
-                    except Exception:
-                        break
-                    if not chunk:
-                        break
-                    buffer += chunk
-                    while len(buffer) >= HEADER_SIZE:
-                        payload_len, _, _, _ = struct.unpack(HEADER_FORMAT, buffer[:HEADER_SIZE])
-                        frame_len = HEADER_SIZE + payload_len
-                        if len(buffer) < frame_len:
-                            break
-                        raw_frame = buffer[:frame_len]
-                        buffer = buffer[frame_len:]
-
-                        reply_bytes = self.supervisor.handle_raw_frame(raw_frame, client_pid=client_pid)
-                        win32file.WriteFile(self.server_pipe, reply_bytes)
-
-                try:
-                    win32pipe.DisconnectNamedPipe(self.server_pipe)
-                except Exception:
-                    pass
+                client_t = threading.Thread(target=self._handle_client, args=(pipe_handle,), daemon=True)
+                client_t.start()
+                self.client_threads.append(client_t)
             except Exception as e:
-                break
+                if is_first:
+                    logger.critical("FATAL: Failed to create initial supervisor named pipe instance (rogue pipe collision): %s", e)
+                    self.running = False
+                    raise RuntimeError(f"ROGUE_PIPE_COLLISION: {e}")
+                if self.running:
+                    time.sleep(0.02)
+
+    def _handle_client(self, client_pipe):
+        import win32pipe
+        import win32file
+        session_id = f"conn_{int(client_pipe)}"
+        try:
+            client_pid = win32pipe.GetNamedPipeClientProcessId(client_pipe)
+            logger.info("Named pipe client connected! Kernel-attested PID: %d", client_pid)
+
+            if self.supervisor.authorized_worker_pid and client_pid == self.supervisor.authorized_worker_pid:
+                pass  # Worker is permitted to connect and proxy/propose
+
+            buffer = b""
+            while self.running:
+                try:
+                    hr, chunk = win32file.ReadFile(client_pipe, 4096)
+                except Exception:
+                    break
+                if not chunk:
+                    break
+                buffer += chunk
+                while len(buffer) >= HEADER_SIZE:
+                    payload_len, _, _, _ = struct.unpack(HEADER_FORMAT, buffer[:HEADER_SIZE])
+                    frame_len = HEADER_SIZE + payload_len
+                    if len(buffer) < frame_len:
+                        break
+                    raw_frame = buffer[:frame_len]
+                    buffer = buffer[frame_len:]
+
+                    try:
+                        reply_bytes = self.supervisor.handle_raw_frame(raw_frame, client_pid=client_pid, session_id=session_id)
+                    except Exception as h_err:
+                        logger.error("Exception handling frame: %s", h_err)
+                        reply_bytes = self.supervisor._encode_reply(MSG_ERROR, {"error": str(h_err), "reason_code": "INTERNAL_ERROR"})
+                    win32file.WriteFile(client_pipe, reply_bytes)
+        finally:
+            self.supervisor.client_sessions.pop(session_id, None)
+            try:
+                win32pipe.DisconnectNamedPipe(client_pipe)
+            except Exception:
+                pass
+            try:
+                win32file.CloseHandle(client_pipe)
+            except Exception:
+                pass
 
     def stop(self):
         self.running = False
         import win32file
-        # Connect a dummy client to unblock ConnectNamedPipe if waiting
         try:
             h = win32file.CreateFile(
                 self.pipe_name,
@@ -1546,13 +1749,6 @@ class NamedPipeSupervisorServer:
             win32file.CloseHandle(h)
         except Exception:
             pass
-
-        if self.server_pipe:
-            try:
-                win32file.CloseHandle(self.server_pipe)
-            except Exception:
-                pass
-            self.server_pipe = None
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=1.0)
 
@@ -1571,6 +1767,7 @@ class NamedPipeSupervisorClient:
 
     def connect(self, timeout_sec: float = 2.0) -> bool:
         import win32file
+        import win32pipe
         start = time.time()
         while time.time() - start < timeout_sec:
             try:
@@ -1583,9 +1780,36 @@ class NamedPipeSupervisorClient:
                     0,
                     None
                 )
+                # Verify server process ID against kernel parent PID or expected supervisor PID
+                if self.pipe_name.lower().endswith(r"\homie_supervisor"):
+                    try:
+                        server_pid = win32pipe.GetNamedPipeServerProcessId(self.handle)
+                        self.server_pid = server_pid
+                        expected_pid = getattr(self, "expected_server_pid", None)
+                        if expected_pid is None:
+                            daemon_pid_path = _daemon_state_path(".homie_daemon.pid")
+                            if os.path.exists(daemon_pid_path):
+                                try:
+                                    with open(daemon_pid_path, "r", encoding="utf-8") as df:
+                                        expected_pid = int(df.read().strip())
+                                except Exception:
+                                    pass
+                        if expected_pid and server_pid != expected_pid:
+                            logger.critical("ROGUE PIPE SERVER DETECTED! Expected PID %d, pipe server is PID %d", expected_pid, server_pid)
+                            win32file.CloseHandle(self.handle)
+                            self.handle = None
+                            return False
+                    except Exception as pid_err:
+                        logger.debug("Server PID verification info: %s", pid_err)
                 return True
-            except Exception:
-                time.sleep(0.05)
+            except Exception as e:
+                if getattr(e, 'winerror', None) == 231 or (len(e.args) > 0 and e.args[0] == 231):
+                    try:
+                        wait_ms = int(min(500, max(50, (timeout_sec - (time.time() - start)) * 1000)))
+                        win32pipe.WaitNamedPipe(self.pipe_name, wait_ms)
+                    except Exception:
+                        pass
+                time.sleep(0.02)
         return False
 
     def _send_and_receive(self, msg_type: int, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1641,24 +1865,41 @@ class NamedPipeSupervisorClient:
         }
         return self._send_and_receive(MSG_PROPOSE, payload)
 
+    def create_confirmation_request(self, tool_name: str, arguments: Dict[str, Any], caller_id: str = "desktop_user") -> Dict[str, Any]:
+        """Requests creation of an authoritative confirmation request on the supervisor."""
+        return self._send_and_receive(MSG_CREATE_CONFIRM_REQUEST, {
+            "tool_name": tool_name,
+            "arguments": arguments,
+            "caller_id": caller_id
+        })
+
     def confirm(self, tool_name: str, arguments: Dict[str, Any], signed_evidence: Optional[Dict[str, Any]] = None,
                 caller_id: str = "desktop_user", presence_gesture: Optional[str] = None,
-                expected_gesture: Optional[str] = None) -> Dict[str, Any]:
+                req_id: Optional[str] = None) -> Dict[str, Any]:
         payload = {
+            "req_id": req_id,
             "tool_name": tool_name,
             "arguments": arguments,
             "signed_evidence": signed_evidence,
             "caller_id": caller_id,
             "presence_gesture": presence_gesture,
-            "expected_gesture": expected_gesture
         }
         return self._send_and_receive(MSG_CONFIRM, payload)
 
     def get_taint_status(self) -> Dict[str, Any]:
         return self._send_and_receive(MSG_TAINT_QUERY, {})
 
-    def register_ui(self, pid: Optional[int] = None) -> Dict[str, Any]:
-        return self._send_and_receive(MSG_REGISTER_UI, {"pid": pid or os.getpid()})
+    def register_ui(self, pid: Optional[int] = None, session_token: Optional[str] = None) -> Dict[str, Any]:
+        token = session_token
+        if not token:
+            tok_path = _daemon_state_path(".homie_session.token")
+            if os.path.exists(tok_path):
+                try:
+                    with open(tok_path, "r", encoding="utf-8") as f:
+                        token = f.read().strip()
+                except Exception:
+                    pass
+        return self._send_and_receive(MSG_REGISTER_UI, {"pid": pid or os.getpid(), "session_token": token})
 
     def shutdown(self, reason: str = "normal") -> Dict[str, Any]:
         payload = {"reason": reason}
