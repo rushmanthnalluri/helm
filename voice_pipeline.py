@@ -145,7 +145,11 @@ class StreamingVoicePipeline:
 
             # 2. Use torch.hub: torch.hub.load('snakers4/silero-vad', 'silero_vad', force_reload=False)
             try:
-                loaded = torch.hub.load('snakers4/silero-vad', 'silero_vad', force_reload=False)
+                try:
+                    loaded = torch.hub.load('snakers4/silero-vad', 'silero_vad', force_reload=False, trust_repo=True)
+                except TypeError:
+                    loaded = torch.hub.load('snakers4/silero-vad', 'silero_vad', force_reload=False)
+
                 if isinstance(loaded, tuple):
                     self._vad_model = loaded[0]
                 else:

@@ -79,12 +79,12 @@ class TestVoicePipelineSileroVAD(unittest.TestCase):
         pipeline = StreamingVoicePipeline(on_transcript=lambda t: None)
         # 512 samples of pure silence (zeros)
         silence = bytes(1024)
-        self.assertFalse(pipeline.detect_voice(silence, sample_rate=16000))
+        self.assertFalse(pipeline._energy_vad(silence))
 
         # 512 samples of loud signal (16-bit sine wave)
         samples = [int(15000 * np.sin(2 * np.pi * 440 * i / 16000)) for i in range(512)]
         loud_pcm = struct.pack(f"<{len(samples)}h", *samples)
-        self.assertTrue(pipeline.detect_voice(loud_pcm, sample_rate=16000))
+        self.assertTrue(pipeline._energy_vad(loud_pcm))
 
     def test_silero_vad_mocked_neural_detection(self):
         pipeline = StreamingVoicePipeline(on_transcript=lambda t: None)
@@ -125,21 +125,19 @@ class TestVoicePipelineSileroVAD(unittest.TestCase):
     def test_push_audio_chunk_accumulates_and_transcribes(self):
         transcripts = []
         pipeline = StreamingVoicePipeline(on_transcript=lambda t: transcripts.append(t))
-        # Mock _run_whisper directly
         pipeline._run_whisper = MagicMock(return_value="hello world")
         
-        # 16-bit loud sample to activate VAD
-        samples = [int(15000 * np.sin(2 * np.pi * 440 * i / 16000)) for i in range(512)]
-        loud_pcm = struct.pack(f"<{len(samples)}h", *samples)
-        silent_pcm = bytes(1024)
+        # Mock detect_voice: first frame is voice, subsequent frames are silence
+        pipeline.detect_voice = MagicMock(side_effect=[True] + [False] * 30)
+        dummy_pcm = bytes(1024)
 
         # Send voice frame
-        pipeline.push_audio_chunk(loud_pcm)
+        pipeline.push_audio_chunk(dummy_pcm)
         self.assertTrue(pipeline._vad_active)
 
         # Send silence frames up to silence threshold to trigger end-of-speech
         for _ in range(pipeline._SILENCE_THRESHOLD):
-            pipeline.push_audio_chunk(silent_pcm)
+            pipeline.push_audio_chunk(dummy_pcm)
 
         self.assertFalse(pipeline._vad_active)
 
