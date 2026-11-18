@@ -1,30 +1,205 @@
 # Security Notes
 
+> [!IMPORTANT]
+> For the full threat model, attack surface analysis, and in-scope/out-of-scope guarantees, see [`THREAT_MODEL.md`](./THREAT_MODEL.md).
+
+---
+
+## Table of Contents
+
+1. [Sensitive Key Files](#sensitive-key-files)
+2. [Security Architecture Overview](#security-architecture-overview)
+3. [Cryptographic Primitives](#cryptographic-primitives)
+4. [Threat Model Summary](#threat-model-summary)
+5. [Responsible Disclosure](#responsible-disclosure)
+6. [Archive Directory](#archive-directory)
+
+---
+
 ## Sensitive Key Files
 
 The following files must **NOT** remain in the repository root or be committed to version control:
 
-- `.homie_vault.key`
-- `.homie_session.token`
-- `.homie_ledger_hmac.key`
+| File | Purpose |
+|------|---------|
+| `.homie_vault.key` | Crypto vault encryption key |
+| `.homie_session.token` | Active session token |
+| `.homie_ledger_hmac.key` | Audit ledger HMAC signing key |
+
+> [!CAUTION]
+> Ensure all three files above are listed in `.gitignore` to prevent accidental commits.
 
 ### Production Guidance
 
-In production deployments, these files should be stored in the Windows user's protected app data directory:
+In production deployments, these files must be stored in the Windows user's protected app data directory:
 
 ```
 %LOCALAPPDATA%\Homie\keys\
 ```
 
-e.g.:
-- `C:\Users\<username>\AppData\Local\Homie\keys\.homie_vault.key`
-- `C:\Users\<username>\AppData\Local\Homie\keys\.homie_session.token`
-- `C:\Users\<username>\AppData\Local\Homie\keys\.homie_ledger_hmac.key`
+Full paths:
 
-This directory is per-user, not synced by default, and not part of the project tree.
+```
+C:\Users\<username>\AppData\Local\Homie\keys\.homie_vault.key
+C:\Users\<username>\AppData\Local\Homie\keys\.homie_session.token
+C:\Users\<username>\AppData\Local\Homie\keys\.homie_ledger_hmac.key
+```
 
-> **IMPORTANT**: Ensure `.homie_vault.key`, `.homie_session.token`, and `.homie_ledger_hmac.key` are listed in `.gitignore` to prevent accidental commits.
+This directory is per-user, not synced by default (not included in roaming profiles), and is outside the project tree.
+
+---
+
+## Security Architecture Overview
+
+Homie uses a **defense-in-depth** architecture with multiple independent, kernel-enforced layers. No single layer is relied upon alone.
+
+### Layer 1 — Process Isolation (Worker Confinement)
+
+| Mechanism | Detail |
+|-----------|--------|
+| **AppContainer LowBox Token** | Zero-capability token; network isolation is kernel-enforced. All outbound socket attempts from the worker process fail with `WinError 10013 WSAEACCES`. |
+| **Job Object sandbox** | `KILL_ON_JOB_CLOSE` ensures the worker dies when the supervisor closes. `ActiveProcessLimit=1` prevents fork bombs. UI restrictions: no clipboard read/write, no desktop handle access. Kill latency < 3 ms. |
+| **Supervisor daemon** | Out-of-process supervisor runs as a standard (non-elevated) user and holds custody of the worker process. The worker cannot escape or elevate. |
+| **No write-up / no UI handles** | The worker has zero ability to write to higher-integrity contexts or acquire UI-accessible handles. |
+
+### Layer 2 — Filesystem ACLs (Owner-Only DACLs)
+
+Owner-only DACLs (kernel-level deny entries) are applied to:
+
+- Vault key file
+- Ledger HMAC key file
+- Dirty flag sentinel
+- MCP registry
+- Audit ledger
+
+These denials are enforced by the kernel even if the supervisor process closes its own handles — a compromised supervisor cannot grant access.
+
+### Layer 3 — Authentication Gates
+
+#### Gate 1 — WebAuthn Physical Phone Gate
+
+| Property | Value |
+|----------|-------|
+| Algorithms | ES256 (P-256) and Ed25519 |
+| Challenge binding | SHA-256 of canonical approval payload |
+| Device binding | Device-bound credentials only; `BE=1` (synced/passkey) assertions are **rejected** |
+| Required flags | `UP` (user presence) + `UV` (user verification) both required |
+| Replay protection | Monotonic sign counter; rollback triggers rejection |
+| Scope | Required for: mail send, calendar invites, browser form submit |
+
+WebAuthn assertions are additionally protected by an **anti-TOCTOU DOM mutation check**: the page state is re-validated after the assertion is received to detect content that changed between user approval and execution.
+
+#### Gate 2 — Injection Baseline Harness
+
+| Property | Value |
+|----------|-------|
+| Adversarial artifacts | 300 |
+| Attack modalities | 7 |
+| Confidence interval | 95% Wilson CI |
+| Policy-Level Attack Success Rate (ASR) | **0.00%** (CI: 0.00% – 1.26%) |
+
+### Layer 4 — Session & Taint Tracking
+
+- **`taint_tracker.py`**: Tags the session as tainted upon any untrusted input. Tainted sessions require step-up authentication before write operations are permitted.
+- **Rails system**: Per-action confirmation, content boundary enforcement, audit trail, and a proactive kill switch.
+
+### Layer 5 — Audit & Integrity
+
+- **`agent_audit_ledger.py`**: Every tool invocation is recorded in a SHA-256 hash-chained, HMAC-signed ledger. Tampering with any entry breaks the chain and is immediately detectable.
+- **Named pipe IPC**: Inter-process communication uses owner-only DACLs on the pipe and per-session monotonic sequence counters to prevent replay attacks.
+
+### Layer 6 — Cryptographic Vault
+
+- **`crypto_vault.py`**: All local secrets are encrypted at rest in the vault. The vault key itself is stored outside the project tree (see [Sensitive Key Files](#sensitive-key-files)).
+
+### Layer 7 — Network Protection
+
+- **`homie_ssrf.py`**: HTTP fetch requests are validated before dispatch; loopback addresses, link-local ranges, and cloud metadata endpoints (e.g., `169.254.169.254`) are blocked.
+- **AppContainer zero-network**: Worker-level network calls are blocked at the kernel before SSRF filtering is even reached (defense in depth).
+
+### Layer 8 — Input Integrity
+
+- **`WH_KEYBOARD_LL` watchdog**: Low-level keyboard hook rejects synthetic keystrokes flagged with `LLKHF_INJECTED` or `LLKHF_LOWER_IL_INJECTED`. Only physically generated keystrokes can trigger the kill hotkey.
+
+### Layer 9 — Update Integrity
+
+- **Update verifier**: Software updates are verified against **Ed25519-signed manifests** with monotonic epoch rollback protection. Downgrade attacks are rejected.
+
+### Layer 10 — Windows Hello Integration
+
+- **`windows_hello.py`**: Windows Hello biometric/PIN authentication is integrated for local user verification flows.
+
+### Layer 11 — Red Team & Mutation Testing
+
+| Test Suite | Result |
+|------------|--------|
+| Adversarial red team (`adversarial_red_team.py`) | Passed |
+| Semantic red team | Passed |
+| Model-level red team | Passed |
+| Security mutation harness | **112/112 mutations killed (100% kill rate)** |
+
+---
+
+## Cryptographic Primitives
+
+| Primitive | Usage |
+|-----------|-------|
+| **Ed25519** | WebAuthn assertions (Gate 1), update manifest signatures |
+| **ES256 (ECDSA P-256 + SHA-256)** | WebAuthn assertions (Gate 1), alternative to Ed25519 |
+| **SHA-256** | WebAuthn challenge binding (hash of canonical approval), audit ledger hash chain |
+| **HMAC-SHA-256** | Audit ledger per-entry message authentication (keyed with `.homie_ledger_hmac.key`) |
+| **AES (vault)** | Symmetric encryption of secrets at rest via `crypto_vault.py` |
+
+> [!NOTE]
+> WebAuthn credentials must be **device-bound** (`BE=0`). Synced passkeys (`BE=1`) are explicitly rejected to prevent credential theft via account compromise on a secondary device.
+
+---
+
+## Threat Model Summary
+
+> See [`THREAT_MODEL.md`](./THREAT_MODEL.md) for the complete threat model, attack trees, and mitigations.
+
+### In Scope (Defended)
+
+- Prompt injection and indirect injection across 7 modalities (0.00% policy-level ASR)
+- Unauthorized tool invocations (audit ledger, rails, WebAuthn gates)
+- Network exfiltration from the worker process (AppContainer zero-network)
+- Replay attacks on IPC and WebAuthn (monotonic counters, sign-counter rollback protection)
+- Synthetic keystroke injection (WH_KEYBOARD_LL filter)
+- Malicious software updates (Ed25519 signed manifests + rollback protection)
+- Lateral movement via SSRF (homie_ssrf.py + AppContainer)
+- Secrets exposure (owner-only DACLs, encrypted vault, gitignore)
+
+### Explicit Non-Guarantees (Out of Scope)
+
+> [!WARNING]
+> The following are **not** defended by this architecture:
+
+- **Kernel compromise** — a compromised OS kernel can bypass all userspace and even AppContainer controls.
+- **Pre-existing same-user malware** — malware already running as the same Windows user shares the same DACL access level.
+- **Physical console access** — an attacker with physical access to an unlocked console session is out of scope.
+- **Virtual HID devices** (e.g., Rubber Ducky, O.MG Cable) — hardware-level HID injection bypasses the `LLKHF_INJECTED` software filter.
+- **RDP sessions** — remote desktop sessions may alter keyboard flag semantics.
+- **Compromised mobile device** — if the WebAuthn authenticator device is compromised, Gate 1 is defeated.
+- **Upstream LLM provider data retention** — data sent to the LLM API is subject to the provider's own privacy and retention policies.
+
+---
+
+## Responsible Disclosure
+
+We take security seriously and appreciate responsible disclosure from the security community.
+
+**If you discover a security vulnerability in this project:**
+
+1. **Do not** open a public GitHub issue for security vulnerabilities.
+2. **Email** the maintainers directly with a description of the vulnerability, steps to reproduce, and potential impact. (Add contact email here before publishing.)
+3. **Allow reasonable time** (90 days is standard) for the maintainers to assess and patch the issue before public disclosure.
+4. **Coordinate disclosure** — we will work with you to understand the issue and credit you in the fix unless you prefer to remain anonymous.
+
+We follow the [CERT/CC 90-day coordinated vulnerability disclosure policy](https://www.kb.cert.org/vuls/govdisclosure/) as a guideline.
+
+---
 
 ## Archive Directory
 
-The `archive/` directory contains historical batch scripts and screenshots that were previously cluttering the root. These are kept for reference only and are not part of the active application.
+The `archive/` directory contains historical batch scripts and screenshots that were previously cluttering the repository root. These are kept for reference only and are **not** part of the active application. No security-sensitive material should be placed in `archive/`.
