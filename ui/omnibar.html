@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Homie Omnibar</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: rgba(26, 29, 36, 0.88);
+      --card-bg: rgba(35, 39, 48, 0.75);
+      --border: rgba(255, 255, 255, 0.09);
+      --border-focus: #0078d4;
+      --accent: #0078d4;
+      --accent-glow: rgba(0, 120, 212, 0.35);
+      --text: #ffffff;
+      --text-muted: #9ba1b0;
+      --selection: rgba(0, 120, 212, 0.22);
+      font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; background: transparent; overflow: hidden; user-select: none; }
+
+    #omnibar-shell {
+      position: absolute;
+      inset: 8px;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg);
+      backdrop-filter: blur(28px) saturate(160%);
+      -webkit-backdrop-filter: blur(28px) saturate(160%);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.05);
+      overflow: hidden;
+      animation: barAppear 0.12s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    @keyframes barAppear {
+      from { opacity: 0; transform: scale(0.985) translateY(-6px); }
+      to { opacity: 1; transform: scale(1) translateY(0); }
+    }
+
+    #search-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .brand-icon {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      background: linear-gradient(135deg, #0078d4, #605dec);
+      display: grid;
+      place-items: center;
+      font-size: 13px;
+      font-weight: 700;
+      color: #fff;
+      box-shadow: 0 2px 8px var(--accent-glow);
+    }
+
+    #query {
+      flex: 1;
+      background: transparent;
+      border: 0;
+      outline: 0;
+      color: var(--text);
+      font-size: 16px;
+      font-family: "Segoe UI Variable Display", "Segoe UI", sans-serif;
+      font-weight: 450;
+      letter-spacing: -0.01em;
+    }
+    #query::placeholder { color: var(--text-muted); opacity: 0.65; }
+
+    .tag-badge {
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    #results {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 9px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      color: var(--text);
+      transition: background 0.06s ease;
+    }
+    .item.selected {
+      background: var(--selection);
+      box-shadow: inset 0 0 0 1px rgba(0, 120, 212, 0.4);
+    }
+    .item:hover:not(.selected) {
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .item-icon {
+      font-size: 16px;
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      display: grid;
+      place-items: center;
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .item-body { flex: 1; min-width: 0; }
+    .item-title { font-size: 13.5px; font-weight: 500; }
+    .item-subtitle { font-size: 11.5px; color: var(--text-muted); margin-top: 1px; }
+
+    .item-shortcut {
+      font-size: 11px;
+      color: var(--text-muted);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    /* Generative Micro-Card Component */
+    .micro-card {
+      margin: 8px 12px;
+      padding: 12px 14px;
+      border-radius: 10px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .micro-card-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .micro-card-value {
+      font-size: 22px;
+      font-weight: 600;
+      color: #fff;
+    }
+
+    #footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 16px;
+      border-top: 1px solid var(--border);
+      font-size: 11px;
+      color: var(--text-muted);
+      background: rgba(20, 22, 28, 0.5);
+    }
+
+    .key-hints { display: flex; gap: 10px; }
+    .key-hint { display: flex; align-items: center; gap: 4px; }
+    kbd {
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      font-family: inherit;
+      font-size: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div id="omnibar-shell">
+    <div id="search-row">
+      <div class="brand-icon">H</div>
+      <input id="query" type="text" placeholder="Type a command, launch app, switch window, or ask anything..." autofocus autocomplete="off" spellcheck="false">
+      <span class="tag-badge" id="mode-tag">Omnibar</span>
+    </div>
+
+    <div id="results">
+      <!-- Dynamic list populated via JS / Python Indexer -->
+    </div>
+
+    <div id="footer">
+      <div class="key-hints">
+        <span class="key-hint"><kbd>↑</kbd><kbd>↓</kbd> Navigate</span>
+        <span class="key-hint"><kbd>↵</kbd> Launch</span>
+        <span class="key-hint"><kbd>Tab</kbd> Action Pill</span>
+        <span class="key-hint"><kbd>Esc</kbd> Close</span>
+      </div>
+      <div>Homie Workstation Assistant</div>
+    </div>
+  </div>
+
+  <script>
+    const DEFAULT_ACTIONS = [
+      { id: 'focus_report', title: 'Productivity Focus Report', subtitle: 'View 24h application screen-time summary', icon: '📊', shortcut: 'F' },
+      { id: 'screen_vision', title: 'Analyze Screen Content', subtitle: 'Multimodal vision inspection of current displays', icon: '👀', shortcut: 'S' },
+      { id: 'make_document', title: 'New Word Document (.docx)', subtitle: 'Generate professional document with safe layout', icon: '📝', shortcut: 'D' },
+      { id: 'make_presentation', title: 'New Presentation (.pptx)', subtitle: 'Create 16:9 widescreen PowerPoint deck', icon: '📽️', shortcut: 'P' },
+      { id: 'make_spreadsheet', title: 'New Spreadsheet (.xlsx)', subtitle: 'Generate Excel workbook with formula defense', icon: '📈', shortcut: 'X' },
+      { id: 'meeting_notes', title: 'Meeting Audio Loopback', subtitle: 'Live WASAPI transcription & action items', icon: '🎙️', shortcut: 'M' },
+      { id: 'snap_left', title: 'Snap Active Window Left', subtitle: 'Place foreground application on left half', icon: '🪟', shortcut: '←' },
+      { id: 'snap_right', title: 'Snap Active Window Right', subtitle: 'Place foreground application on right half', icon: '🪟', shortcut: '→' },
+      { id: 'list_apps', title: 'Browse Connected SaaS Catalog', subtitle: 'Explore 65+ MCP apps and SaaS tools', icon: '🔌', shortcut: 'A' },
+      { id: 'vitals', title: 'System Workstation Vitals', subtitle: 'Inspect CPU, RAM, Battery, and Uptime', icon: '💻', shortcut: 'V' }
+    ];
+
+    let selectedIdx = 0;
+    let currentItems = [...DEFAULT_ACTIONS];
+    let debounceTimer = null;
+    let searchSequence = 0;
+
+    const queryInput = document.getElementById('query');
+    const resultsContainer = document.getElementById('results');
+
+    function renderItems() {
+      resultsContainer.innerHTML = '';
+      if (!currentItems || currentItems.length === 0) {
+        resultsContainer.innerHTML = '<div style="padding: 18px; color: var(--text-muted); text-align: center; font-size: 13px;">No matching results found</div>';
+        return;
+      }
+      currentItems.forEach((itm, idx) => {
+        const div = document.createElement('div');
+        div.className = 'item' + (idx === selectedIdx ? ' selected' : '');
+
+        let tagHtml = '';
+        if (itm.shortcut) {
+          tagHtml = `<span class="item-shortcut">${escapeHtml(itm.shortcut)}</span>`;
+        } else if (itm.type === 'window') {
+          tagHtml = `<span class="item-shortcut">Window</span>`;
+        } else if (itm.type === 'app') {
+          tagHtml = `<span class="item-shortcut">App</span>`;
+        }
+
+        div.innerHTML = `
+          <div class="item-icon">${itm.icon || '⚡'}</div>
+          <div class="item-body">
+            <div class="item-title">${escapeHtml(itm.title || itm.name || '')}</div>
+            <div class="item-subtitle">${escapeHtml(itm.subtitle || itm.path || '')}</div>
+          </div>
+          ${tagHtml}
+        `;
+        div.onclick = () => executeItem(itm);
+        resultsContainer.appendChild(div);
+      });
+      if (currentItems.length > 0) {
+        const sel = resultsContainer.children[selectedIdx];
+        if (sel) sel.scrollIntoView({ block: 'nearest' });
+      }
+    }
+
+    function escapeHtml(str) {
+      if (str === null || str === undefined) return '';
+      return String(str).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[m]);
+    }
+
+    function executeItem(itm) {
+      if (!itm) return;
+      if (window.pywebview && window.pywebview.api) {
+        if (typeof window.pywebview.api.launch_omnibar_result === 'function') {
+          window.pywebview.api.launch_omnibar_result(itm.id || itm);
+        } else if (typeof window.pywebview.api.post === 'function') {
+          window.pywebview.api.post({ omnibar_action: itm.id, payload: itm });
+        }
+      }
+    }
+
+    function clientSideFallback(rawQuery) {
+      const trimmed = (rawQuery || '').trim().toLowerCase();
+      if (!trimmed) {
+        currentItems = [...DEFAULT_ACTIONS];
+      } else if (/^[0-9+\-*/().\s^%]+$/.test(trimmed) && /[0-9]/.test(trimmed)) {
+        try {
+          const val = Function('"use strict";return (' + trimmed + ')')();
+          currentItems = [
+            { id: 'calc', title: `= ${val}`, subtitle: `Calculate: ${trimmed} (Press Enter to copy)`, icon: '🧮', value: String(val) },
+            ...DEFAULT_ACTIONS
+          ];
+        } catch {
+          currentItems = DEFAULT_ACTIONS.filter(a =>
+            a.title.toLowerCase().includes(trimmed) || (a.subtitle && a.subtitle.toLowerCase().includes(trimmed))
+          );
+        }
+      } else {
+        currentItems = DEFAULT_ACTIONS.filter(a =>
+          a.title.toLowerCase().includes(trimmed) ||
+          (a.subtitle && a.subtitle.toLowerCase().includes(trimmed))
+        );
+        currentItems.unshift({
+          id: 'agent_ask',
+          title: `Ask Homie: "${rawQuery}"`,
+          subtitle: 'Dispatch query to local conversational agent',
+          icon: '✨',
+          query: rawQuery
+        });
+      }
+      selectedIdx = 0;
+      renderItems();
+    }
+
+    function handleQueryInput(rawQuery) {
+      const q = (rawQuery || '').trim();
+      if (!q) {
+        if (debounceTimer) clearTimeout(debounceTimer);
+        currentItems = [...DEFAULT_ACTIONS];
+        selectedIdx = 0;
+        renderItems();
+        return;
+      }
+
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        const seq = ++searchSequence;
+        if (window.pywebview && window.pywebview.api && typeof window.pywebview.api.search_omnibar === 'function') {
+          window.pywebview.api.search_omnibar(q).then((results) => {
+            if (seq !== searchSequence) return;
+            if (results && results.length > 0) {
+              currentItems = results;
+            } else {
+              currentItems = [
+                {
+                  id: 'agent_ask',
+                  title: `Ask Homie: "${q}"`,
+                  subtitle: 'Dispatch query to local conversational agent',
+                  icon: '✨',
+                  query: q
+                }
+              ];
+            }
+            selectedIdx = 0;
+            renderItems();
+          }).catch((err) => {
+            console.error("Omnibar backend search failed, using fallback:", err);
+            clientSideFallback(q);
+          });
+        } else {
+          clientSideFallback(q);
+        }
+      }, 150);
+    }
+
+    queryInput.addEventListener('input', (e) => handleQueryInput(e.target.value));
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        selectedIdx = (selectedIdx + 1) % Math.max(currentItems.length, 1);
+        renderItems();
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        selectedIdx = (selectedIdx - 1 + currentItems.length) % Math.max(currentItems.length, 1);
+        renderItems();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (currentItems[selectedIdx]) executeItem(currentItems[selectedIdx]);
+      } else if (e.key === 'Escape') {
+        if (window.pywebview && window.pywebview.api) {
+          window.pywebview.api.post({ omnibar_close: true });
+        }
+      }
+    });
+
+    window.addEventListener('pywebviewready', () => {
+      if (queryInput.value && queryInput.value.trim()) {
+        handleQueryInput(queryInput.value);
+      }
+    });
+
+    renderItems();
+  </script>
+</body>
+</html>
