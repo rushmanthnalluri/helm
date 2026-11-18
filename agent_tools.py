@@ -10,6 +10,54 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 
+# Global dynamic plugin tool registry for Homie plugins
+PLUGIN_TOOL_REGISTRY: dict[str, dict[str, Any]] = {}
+PLUGIN_TOOLS: dict[str, dict[str, Any]] = PLUGIN_TOOL_REGISTRY
+plugin_tool_registry = PLUGIN_TOOL_REGISTRY
+
+
+def register_plugin_tool(plugin_id: str, tool_def: dict[str, Any]) -> None:
+    """Registers a declared plugin tool into the agent's tool registry."""
+    tool_name = tool_def.get("name")
+    if not tool_name:
+        return
+    entry = {
+        "plugin_id": plugin_id,
+        "name": tool_name,
+        "description": tool_def.get("description", ""),
+        "python_callable": tool_def.get("python_callable", f"plugin:{tool_name}"),
+        "args_schema": tool_def.get("args_schema", tool_def.get("parameters", {"type": "object", "properties": {}})),
+        "parameters": tool_def.get("args_schema", tool_def.get("parameters", {"type": "object", "properties": {}})),
+        "callable": tool_def.get("callable"),
+        "plugin_dir": tool_def.get("plugin_dir", ""),
+        "tier": tool_def.get("tier", "READ_ONLY"),
+    }
+    PLUGIN_TOOL_REGISTRY[tool_name] = entry
+    PLUGIN_TOOL_REGISTRY[f"{plugin_id}:{tool_name}"] = entry
+
+
+def unregister_plugin_tools(plugin_id: str) -> None:
+    """Removes all tools associated with a plugin_id from the registry."""
+    to_delete = [
+        k for k, v in list(PLUGIN_TOOL_REGISTRY.items())
+        if isinstance(v, dict) and v.get("plugin_id") == plugin_id
+    ]
+    for k in to_delete:
+        PLUGIN_TOOL_REGISTRY.pop(k, None)
+
+
+def load_plugin(plugin_id: str, registry: Any = None) -> dict[str, Any]:
+    """Loads a plugin by id and dynamically registers its declared tools."""
+    import homie_plugins
+    return homie_plugins.load_plugin(plugin_id, registry=registry)
+
+
+def execute_plugin_tool(plugin_id: str, tool_name: str, **kwargs) -> dict[str, Any]:
+    """Executes a declared plugin tool safely with timeout and error handling."""
+    import homie_plugins
+    return homie_plugins.execute_plugin_tool(plugin_id, tool_name, **kwargs)
+
+
 MAX_TOOL_RESULT_CHARS = 8_000
 logger = logging.getLogger("homie.agent_tools")
 
@@ -74,7 +122,7 @@ class ToolRegistry:
 
     def schemas(self) -> list[dict[str, Any]]:
         """OpenAI-compatible function schemas for the model request."""
-        return [
+        schemas_list = [
             {
                 "type": "function",
                 "function": {
@@ -85,6 +133,18 @@ class ToolRegistry:
             }
             for tool in self._tools.values()
         ]
+        # Also include dynamically registered plugin tools
+        for tool_name, meta in PLUGIN_TOOL_REGISTRY.items():
+            if ":" not in tool_name and tool_name not in self._tools:
+                schemas_list.append({
+                    "type": "function",
+                    "function": {
+                        "name": tool_name,
+                        "description": meta.get("description", ""),
+                        "parameters": {**meta.get("parameters", {"type": "object", "properties": {}}), "additionalProperties": False},
+                    },
+                })
+        return schemas_list
 
     def execute(
         self,
@@ -97,6 +157,11 @@ class ToolRegistry:
             return {"ok": False, "error": "The tool registry is closed."}
         tool = self._tools.get(name)
         if tool is None:
+            if name in PLUGIN_TOOL_REGISTRY:
+                meta = PLUGIN_TOOL_REGISTRY[name]
+                pid = meta.get("plugin_id", "")
+                args_dict = arguments if isinstance(arguments, dict) else {}
+                return execute_plugin_tool(pid, name, **args_dict)
             return {"ok": False, "error": f"Tool '{name}' is not available."}
         error = _validate_arguments(tool.parameters, arguments)
         if error:
@@ -453,6 +518,241 @@ def build_default_registry() -> ToolRegistry:
         taint_on_read=True,
         max_output_chars=4000,
     ))
+    registry.register(ToolSpec(
+        name="homie_read_attachment",
+        description="Reads specific pages, slides, or keyword occurrences from an attached document (PDF, DOCX, PPTX, XLSX) without token overload.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "attachment_id": {"type": "string", "description": "Attachment ID or SHA-256 digest"},
+                "pages": {"type": "string", "description": "Optional page range like '1-3'"},
+                "find": {"type": "string", "description": "Optional search term"}
+            },
+            "required": ["attachment_id"]
+        },
+        capability_tier="READ_ONLY",
+        runner=lambda args, caller_id: _run_broker_tool("homie_read_attachment", args, caller_id),
+        returns_untrusted=True,
+        egress="none",
+        approval="none",
+        taint_on_read=True,
+    ))
+    registry.register(ToolSpec(
+        name="homie_list_watchers",
+        description="Lists all background web portal watchers and their latest differential snapshot status.",
+        parameters={"type": "object", "properties": {}, "required": []},
+        capability_tier="READ_ONLY",
+        runner=lambda args, caller_id: _run_broker_tool("homie_list_watchers", args, caller_id),
+        returns_untrusted=False,
+        egress="none",
+        approval="none",
+    ))
+    registry.register(ToolSpec(
+        name="homie_check_watcher",
+        description="Forces an immediate check of a portal watcher and returns differential changes.",
+        parameters={
+            "type": "object",
+            "properties": {"watcher_id": {"type": "string"}},
+            "required": ["watcher_id"]
+        },
+        capability_tier="READ_ONLY",
+        runner=lambda args, caller_id: _run_broker_tool("homie_check_watcher", args, caller_id),
+        returns_untrusted=True,
+        egress="none",
+        approval="none",
+        taint_on_read=True,
+    ))
+    registry.register(ToolSpec(
+        name="homie_learn_topic",
+        description="Researches a topic from external sources, filters prompt injections, and commits standalone facts with provenance to durable memory.",
+        parameters={
+            "type": "object",
+            "properties": {"topic": {"type": "string"}},
+            "required": ["topic"]
+        },
+        capability_tier="READ_ONLY",
+        runner=lambda args, caller_id: _run_broker_tool("homie_learn_topic", args, caller_id),
+        returns_untrusted=True,
+        egress="none",
+        approval="none",
+        taint_on_read=True,
+    ))
+    registry.register(ToolSpec(
+        name="homie_list_apps",
+        description="Discovers available SaaS tools and MCP integrations from the 65+ verified apps catalog.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "category": {"type": "string"}
+            }
+        },
+        capability_tier="READ_ONLY",
+        runner=lambda args, caller_id: _run_broker_tool("homie_list_apps", args, caller_id),
+        returns_untrusted=False,
+        egress="none",
+        approval="none",
+    ))
+    registry.register(ToolSpec(
+        name="homie_get_app_info",
+        description="Retrieves authentication parameters, protocol details, and tools for an app from the catalog.",
+        parameters={
+            "type": "object",
+            "properties": {"app_id": {"type": "string"}},
+            "required": ["app_id"]
+        },
+        capability_tier="READ_ONLY",
+        runner=lambda args, caller_id: _run_broker_tool("homie_get_app_info", args, caller_id),
+        returns_untrusted=False,
+        egress="none",
+        approval="none",
+    ))
+    registry.register(ToolSpec(
+        name="homie_list_brief_templates",
+        description="Returns available morning daily briefing schedule templates (Markets, AI & Tech, Email Inbox).",
+        parameters={"type": "object", "properties": {}, "required": []},
+        capability_tier="READ_ONLY",
+        runner=lambda args, caller_id: _run_broker_tool("homie_list_brief_templates", args, caller_id),
+        returns_untrusted=False,
+        egress="none",
+        approval="none",
+    ))
+    registry.register(ToolSpec(
+        name="homie_get_knowledge_dossier",
+        description="Retrieves a 360-degree knowledge graph dossier on a person, project, topic, or file.",
+        parameters={
+            "type": "object",
+            "properties": {"entity_name": {"type": "string"}},
+            "required": ["entity_name"]
+        },
+        capability_tier="READ_ONLY",
+        runner=lambda args, caller_id: _run_broker_tool("homie_get_knowledge_dossier", args, caller_id),
+        returns_untrusted=False,
+        egress="none",
+        approval="none",
+    ))
+    registry.register(ToolSpec(
+        name="homie_search_knowledge_graph",
+        description="Searches entities, topics, and relations across the personal knowledge graph.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "category": {"type": "string"}
+            },
+            "required": ["query"]
+        },
+        capability_tier="READ_ONLY",
+        runner=lambda args, caller_id: _run_broker_tool("homie_search_knowledge_graph", args, caller_id),
+        returns_untrusted=False,
+        egress="none",
+        approval="none",
+    ))
+    registry.register(ToolSpec(
+        name="homie_get_pre_meeting_card",
+        description="Generates an executive pre-meeting prep briefing card with past meeting takeaways, attendee dossiers, and open action items.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "meeting_title": {"type": "string"},
+                "attendees": {"type": "array", "items": {"type": "string"}}
+            },
+            "required": ["meeting_title"]
+        },
+        capability_tier="READ_ONLY",
+        runner=lambda args, caller_id: _run_broker_tool("homie_get_pre_meeting_card", args, caller_id),
+        returns_untrusted=False,
+        egress="none",
+        approval="none",
+    ))
+    registry.register(ToolSpec(
+        name="homie_generate_eod_narrative",
+        description="Synthesizes today's code changes, meetings, learned facts, and uncompleted items into an End-of-Day Standup Narrative.",
+        parameters={"type": "object", "properties": {}, "required": []},
+        capability_tier="READ_ONLY",
+        runner=lambda args, caller_id: _run_broker_tool("homie_generate_eod_narrative", args, caller_id),
+        returns_untrusted=False,
+        egress="none",
+        approval="none",
+    ))
+    registry.register(ToolSpec(
+        name="homie_list_plugins",
+        description="Lists all installed Homie extension plugins and available community extensions.",
+        parameters={"type": "object", "properties": {}, "required": []},
+        capability_tier="READ_ONLY",
+        runner=lambda args, caller_id: _run_broker_tool("homie_list_plugins", args, caller_id),
+        returns_untrusted=False,
+        egress="none",
+        approval="none",
+    ))
+    registry.register(ToolSpec(
+        name="homie_instant_file_search",
+        description="Locates files across local drives in < 5ms via Voidtools Everything SDK or fast filesystem traversal.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "max_results": {"type": "integer"},
+                "file_extension": {"type": "string"}
+            },
+            "required": ["query"]
+        },
+        capability_tier="READ_ONLY",
+        runner=lambda args, caller_id: _run_broker_tool("homie_instant_file_search", args, caller_id),
+        returns_untrusted=False,
+        egress="none",
+        approval="none",
+    ))
+    registry.register(ToolSpec(
+        name="homie_get_ide_context",
+        description="Reads active VS Code / Cursor workspace state, git branch, diffs, and project technologies without screen OCR.",
+        parameters={
+            "type": "object",
+            "properties": {"workspace_path": {"type": "string"}}
+        },
+        capability_tier="READ_ONLY",
+        runner=lambda args, caller_id: _run_broker_tool("homie_get_ide_context", args, caller_id),
+        returns_untrusted=False,
+        egress="none",
+        approval="none",
+    ))
+    registry.register(ToolSpec(
+        name="homie_show_canvas",
+        description="Renders an interactive artifact (spreadsheet, slide deck, document, or diagram) in the side canvas view.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "content": {"type": "string"},
+                "artifact_type": {"type": "string"}
+            },
+            "required": ["title", "content"]
+        },
+        capability_tier="READ_ONLY",
+        runner=lambda args, caller_id: _run_broker_tool("homie_show_canvas", args, caller_id),
+        returns_untrusted=False,
+        egress="none",
+        approval="none",
+    ))
+    registry.register(ToolSpec(
+        name="get_screen_elements",
+        description="Inspects the active or specified application window to discover interactive UI controls (buttons, inputs, menus, links) with Set-of-Marks numerical badges.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "window_title": {
+                    "type": "string",
+                    "description": "Optional title or partial title of the target application window to inspect."
+                }
+            },
+            "required": [],
+        },
+        capability_tier="READ_ONLY",
+        runner=lambda args, caller_id: _run_grounding_tool("get_screen_elements", args, caller_id),
+        returns_untrusted=False,
+        egress="none",
+        approval="none",
+    ))
     return registry
 
 
@@ -485,6 +785,28 @@ def _run_context_search_tool(args: dict[str, Any], caller_id: str) -> dict[str, 
     return {"ok": True, "data": res}
 
 
+def _run_grounding_tool(tool_name: str, args: dict[str, Any], caller_id: str) -> dict[str, Any]:
+    import grounding_tools
+
+    if tool_name in ("get_screen_elements", "homie_get_screen_elements"):
+        res = grounding_tools.get_screen_elements(window_title=args.get("window_title"))
+        return {"ok": res.get("ok", True), "data": res}
+    elif tool_name in ("grounded_click", "homie_grounded_click"):
+        res = grounding_tools.grounded_click(
+            target_description=args.get("target_description", ""),
+            app_window_title=args.get("app_window_title")
+        )
+        return {"ok": res.get("ok", False), "data": res}
+    elif tool_name in ("grounded_type", "homie_grounded_type"):
+        res = grounding_tools.grounded_type(
+            target_description=args.get("target_description", ""),
+            text=args.get("text", ""),
+            app_window_title=args.get("app_window_title")
+        )
+        return {"ok": res.get("ok", False), "data": res}
+    return {"ok": False, "error": f"Unknown grounding tool '{tool_name}'"}
+
+
 def add_consequential_tools(registry: ToolRegistry) -> ToolRegistry:
     """Registers consequential tools protected by the Tier 6 hard confirmation gate."""
     registry.register(
@@ -498,6 +820,9 @@ def add_consequential_tools(registry: ToolRegistry) -> ToolRegistry:
             },
             capability_tier="CONSEQUENTIAL",
             runner=lambda args, caller_id: _run_broker_tool("homie_set_clipboard", args, caller_id),
+            returns_untrusted=False,
+            egress="none",
+            approval="explicit",
         ),
         allow_consequential=True,
     )
@@ -512,6 +837,263 @@ def add_consequential_tools(registry: ToolRegistry) -> ToolRegistry:
             },
             capability_tier="CONSEQUENTIAL",
             runner=lambda args, caller_id: _run_broker_tool("homie_launch_app", args, caller_id),
+            returns_untrusted=False,
+            egress="none",
+            approval="explicit",
+        ),
+        allow_consequential=True,
+    )
+    registry.register(
+        ToolSpec(
+            name="homie_make_document",
+            description="Creates a formatted document (.docx, .html, .md) in user documents.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "content": {"type": "string"},
+                    "format": {"type": "string", "enum": ["docx", "html", "md"]}
+                },
+                "required": ["title", "content"]
+            },
+            capability_tier="CONSEQUENTIAL",
+            runner=lambda args, caller_id: _run_broker_tool("homie_make_document", args, caller_id),
+            returns_untrusted=False,
+            egress="none",
+            approval="explicit",
+        ),
+        allow_consequential=True,
+    )
+    registry.register(
+        ToolSpec(
+            name="homie_make_presentation",
+            description="Generates a 16:9 widescreen PowerPoint presentation (.pptx).",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "slides": {"type": "array", "items": {"type": "object"}}
+                },
+                "required": ["title", "slides"]
+            },
+            capability_tier="CONSEQUENTIAL",
+            runner=lambda args, caller_id: _run_broker_tool("homie_make_presentation", args, caller_id),
+            returns_untrusted=False,
+            egress="none",
+            approval="explicit",
+        ),
+        allow_consequential=True,
+    )
+    registry.register(
+        ToolSpec(
+            name="homie_make_spreadsheet",
+            description="Generates an Excel spreadsheet (.xlsx) with safe formulas.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "data": {"description": "2D array of rows"}
+                },
+                "required": ["title", "data"]
+            },
+            capability_tier="CONSEQUENTIAL",
+            runner=lambda args, caller_id: _run_broker_tool("homie_make_spreadsheet", args, caller_id),
+            returns_untrusted=False,
+            egress="none",
+            approval="explicit",
+        ),
+        allow_consequential=True,
+    )
+    registry.register(
+        ToolSpec(
+            name="homie_add_watcher",
+            description="Configures a background web portal watcher.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "url": {"type": "string"},
+                    "interval_minutes": {"type": "integer"}
+                },
+                "required": ["name", "url"]
+            },
+            capability_tier="CONSEQUENTIAL",
+            runner=lambda args, caller_id: _run_broker_tool("homie_add_watcher", args, caller_id),
+            returns_untrusted=False,
+            egress="none",
+            approval="explicit",
+        ),
+        allow_consequential=True,
+    )
+    registry.register(
+        ToolSpec(
+            name="homie_remove_watcher",
+            description="Removes an existing background portal watcher.",
+            parameters={
+                "type": "object",
+                "properties": {"watcher_id": {"type": "string"}},
+                "required": ["watcher_id"]
+            },
+            capability_tier="CONSEQUENTIAL",
+            runner=lambda args, caller_id: _run_broker_tool("homie_remove_watcher", args, caller_id),
+            returns_untrusted=False,
+            egress="none",
+            approval="explicit",
+        ),
+        allow_consequential=True,
+    )
+    registry.register(
+        ToolSpec(
+            name="homie_link_knowledge",
+            description="Establishes a directed relationship between two entities in the personal knowledge graph.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "source_name": {"type": "string"},
+                    "predicate": {"type": "string"},
+                    "target_name": {"type": "string"},
+                    "context": {"type": "string"}
+                },
+                "required": ["source_name", "predicate", "target_name"]
+            },
+            capability_tier="CONSEQUENTIAL",
+            runner=lambda args, caller_id: _run_broker_tool("homie_link_knowledge", args, caller_id),
+            returns_untrusted=False,
+            egress="none",
+            approval="explicit",
+        ),
+        allow_consequential=True,
+    )
+    registry.register(
+        ToolSpec(
+            name="homie_install_plugin",
+            description="Installs a verified extension plugin from the community catalog.",
+            parameters={
+                "type": "object",
+                "properties": {"plugin_id": {"type": "string"}},
+                "required": ["plugin_id"]
+            },
+            capability_tier="CONSEQUENTIAL",
+            runner=lambda args, caller_id: _run_broker_tool("homie_install_plugin", args, caller_id),
+            returns_untrusted=False,
+            egress="none",
+            approval="explicit",
+        ),
+        allow_consequential=True,
+    )
+    registry.register(
+        ToolSpec(
+            name="homie_uninstall_plugin",
+            description="Removes an installed extension plugin by ID.",
+            parameters={
+                "type": "object",
+                "properties": {"plugin_id": {"type": "string"}},
+                "required": ["plugin_id"]
+            },
+            capability_tier="CONSEQUENTIAL",
+            runner=lambda args, caller_id: _run_broker_tool("homie_uninstall_plugin", args, caller_id),
+            returns_untrusted=False,
+            egress="none",
+            approval="explicit",
+        ),
+        allow_consequential=True,
+    )
+    registry.register(
+        ToolSpec(
+            name="homie_run_ghost_task",
+            description="Executes a task non-disruptively in the background Win32 ghost desktop.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string"},
+                    "timeout": {"type": "number"}
+                },
+                "required": ["command"]
+            },
+            capability_tier="CONSEQUENTIAL",
+            runner=lambda args, caller_id: _run_broker_tool("homie_run_ghost_task", args, caller_id),
+            returns_untrusted=False,
+            egress="none",
+            approval="explicit",
+        ),
+        allow_consequential=True,
+    )
+    registry.register(
+        ToolSpec(
+            name="homie_vla_step",
+            description="Executes an autonomous Vision-Language-Action (VLA) computer-use step using Set-of-Marks numerical grounding.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string"},
+                    "mark_id": {"type": "integer"},
+                    "x": {"type": "integer"},
+                    "y": {"type": "integer"},
+                    "text_value": {"type": "string"}
+                },
+                "required": ["action"]
+            },
+            capability_tier="CONSEQUENTIAL",
+            runner=lambda args, caller_id: _run_broker_tool("homie_vla_step", args, caller_id),
+            returns_untrusted=False,
+            egress="none",
+            approval="explicit",
+        ),
+        allow_consequential=True,
+    )
+    registry.register(
+        ToolSpec(
+            name="grounded_click",
+            description="Clicks an interactive UI element identified by its Set-of-Marks numerical badge (e.g. '[1]') or semantic description (e.g. 'Save button') with post-action verification.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "target_description": {
+                        "type": "string",
+                        "description": "Mark ID (e.g. '[1]') or semantic description of the element to click."
+                    },
+                    "app_window_title": {
+                        "type": "string",
+                        "description": "Optional title or partial title of the application window containing the element."
+                    }
+                },
+                "required": ["target_description"],
+            },
+            capability_tier="CONSEQUENTIAL",
+            runner=lambda args, caller_id: _run_grounding_tool("grounded_click", args, caller_id),
+            returns_untrusted=False,
+            egress="none",
+            approval="explicit",
+        ),
+        allow_consequential=True,
+    )
+    registry.register(
+        ToolSpec(
+            name="grounded_type",
+            description="Types text into an interactive input element using UIA ValuePattern (avoiding clipboard pollution) with post-action verification.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "target_description": {
+                        "type": "string",
+                        "description": "Mark ID (e.g. '[2]') or semantic description of the input field."
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "Text to type or insert into the target field."
+                    },
+                    "app_window_title": {
+                        "type": "string",
+                        "description": "Optional title or partial title of the application window containing the element."
+                    }
+                },
+                "required": ["target_description", "text"],
+            },
+            capability_tier="CONSEQUENTIAL",
+            runner=lambda args, caller_id: _run_grounding_tool("grounded_type", args, caller_id),
+            returns_untrusted=False,
+            egress="none",
+            approval="explicit",
         ),
         allow_consequential=True,
     )
