@@ -1,0 +1,24 @@
+{
+  "attachment_id": "fd85b0f916621758eab671aaf99da6edb0539f4cf9b7b7e1ddf802a68c90c660",
+  "filename": "sample.docx",
+  "kind": "docx",
+  "total_units": 2,
+  "unit_name": "section",
+  "sections": [
+    {
+      "number": 1,
+      "title": "Introduction",
+      "text": "Spec\n\nHomie Assistant  •  2026-11-17",
+      "scanned": false
+    },
+    {
+      "number": 2,
+      "title": "Specification",
+      "text": "All requirements met.",
+      "scanned": false
+    }
+  ],
+  "total_chars": 57,
+  "title": "sample.docx",
+  "notes": []
+}

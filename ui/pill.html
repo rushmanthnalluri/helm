@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Homie Dynamic Pill</title>
+  <style>
+    :root {
+      --bg-acrylic: rgba(28, 30, 36, 0.82);
+      --bg-hover: rgba(45, 48, 58, 0.9);
+      --border-subtle: rgba(255, 255, 255, 0.12);
+      --accent: #3b82f6;
+      --accent-glow: rgba(59, 130, 246, 0.35);
+      --text-primary: #f8fafc;
+      --text-muted: #94a3b8;
+      --success: #10b981;
+      --font-family: 'Segoe UI Variable Display', 'Segoe UI', -apple-system, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+
+    body {
+      background: transparent;
+      overflow: hidden;
+      font-family: var(--font-family);
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      height: 100vh;
+      padding-top: 8px;
+    }
+
+    /* Floating Dynamic Island / Pill */
+    .dynamic-pill {
+      background: var(--bg-acrylic);
+      backdrop-filter: blur(28px) saturate(180%);
+      -webkit-backdrop-filter: blur(28px) saturate(180%);
+      border: 1px solid var(--border-subtle);
+      border-radius: 28px;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45), 0 0 1px rgba(255, 255, 255, 0.2);
+      display: flex;
+      align-items: center;
+      padding: 8px 18px;
+      gap: 12px;
+      cursor: pointer;
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      max-width: 480px;
+    }
+
+    .dynamic-pill:hover {
+      background: var(--bg-hover);
+      border-color: rgba(255, 255, 255, 0.25);
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55), 0 0 20px var(--accent-glow);
+      transform: translateY(1px);
+    }
+
+    /* Status Indicator Orbs */
+    .orb-indicator {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 10px var(--accent);
+      transition: background 0.3s, box-shadow 0.3s;
+    }
+
+    .orb-indicator.listening {
+      background: #ef4444;
+      box-shadow: 0 0 12px #ef4444;
+      animation: pulse 1.2s infinite;
+    }
+
+    .orb-indicator.speaking {
+      background: #10b981;
+      box-shadow: 0 0 12px #10b981;
+    }
+
+    .orb-indicator.working {
+      background: #f59e0b;
+      box-shadow: 0 0 12px #f59e0b;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(1.25); }
+    }
+
+    /* Soundwave Visualizer Bars */
+    .waveform-bars {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      height: 18px;
+    }
+
+    .wave-bar {
+      width: 3px;
+      height: 4px;
+      background: var(--accent);
+      border-radius: 2px;
+      transition: height 0.1s ease-in-out;
+    }
+
+    /* Pill Message Text */
+    .pill-content {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .pill-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-primary);
+      letter-spacing: -0.2px;
+      white-space: nowrap;
+    }
+
+    .pill-subtitle {
+      font-size: 11px;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+
+    /* Quick Action Badge */
+    .pill-badge {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 3px 8px;
+      border-radius: 12px;
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--text-muted);
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+  </style>
+</head>
+<body>
+  <div class="dynamic-pill" id="pill" onclick="triggerOmnibar()">
+    <div class="orb-indicator" id="orb"></div>
+    <div class="waveform-bars" id="waveform">
+      <div class="wave-bar" style="height: 6px;"></div>
+      <div class="wave-bar" style="height: 14px;"></div>
+      <div class="wave-bar" style="height: 18px;"></div>
+      <div class="wave-bar" style="height: 10px;"></div>
+      <div class="wave-bar" style="height: 4px;"></div>
+    </div>
+    <div class="pill-content">
+      <span class="pill-title" id="pillTitle">Homie Ready</span>
+      <span class="pill-subtitle" id="pillSubtitle">Press Alt + Space or say "Homie"</span>
+    </div>
+    <div class="pill-badge" id="pillBadge">Alt + Space</div>
+  </div>
+
+  <script>
+    function triggerOmnibar() {
+      if (window.pywebview && window.pywebview.api) {
+        window.pywebview.api.open_omnibar();
+      } else {
+        fetch('/api/omnibar/open', { method: 'POST' }).catch(() => {});
+      }
+    }
+
+    function updatePillState(state, title, subtitle, level) {
+      const orb = document.getElementById('orb');
+      const pillTitle = document.getElementById('pillTitle');
+      const pillSubtitle = document.getElementById('pillSubtitle');
+      const bars = document.querySelectorAll('.wave-bar');
+
+      orb.className = 'orb-indicator ' + (state || '');
+      if (title) pillTitle.textContent = title;
+      if (subtitle) pillSubtitle.textContent = subtitle;
+
+      if (level !== undefined && bars.length > 0) {
+        bars.forEach((b, i) => {
+          const h = Math.max(4, Math.min(18, Math.round(level * 20 * (1 + (i % 3) * 0.4))));
+          b.style.height = h + 'px';
+        });
+      }
+    }
+
+    // Expose to Python PyWebView bridge
+    window.updatePillState = updatePillState;
+  </script>
+</body>
+</html>

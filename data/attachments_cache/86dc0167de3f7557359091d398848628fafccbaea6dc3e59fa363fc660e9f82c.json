@@ -1,0 +1,24 @@
+{
+  "attachment_id": "86dc0167de3f7557359091d398848628fafccbaea6dc3e59fa363fc660e9f82c",
+  "filename": "delta_notes.docx",
+  "kind": "docx",
+  "total_units": 2,
+  "unit_name": "section",
+  "sections": [
+    {
+      "number": 1,
+      "title": "Introduction",
+      "text": "Delta Notes\n\nHomie Assistant  •  2026-11-17",
+      "scanned": false
+    },
+    {
+      "number": 2,
+      "title": "Project Delta Upgrade",
+      "text": "Delta features have been integrated into Homie.\n\n•  Feature Alpha\n\n•  Feature Beta",
+      "scanned": false
+    }
+  ],
+  "total_chars": 125,
+  "title": "delta_notes.docx",
+  "notes": []
+}

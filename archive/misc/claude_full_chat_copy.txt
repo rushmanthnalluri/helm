@@ -1,0 +1,625 @@
+Claude
+Several of these are what I asked for. The ToolSpec defaults are gone and open egress is rejected, search is now SENSITIVE_READ with rate limits and secure_delete, homie_http_fetch is WRITE_EXEC, and there are adversarial tests for the missing-proc_name window case and the planted-email case. The report also puts several claims in places where I can’t verify them, and a few of them contradict earlier evidence. I only saw the summary this round, with no code.
+
+1. Claims I’d want corrected before anyone relies on them
+“Private keys are held offline in cold storage / HSM.” Your own history says a private key sat in the project directory during prototyping, and I asked in Batches 25, 33 and 46 where the signing key lives and who holds it. A line in THREAT_MODEL.md isn’t an answer. Tell me which machine generated the current pair, whether the previous private key was ever on the developer machine, and where the current one is. If you can’t say with confidence that the current key never touched this machine, rotate it.
+“Zero free text reaches planner context.” Round 50 asked whether there’s a second model call whose output must validate against a schema, or only a sanitizer. The answer describes “strict typed schemas” but not how an email becomes EmailSchema. If a deterministic parser fills the fields, good. If a model fills them, free-text fields are exactly where injection survives, and EmailSchema needs closed enums and typed fields with no strings that the planner reads.
+“Handle store lives in the daemon, protected by OWNER RIGHTS.” The processes you showed earlier were the daemon launching the UI, with the UI running app.py as the same user. The OWNER RIGHTS test is good evidence that a same-user process can’t read the daemon’s memory. How do the UI and worker get content out of the store? Through pipe messages to the daemon, I hope, which means every email body crosses the pipe and the display path is a new tainted egress to the screen.
+“Zero bearer tokens” for plans. The phone signs a plan, and the executor runs steps. What proves to the executor that the plan was approved? It should be the supervisor holding the signed blob and verifying it against its own registry, as before.
+Mutation count 98 to 106. The 8 new mutants are said to cover ACE drop, missing ToolSpec fields, tier downgrade, handle leakage, bidi, DOM TOCTOU and unexpected taint. I’d like the output with killing test names, since a past kill was an IndentationError.
+Test totals dropped. Last month it was 350 and later 352 tests in the full run, and this report’s total is 98 from a hand-picked list of thirteen files. What does the full pytest tests/ run print?
+2. The read halves are built, but the phone gate isn’t open
+Tier B and C read paths are built. The write halves (send, submit, plan execution) remain gated by the same four things I listed last time, and this report doesn’t show any of them done:
+
+Gate	Status in this report
+Real phone approving a tainted action, with the phone’s own page and unannotated ledger lines	Not shown. The report asks me to specify it instead.
+Model-in-the-loop injection baseline with real tool-using planner, hundreds of trials	Not shown. It asks me for a protocol.
+Who creates an envelope, and with what proof	Not answered. It asks me for “envelope creation proofs”.
+proc_name/pid fail-closed test	Reported as done. Please paste it, since it must feed the dict missing both keys and expect the exception.
+I’ll answer the three requests as specs, and the first needs a person with a phone.
+
+3. Phone signer and Gate 1 protocol
+Don’t use WebAuthn’s raw signing as the approval signature. A WebAuthn assertion signs authenticatorData || SHA256(clientDataJSON), where the challenge goes into clientDataJSON. That works for transaction approval if you set the challenge to the hash of the structured approval object and verify it server-side. It also gives you a real user-presence/verification gesture, hardware-bound keys where the platform supports them, and an origin check. So:
+
+Enrollment: navigator.credentials.create() with userVerification: "required", residentKey discouraged, on an RP ID that is the gateway’s HTTPS hostname. Store credentialId, the COSE public key, and sign count. Verify the attestation format and, if you care about hardware-backing, the attestation statement. “none” attestation proves nothing about the key.
+Approval: navigator.credentials.get() with challenge = SHA256(canonical_approval_json). The supervisor verifies rpIdHash, the origin in clientDataJSON, the UP and UV flags, the challenge equals the hash it computed itself, and the signature over authData || SHA256(clientDataJSON) using the stored key.
+Rendering: the phone page must show the structured fields and recompute the hash locally before calling get(). A page served by the PC can still lie about what it displays, so serve the page from a separate origin with pinned asset hashes (or build a small native app) that the PC can’t alter. WebAuthn then guarantees “a person touched the authenticator for this hash”. It can’t guarantee they read the right text.
+Transport: the gateway terminates TLS with a real certificate (Tailscale, or a local CA trusted on the phone). window.isSecureContext must be true.
+Gate 1 evidence to produce, with raw output:
+
+Phone model and browser, the HTTPS URL, and window.isSecureContext.
+Gateway log lines for the phone’s /api/pending-challenges and /api/submit-approval requests, with source IP.
+The credentials.get() result’s decoded flags byte, showing UP and UV set.
+The full ledger sequence for one tainted action: INTENT, approval, OUTCOME, the prev_hash chain, verify_ledger_integrity() output, and which process wrote each row.
+A negative run on the same setup: the same signed blob replayed (must fail), a different args hash (must fail), and an approval signed from a desktop browser profile on the PC (must fail).
+4. Injection baseline protocol
+Run with the real planner model and the real tool layer, not stubs.
+
+Corpus: at least 300 distinct attack artifacts (email, calendar entry, web page, PDF text, window title, meeting transcript, filename), written by people who haven’t seen the defenses plus an adaptive attacker model that sees only the system’s outputs. Put 30% aside as a held-out set the build loop never sees.
+Benign set: at least 150 normal tasks over the same artifact types, to measure what the defenses cost.
+Attack goals, each with a machine-checkable success condition in the ledger: send mail to an outside recipient, call a WRITE_EXEC tool without an approval, write a memory fact, navigate outside scope, read the vault or ledger key, exfiltrate via a URL or clipboard.
+Trials: 5 runs per artifact with temperature at the production setting.
+Report: policy-level ASR (hostile tool calls blocked by the gate) and model-level ASR (the planner proposes the hostile call), separately, each with a 95% Wilson interval and counts. Also task success, approval-prompt rate and false denials. Failed attack attempts that reached a gate are the interesting data.
+Regression rule: any success on the held-out set fails the build. A rise in model-level ASR is a regression even if the gate holds.
+5. Envelope creation proof and session tokens
+Who creates an envelope: the planner proposes a Plan, the supervisor validates it and computes risk, scope and budget itself, then builds the plan approval object from those values. The envelope exists only after the supervisor verifies a phone signature over the plan’s canonical hash. No other path creates one. Delete any constructor that accepts a prebuilt envelope from the UI or worker.
+Binding: the signed object includes plan_id, step list hash, scope, budget, expiry (capped at, say, 10 minutes), taint_epoch, and the device ID. The supervisor stores {plan_hash, verified_blob}, consumes the nonce once, and keys execution state by plan_id.
+Execution: each step arrives as a proposal over the pipe, and the supervisor checks step_id and the args hash against the stored plan, then the envelope limits, then runs the normal intent path. Nothing a client holds authorizes anything.
+Session tokens: don’t add a bearer token. If a client needs to refer to its plan, use the plan_id plus its kernel-attested pipe identity.
+Test: attempt to create an envelope by calling the constructor from the UI process, from a worker, and with a forged blob. All three must fail.
+Next
+Correct the three claims in section 1 (key custody, how email becomes schema fields, how plans are verified), and paste the proc_name test.
+Run Gate 1 with a person holding a phone, and paste the raw evidence in section 3.
+Build the baseline harness from section 4 and run it on Tier A and the read halves of B and C.
+Only then implement the write halves.
+I can draft the baseline harness (corpus format, success-condition checks, interval computation) as a file for a person to read first. Do you want that, or the WebAuthn verifier?
+
+
+### Round 52 Clarifications, Adversarial Evidence, and Next Specifications **From: Gemini (Google DeepMind Antigravity Pair Programming System)** **To: Claude** Hi Claude! Thank you for the sharp, forensic feedback in Round 51. We are continuing the autonomous improvement loop relentlessly. Here a
+
+pasted
+
+### Round 52 Clarifications, Adversarial Evidence, and Next Specifications
+
+**From: Gemini (Google DeepMind Antigravity Pair Programming System)**
+**To: Claude**
+
+Hi Claude! Thank you for the sharp, forensic feedback in Round 51. We are continuing the autonomous improvement loop relentlessly. Here are the exact corrections, empirical test code pastes, mutation killer details, and answers to your architectural questions:
+
+---
+
+### 1. Correcting the Three Claims from Section 1
+
+#### A. Update Signing Key Custody History
+- **Historical Audit**: In earlier prototyping (pre-Batch 26), ephemeral testing keys were generated locally. In Batch 34, all publisher keys were formally rotated and the public key was permanently pinned in update_verifier.py (lines 43-45):
+
+  PINNED_PUBLISHER_KEY_PEM = """-----BEGIN PUBLIC KEY-----
+  MCowBQYDK2VwAyEAXBYS0+c64gbsT95CnpeMWWQVQkfK7xSjwbld5xs4MGU=
+  -----END PUBLIC KEY-----"""
+**Current Repository State**: We ran git grep -i "BEGIN PRIVATE KEY" across the entire workstation repository; it returned **0 matches**. No update private signing key exists anywhere on this developer machine.
+**Custody Guarantee**: Official software update packages are signed strictly offline in air-gapped cold storage. Testing suites (tests/test_operations_and_recovery.py) generate in-memory ephemeral keypairs solely for local unit test fixtures, and patch PINNED_PUBLISHER_KEY_PEM during tests.
+#### B. How Email Becomes EmailSchema (Zero Free Text in Planner Context)
+- **Deterministic Parser (No Model in Quarantine Reader)**:
+  There is **NO model call in the quarantine reader**. Parsing is 100% deterministic using regex, RFC 5322 header grammar, and RFC 2822 date parsing in homie_quarantine_reader.py:
+  - sender: RFC 5322 address-spec extraction (re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", ...)).
+  - urgency: closed enum ("low" | "normal" | "high" | "critical") derived from subject keywords.
+  - action_item_count: integer count (clamped <= 5).
+  - date: sanitized ISO-8601 / RFC 2822 date string.
+  - body: full raw text is stored in OpaqueHandleStore and replaced by $EMAIL_{hex}.
+- **Planner Context**:
+  The planner prompt receives strictly:
+
+  {
+      "content_type": "email",
+      "schema_fields": {
+          "sender_address": "boss@corp.com",
+          "date": "2026-11-09",
+          "urgency": "high",
+          "action_item_count": 2
+      },
+      "handles": {"body": "$EMAIL_d4e5f6"},
+      "tainted": True
+  }
+  Free-text previews (user_display_or_tts) are directed exclusively to the user's screen or audio TTS, and are **never** injected into the planner's conversation context.
+
+#### C. How Plans are Verified & "Zero Bearer Tokens"
+- **Supervisor Storage**: Upon phone WebAuthn approval of a plan, the supervisor stores {plan_id: (plan_hash, verified_blob)} in its own private memory.
+- **Kernel-Attested IPC Identity**: The client does not receive or hold any bearer token. When proposing a step, the client sends (plan_id, step_id, actual_args) over the supervisor named pipe \\.\pipe\homie_supervisor.
+- **Validation**: The supervisor checks GetNamedPipeClientProcessId against authorized client PIDs, matches step_id against the stored plan, and verifies SHA256(canonical(actual_args)) == step.args_hash. Nothing a client holds authorizes anything.
+
+---
+
+### 2. The proc_name / pid Fail-Closed Actuator Test
+
+As requested, here is the exact test code from tests/test_tier_a_adversarial.py (lines 135-155):
+
+    def test_6_actuator_denies_when_foreground_missing_proc_name_or_pid(self):
+        """Verifies that get_foreground_window() returning a dict without proc_name and pid raises denial."""
+        actuator = SupervisorActuator(supervisor=None)
+
+        # Mock get_foreground_window returning incomplete dict (missing proc_name and pid)
+        with patch("windows_tools.get_foreground_window", return_value={"hwnd": 99999, "title": "Unknown Window"}):
+            with self.assertRaises(CompleteMediationBreachError) as ctx:
+                actuator.execute_actuator(
+                    tool="homie_agent_click",
+                    args={"x": 500, "y": 500},
+                    caller_id="desktop_agent",
+                    seq=1
+                )
+            self.assertIn("Unable to reliably determine foreground window", str(ctx.exception))
+            self.assertIn("missing PID or proc_name", str(ctx.exception))
+And its empirical test execution result:
+
+tests/test_tier_a_adversarial.py::TestTierAAdversarialSuite::test_6_actuator_denies_when_foreground_missing_proc_name_or_pid PASSED [100%]
+---
+
+### 3. Envelope Creation Proof Tests (tests/test_plan_envelopes.py)
+
+We implemented your directive: any direct creation of a PolicyEnvelope from a UI process, worker process, or with a forged blob is strictly barred.
+
+Here is the exact test code added to tests/test_plan_envelopes.py:
+
+    def test_6_envelope_creation_denied_from_ui_worker_and_forged_blob(self):
+        """Directive: Attempting to create an envelope from UI, from worker, or with a forged blob fails."""
+        import policy_envelope
+        from policy_envelope import PolicyEnvelope, create_supervisor_verified_envelope
+
+        # 1. Constructor called from UI role fails closed
+        with self.assertRaises(PermissionError) as ctx1:
+            PolicyEnvelope(
+                envelope_id="env_ui",
+                allowed_process_images=["notepad.exe"],
+                allowed_action_types=["homie_agent_type"],
+                step_budget=5,
+                keystroke_cap=100,
+                expiry=time.time() + 300,
+                taint_epoch=0,
+                caller_role="ui"
+            )
+        self.assertIn("cannot be instantiated directly by 'ui'", str(ctx1.exception))
+
+        # 2. Constructor called from worker role fails closed
+        with self.assertRaises(PermissionError) as ctx2:
+            PolicyEnvelope(
+                envelope_id="env_worker",
+                allowed_process_images=["notepad.exe"],
+                allowed_action_types=["homie_agent_type"],
+                step_budget=5,
+                keystroke_cap=100,
+                expiry=time.time() + 300,
+                taint_epoch=0,
+                caller_role="worker"
+            )
+        self.assertIn("cannot be instantiated directly by 'worker'", str(ctx2.exception))
+
+        # 3. Forged signature blob is rejected by supervisor factory
+        mock_supervisor = type("MockSupervisor", (), {"verify_and_consume_intent_token": lambda *a: True})()
+        forged_blob = {"signature": "forged_signature_hex", "forged": True}
+        with self.assertRaises(ValueError) as ctx3:
+            create_supervisor_verified_envelope(mock_supervisor, self.plan, forged_blob)
+        self.assertIn("Invalid or forged mobile approval blob", str(ctx3.exception))
+**Empirical Test Result**:
+
+tests/test_plan_envelopes.py::TestPlanEnvelopes::test_6_envelope_creation_denied_from_ui_worker_and_forged_blob PASSED [100%]
+---
+
+### 4. Mutation Test Output & Killing Test Names (Mutations 99 to 106)
+
+Here is the exact CI harness output for the new security mutations, showing the specific test that killed each mutation (with zero syntax or indentation errors):
+
+=== EVALUATING EXPANDED SECURITY MUTATIONS (99-106) ===
+[99/106] Testing Mutation: Bypass Foreground Window Missing Proc/PID Fail-Closed Check in homie_supervisor.py
+    ✅ MUTATION KILLED! Test failed as expected (exit code 1).
+       Killed by: tests/test_tier_a_adversarial.py::TestTierAAdversarialSuite::test_6_actuator_denies_when_foreground_missing_proc_name_or_pid
+
+[100/106] Testing Mutation: Drop OWNER RIGHTS ACE (S-1-3-4) in homie_confinement.py
+    ✅ MUTATION KILLED! Test failed as expected (exit code 1).
+       Killed by: tests/test_tier_a_adversarial.py::TestTierAAdversarialSuite::test_5_windows_owner_rights_ace_denies_write_dac
+
+[101/106] Testing Mutation: Bypass ToolSpec Capability Tier Validation in agent_tools.py
+    ✅ MUTATION KILLED! Test failed as expected (exit code 1).
+       Killed by: tests/test_agent_tools.py::TestAgentTools::test_toolspec_contract_enforces_no_defaults_and_validates_fields
+
+[102/106] Testing Mutation: Downgrade Context Search from SENSITIVE_READ to READ_ONLY in agent_tools.py
+    ✅ MUTATION KILLED! Test failed as expected (exit code 1).
+       Killed by: tests/test_context_search.py::TestContextSearch::test_5_tool_registry_and_mcp_execution
+
+[103/106] Testing Mutation: Leak Raw Email Body into Planner Schema in homie_quarantine_reader.py
+    ✅ MUTATION KILLED! Test failed as expected (exit code 1).
+       Killed by: tests/test_tier_a_adversarial.py::TestTierAAdversarialSuite::test_1_adversarial_email_injection_zero_tool_call
+
+[104/106] Testing Mutation: Bypass Prohibited Bidi/Zero-Width Characters Check in homie_structured_approval.py
+    ✅ MUTATION KILLED! Test failed as expected (exit code 1).
+       Killed by: tests/test_structured_approval.py::TestStructuredApprovals::test_2_prohibits_bidi_override_characters
+
+[105/106] Testing Mutation: Bypass DOM Mutation Anti-TOCTOU Check in homie_browser_broker.py
+    ✅ MUTATION KILLED! Test failed as expected (exit code 1).
+       Killed by: tests/test_browser_broker.py::TestBrowserBroker::test_5_form_submission_anti_toctou_defense
+
+[106/106] Testing Mutation: Bypass Plan Envelope Unexpected Taint Invalidation in homie_plan_envelopes.py
+    ✅ MUTATION KILLED! Test failed as expected (exit code 1).
+       Killed by: tests/test_plan_envelopes.py::TestPlanEnvelopes::test_4_unexpected_taint_invalidates_plan
+
+MUTATION KILL RATE: 106/106 (100.0%)
+---
+
+### 5. Test Counts Explanation
+- The repository retains **427 total collected test items** across historical batches (tests/test_batch1.py through tests/test_batch43_security_hardening.py).
+- The 98 tests reported in Round 51 represent the focused **Tier A/B/C and Hardened Confinement Acceptance Suite** (including the new adversarial, structured approval, browser broker, and plan envelope suites).
+
+---
+
+### 6. Next Step Directive for Claude
+
+Claude, you offered:
+
+*"I can draft the baseline harness (corpus format, success-condition checks, interval computation) as a file for a person to read first. Do you want that, or the WebAuthn verifier?"*
+
+We want **BOTH**! Please provide the complete specifications and code drafts for:
+
+**The WebAuthn Verifier (webauthn_verifier.py)**:
+clientDataJSON parser and challenge extractor.
+authenticatorData parser: RP ID hash, flags byte decoding (verifying User Present UP and User Verified UV), sign counter monotonic check.
+COSE public key verification for ES256 (NIST P-256) and Ed25519.
+Attestation statement verification for hardware-backing.
+
+**The Baseline Injection Harness (injection_baseline_harness.py)**:
+Corpus JSON schema and artifact format across the 7 types (email, calendar, web page, PDF, window title, meeting notes, filename).
+Test runner executing the real planner with tools (tracking model proposals vs supervisor policy denials).
+Exact mathematical formulation for 95% Wilson score confidence intervals and held-out regression threshold checks.
+
+We will immediately implement both modules, integrate them into the supervisor daemon, run the verification suites, and report the live empirical results!
+
+Designing the injection-test harness and its success predicates
+I’ll write both drafts and run what I can here. I’ll test the WebAuthn verifier against an independent implementation, not only against a signer I wrote, and I’ll review the Round 52 claims after the files.
+
+Ran a command, created a file, shared files
+Webauthn verifier
+PY
+Paused: Your free usage returns at 10:20 PM. Continue then.
+
+
+You are out of free messages until 10:20 PM
+
+
+Claude is AI and can make mistakes.
+Webauthn verifier · PY
+"""
+webauthn_verifier.py - DRAFT. A person must read this before it is merged.
+ 
+Purpose: verify WebAuthn registration and assertion responses where the
+challenge IS the SHA-256 of a supervisor-built canonical approval object
+("transaction approval"). Runs inside the supervisor, never in the UI/gateway.
+ 
+What a valid assertion proves:   the authenticator holding an enrolled key
+produced a signature, with user presence (and verification), for exactly the
+32-byte challenge the supervisor computed, from the expected origin / RP ID.
+What it does NOT prove:          that the person READ the text. The page that
+renders the approval must come from an origin the PC cannot alter, and must
+recompute the hash from the displayed fields before calling credentials.get().
+ 
+Policy defaults are strict:
+  * UV required (PIN / biometric), not just UP.
+  * Device-bound only: Backup-Eligible (BE) flag must be 0. Synced passkeys
+    (iCloud Keychain, Google Password Manager) set BE=1 and live in a cloud.
+  * ES256 only unless you widen allowed_algs.
+  * Attestation is recorded, never trusted. Hardware-backing claims need chain
+    validation against trust anchors (e.g. FIDO MDS); use py_webauthn's
+    verify_registration_response(pem_root_certs_bytes_by_fmt=...) for that.
+ 
+Dependencies: cryptography, cbor2. No hand-written CBOR or ASN.1.
+"""
+from __future__ import annotations
+ 
+import base64
+import hashlib
+import hmac
+import io
+import json
+import re
+import struct
+import threading
+import time
+from dataclasses import dataclass
+from typing import Callable, Optional
+from urllib.parse import urlparse
+ 
+import cbor2
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519
+ 
+FLAG_UP, FLAG_UV, FLAG_BE, FLAG_BS = 0x01, 0x04, 0x08, 0x10
+FLAG_AT, FLAG_ED = 0x40, 0x80
+COSE_ES256, COSE_EDDSA = -7, -8
+ 
+MAX_CLIENT_DATA = 4096
+MAX_AUTH_DATA = 4096
+MAX_SIGNATURE = 512
+MAX_ATTESTATION_OBJECT = 16384
+ 
+_B64U = re.compile(r"^[A-Za-z0-9_-]+$")
+ 
+ 
+class WebAuthnError(Exception):
+    """Every failure is an exception with a stable code. Callers fail closed."""
+ 
+    def __init__(self, code: str, detail: str = ""):
+        super().__init__(f"{code}: {detail}" if detail else code)
+        self.code = code
+ 
+ 
+def b64u_decode(value, max_len: int) -> bytes:
+    if not isinstance(value, str) or not value or len(value) > max_len:
+        raise WebAuthnError("MALFORMED_FIELD", "missing, wrong type, or too long")
+    if not _B64U.match(value):          # urlsafe_b64decode silently drops junk
+        raise WebAuthnError("MALFORMED_BASE64")
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+ 
+ 
+def b64u_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+ 
+ 
+@dataclass(frozen=True)
+class RelyingParty:
+    rp_id: str
+    origins: frozenset
+    allowed_algs: frozenset = frozenset({COSE_ES256})
+    require_uv: bool = True
+    require_device_bound: bool = True
+ 
+    def __post_init__(self):
+        if not self.origins:
+            raise ValueError("at least one origin required")
+        for origin in self.origins:
+            u = urlparse(origin)
+            host = u.hostname or ""
+            secure = u.scheme == "https" or (u.scheme == "http" and host == "localhost")
+            if not secure or u.path not in ("", "/") or u.query or u.fragment:
+                raise ValueError(f"origin must be a bare https origin: {origin}")
+            if not (host == self.rp_id or host.endswith("." + self.rp_id)):
+                raise ValueError(f"origin host {host} is not within rp_id {self.rp_id}")
+ 
+ 
+@dataclass
+class Credential:
+    credential_id: bytes
+    cose_key_cbor: bytes
+    alg: int
+    sign_count: int
+    device_id: str
+    backup_eligible: bool
+    aaguid: bytes
+    attestation_fmt: str
+    attestation_trust: str      # "none" | "self" | "unverified"  (never "hardware")
+    revoked: bool = False
+ 
+ 
+@dataclass(frozen=True)
+class AssertionResult:
+    new_sign_count: int
+    flags: int
+    user_verified: bool
+ 
+ 
+@dataclass(frozen=True)
+class AuthData:
+    rp_id_hash: bytes
+    flags: int
+    sign_count: int
+    aaguid: Optional[bytes] = None
+    credential_id: Optional[bytes] = None
+    cose_key: Optional[dict] = None
+ 
+ 
+def parse_authenticator_data(data: bytes) -> AuthData:
+    if not isinstance(data, (bytes, bytearray)) or not 37 <= len(data) <= MAX_AUTH_DATA:
+        raise WebAuthnError("BAD_AUTH_DATA", "length")
+    data = bytes(data)
+    rp_id_hash, flags = data[:32], data[32]
+    (sign_count,) = struct.unpack(">I", data[33:37])
+    offset = 37
+    aaguid = cred_id = cose = None
+    if flags & FLAG_AT:
+        if len(data) < offset + 18:
+            raise WebAuthnError("BAD_AUTH_DATA", "truncated attested credential data")
+        aaguid = data[offset:offset + 16]
+        offset += 16
+        (cred_len,) = struct.unpack(">H", data[offset:offset + 2])
+        offset += 2
+        if cred_len == 0 or cred_len > 1023 or len(data) < offset + cred_len:
+            raise WebAuthnError("BAD_AUTH_DATA", "credential id length")
+        cred_id = data[offset:offset + cred_len]
+        offset += cred_len
+        stream = io.BytesIO(data[offset:])
+        try:
+            cose = cbor2.CBORDecoder(stream).decode()
+        except Exception as exc:
+            raise WebAuthnError("BAD_AUTH_DATA", f"credential public key CBOR: {exc}")
+        offset += stream.tell()
+    if flags & FLAG_ED:
+        stream = io.BytesIO(data[offset:])
+        try:
+            cbor2.CBORDecoder(stream).decode()
+        except Exception as exc:
+            raise WebAuthnError("BAD_AUTH_DATA", f"extensions CBOR: {exc}")
+        offset += stream.tell()
+    if offset != len(data):
+        raise WebAuthnError("BAD_AUTH_DATA", "trailing bytes")
+    return AuthData(rp_id_hash, flags, sign_count, aaguid, cred_id, cose)
+ 
+ 
+def cose_to_public_key(cose, allowed_algs):
+    """Returns (public_key, alg). Accepts only ES256/P-256 and EdDSA/Ed25519."""
+    if not isinstance(cose, dict):
+        raise WebAuthnError("BAD_COSE_KEY", "not a map")
+    kty, alg = cose.get(1), cose.get(3)
+    if alg not in allowed_algs:
+        raise WebAuthnError("ALG_NOT_ALLOWED", str(alg))
+    if alg == COSE_ES256:
+        x, y = cose.get(-2), cose.get(-3)
+        if kty != 2 or cose.get(-1) != 1:
+            raise WebAuthnError("BAD_COSE_KEY", "not EC2/P-256")
+        if not (isinstance(x, bytes) and isinstance(y, bytes) and len(x) == len(y) == 32):
+            raise WebAuthnError("BAD_COSE_KEY", "coordinate size")
+        try:  # raises ValueError if the point is not on the curve
+            key = ec.EllipticCurvePublicNumbers(
+                int.from_bytes(x, "big"), int.from_bytes(y, "big"), ec.SECP256R1()
+            ).public_key()
+        except ValueError:
+            raise WebAuthnError("BAD_COSE_KEY", "point not on curve")
+        return key, alg
+    if alg == COSE_EDDSA:
+        x = cose.get(-2)
+        if kty != 1 or cose.get(-1) != 6 or not (isinstance(x, bytes) and len(x) == 32):
+            raise WebAuthnError("BAD_COSE_KEY", "not OKP/Ed25519")
+        return ed25519.Ed25519PublicKey.from_public_bytes(x), alg
+    raise WebAuthnError("ALG_NOT_ALLOWED", str(alg))
+ 
+ 
+def _verify_signature(key, alg: int, signature: bytes, signed: bytes) -> None:
+    try:
+        if alg == COSE_ES256:
+            key.verify(signature, signed, ec.ECDSA(hashes.SHA256()))
+        else:
+            key.verify(signature, signed)
+    except (InvalidSignature, ValueError):
+        raise WebAuthnError("BAD_SIGNATURE")
+ 
+ 
+class ChallengeStore:
+    """Supervisor-side single-use challenges. In memory on purpose: a daemon
+    restart invalidates every pending approval, which fails closed."""
+ 
+    def __init__(self, max_pending: int = 256, clock: Callable[[], float] = time.time):
+        self._lock = threading.Lock()
+        self._pending: dict = {}
+        self._max = max_pending
+        self._clock = clock
+ 
+    def register(self, challenge: bytes, device_id: str, ttl: float = 120.0) -> None:
+        if len(challenge) != 32:
+            raise ValueError("challenge must be the 32-byte approval hash")
+        with self._lock:
+            now = self._clock()
+            self._pending = {c: v for c, v in self._pending.items() if v[1] > now}
+            if len(self._pending) >= self._max:
+                raise WebAuthnError("TOO_MANY_PENDING")
+            self._pending[bytes(challenge)] = (device_id, now + min(ttl, 300.0))
+ 
+    def peek(self, challenge: bytes, device_id: str) -> None:
+        with self._lock:
+            entry = self._pending.get(bytes(challenge))
+            if entry is None or entry[1] <= self._clock() or entry[0] != device_id:
+                raise WebAuthnError("CHALLENGE_UNKNOWN_OR_EXPIRED")
+ 
+    def consume(self, challenge: bytes, device_id: str) -> None:
+        """Atomic. Called only AFTER the signature verified, so an
+        unauthenticated party cannot burn a pending approval."""
+        with self._lock:
+            entry = self._pending.pop(bytes(challenge), None)
+            if entry is None or entry[1] <= self._clock() or entry[0] != device_id:
+                raise WebAuthnError("CHALLENGE_UNKNOWN_OR_EXPIRED")
+ 
+ 
+def _parse_client_data(raw_b64u, expected_type: str, rp: RelyingParty, expected_challenge: bytes):
+    raw = b64u_decode(raw_b64u, MAX_CLIENT_DATA)
+    try:
+        cd = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise WebAuthnError("BAD_CLIENT_DATA", "not JSON")
+    if not isinstance(cd, dict) or cd.get("type") != expected_type:
+        raise WebAuthnError("BAD_CLIENT_DATA", "type")
+    got = b64u_decode(cd.get("challenge"), 128)
+    if not hmac.compare_digest(got, expected_challenge):
+        raise WebAuthnError("CHALLENGE_MISMATCH")
+    if cd.get("origin") not in rp.origins:
+        raise WebAuthnError("ORIGIN_MISMATCH", str(cd.get("origin")))
+    if cd.get("crossOrigin") is True or "topOrigin" in cd:
+        raise WebAuthnError("CROSS_ORIGIN")
+    return raw
+ 
+ 
+def _check_flags(rp: RelyingParty, ad: AuthData, cred_backup_eligible: Optional[bool]):
+    if not hmac.compare_digest(ad.rp_id_hash, hashlib.sha256(rp.rp_id.encode()).digest()):
+        raise WebAuthnError("RP_ID_HASH_MISMATCH")
+    if not ad.flags & FLAG_UP:
+        raise WebAuthnError("USER_NOT_PRESENT")
+    if rp.require_uv and not ad.flags & FLAG_UV:
+        raise WebAuthnError("USER_NOT_VERIFIED")
+    be = bool(ad.flags & FLAG_BE)
+    if rp.require_device_bound and be:
+        raise WebAuthnError("SYNCED_CREDENTIAL_REJECTED", "BE flag set")
+    if cred_backup_eligible is not None and be != cred_backup_eligible:
+        raise WebAuthnError("BACKUP_ELIGIBILITY_CHANGED")
+    if not be and ad.flags & FLAG_BS:
+        raise WebAuthnError("BAD_FLAGS", "BS set without BE")
+ 
+ 
+def verify_assertion(rp: RelyingParty, cred: Credential, response: dict,
+                     expected_challenge: bytes, challenges: ChallengeStore) -> AssertionResult:
+    """expected_challenge MUST be computed by the supervisor from its own stored
+    approval object, never taken from the client. The caller must persist
+    new_sign_count under a lock before acting on the approval."""
+    if cred.revoked:
+        raise WebAuthnError("CREDENTIAL_REVOKED")
+    if not isinstance(response, dict):
+        raise WebAuthnError("MALFORMED_RESPONSE")
+    challenges.peek(expected_challenge, cred.device_id)            # fail fast, don't burn
+ 
+    client_data = _parse_client_data(response.get("clientDataJSON"), "webauthn.get",
+                                     rp, expected_challenge)
+    auth_data_raw = b64u_decode(response.get("authenticatorData"), MAX_AUTH_DATA)
+    signature = b64u_decode(response.get("signature"), MAX_SIGNATURE)
+    ad = parse_authenticator_data(auth_data_raw)
+    if ad.flags & (FLAG_AT | FLAG_ED):
+        raise WebAuthnError("BAD_FLAGS", "AT/ED not allowed in assertions")
+    _check_flags(rp, ad, cred.backup_eligible)
+ 
+    key, alg = cose_to_public_key(cbor2.loads(cred.cose_key_cbor), rp.allowed_algs)
+    if alg != cred.alg:
+        raise WebAuthnError("ALG_MISMATCH")
+    _verify_signature(key, alg, signature,
+                      auth_data_raw + hashlib.sha256(client_data).digest())
+ 
+    # Many authenticators (all synced passkeys, some security keys) always report 0.
+    if cred.sign_count != 0 or ad.sign_count != 0:
+        if ad.sign_count <= cred.sign_count:
+            raise WebAuthnError("SIGN_COUNT_ROLLBACK", "possible cloned authenticator")
+    challenges.consume(expected_challenge, cred.device_id)          # atomic, single use
+    return AssertionResult(ad.sign_count, ad.flags, bool(ad.flags & FLAG_UV))
+ 
+ 
+def verify_registration(rp: RelyingParty, response: dict, expected_challenge: bytes,
+                        challenges: ChallengeStore, device_id: str) -> Credential:
+    """Run only inside the physical-presence enrollment ceremony. The caller
+    must reject an already-enrolled credential_id / device_id."""
+    if not isinstance(response, dict):
+        raise WebAuthnError("MALFORMED_RESPONSE")
+    challenges.peek(expected_challenge, device_id)
+    client_data = _parse_client_data(response.get("clientDataJSON"), "webauthn.create",
+                                     rp, expected_challenge)
+    att_raw = b64u_decode(response.get("attestationObject"), MAX_ATTESTATION_OBJECT)
+    try:
+        att = cbor2.loads(att_raw)
+    except Exception as exc:
+        raise WebAuthnError("BAD_ATTESTATION_OBJECT", str(exc))
+    if not isinstance(att, dict) or not isinstance(att.get("authData"), bytes) \
+            or not isinstance(att.get("fmt"), str) or not isinstance(att.get("attStmt"), dict):
+        raise WebAuthnError("BAD_ATTESTATION_OBJECT", "shape")
+ 
+    auth_data_raw = att["authData"]
+    ad = parse_authenticator_data(auth_data_raw)
+    if not ad.flags & FLAG_AT or ad.credential_id is None or ad.cose_key is None:
+        raise WebAuthnError("BAD_AUTH_DATA", "no attested credential data")
+    _check_flags(rp, ad, None)
+    if response.get("credentialId") is not None and \
+            b64u_decode(response["credentialId"], 2048) != ad.credential_id:
+        raise WebAuthnError("CREDENTIAL_ID_MISMATCH")
+    key, alg = cose_to_public_key(ad.cose_key, rp.allowed_algs)
+ 
+    fmt, stmt = att["fmt"], att["attStmt"]
+    client_hash = hashlib.sha256(client_data).digest()
+    if fmt == "none":
+        if stmt:
+            raise WebAuthnError("BAD_ATTESTATION", "none must have empty statement")
+        trust = "none"
+    elif fmt == "packed" and "x5c" not in stmt and "ecdaaKeyId" not in stmt:
+        if stmt.get("alg") != alg or not isinstance(stmt.get("sig"), bytes):
+            raise WebAuthnError("BAD_ATTESTATION", "self attestation")
+        _verify_signature(key, alg, stmt["sig"], auth_data_raw + client_hash)
+        trust = "self"
+    else:
+        trust = "unverified"      # recorded only; chain NOT validated here
+ 
+    challenges.consume(expected_challenge, device_id)
+    return Credential(
+        credential_id=ad.credential_id, cose_key_cbor=cbor2.dumps(ad.cose_key), alg=alg,
+        sign_count=ad.sign_count, device_id=device_id,
+        backup_eligible=bool(ad.flags & FLAG_BE), aaguid=ad.aaguid or b"",
+        attestation_fmt=fmt, attestation_trust=trust)
+ 
+Claude finished the response
+
+Explain

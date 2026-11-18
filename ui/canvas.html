@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Homie Interactive Canvas</title>
+  <style>
+    :root {
+      --bg-base: #0f1117;
+      --bg-surface: #1a1d26;
+      --bg-elevated: #242836;
+      --border: rgba(255, 255, 255, 0.1);
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --font-family: 'Segoe UI Variable Text', 'Segoe UI', -apple-system, sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background-color: var(--bg-base);
+      color: var(--text);
+      font-family: var(--font-family);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* Top Canvas Bar */
+    .canvas-header {
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .canvas-title-group {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .canvas-type-badge {
+      background: rgba(59, 130, 246, 0.15);
+      color: #60a5fa;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .canvas-title {
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    .canvas-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .canvas-btn {
+      background: var(--bg-elevated);
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: background 0.15s, border-color 0.15s;
+    }
+
+    .canvas-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.25);
+    }
+
+    .canvas-btn.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .canvas-btn.primary:hover {
+      background: var(--accent-hover);
+    }
+
+    /* Main Canvas Content Viewport */
+    .canvas-body {
+      flex: 1;
+      overflow: auto;
+      padding: 28px 36px;
+    }
+
+    /* Document View */
+    .document-view {
+      max-width: 820px;
+      margin: 0 auto;
+      line-height: 1.65;
+    }
+
+    .document-view h1 { font-size: 26px; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+    .document-view h2 { font-size: 20px; margin: 24px 0 12px; }
+    .document-view p { margin-bottom: 14px; color: #cbd5e1; }
+    .document-view ul { margin: 0 0 16px 24px; }
+    .document-view li { margin-bottom: 6px; }
+    .document-view pre {
+      background: #13161f;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      overflow-x: auto;
+      margin: 16px 0;
+      font-family: 'Cascadia Code', Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .document-view code {
+      font-family: 'Cascadia Code', Consolas, monospace;
+      color: #93c5fd;
+    }
+    .document-view pre code {
+      color: #e2e8f0;
+    }
+
+    /* Spreadsheet Grid View */
+    .sheet-view {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .sheet-view th, .sheet-view td {
+      border: 1px solid var(--border);
+      padding: 8px 12px;
+      text-align: left;
+    }
+
+    .sheet-view th {
+      background: var(--bg-surface);
+      color: var(--text-muted);
+      font-weight: 600;
+      position: sticky;
+      top: 0;
+    }
+
+    .sheet-view tr:hover td {
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    /* Presentation Slide Carousel */
+    .presentation-view {
+      max-width: 900px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .slide-card {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 40px;
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.5);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .slide-title { font-size: 28px; font-weight: 700; margin-bottom: 20px; color: #fff; }
+    .slide-bullets { margin-left: 24px; font-size: 18px; line-height: 1.8; color: #cbd5e1; }
+
+    .carousel-controls {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="canvas-header">
+    <div class="canvas-title-group">
+      <span class="canvas-type-badge" id="canvasBadge">Document</span>
+      <span class="canvas-title" id="canvasTitle">Interactive Artifact</span>
+    </div>
+    <div class="canvas-actions">
+      <button class="canvas-btn" onclick="copyContent()">📋 Copy Content</button>
+      <button class="canvas-btn primary" id="openExternalBtn" onclick="openNativeApp()">Open in Default App</button>
+      <button class="canvas-btn" id="closeCanvasBtn" onclick="closeCanvas()">✕ Close</button>
+    </div>
+  </div>
+
+  <div class="canvas-body" id="canvasBody">
+    <div class="document-view" id="docView">
+      <p style="color: var(--text-muted);">No active artifact loaded in canvas.</p>
+    </div>
+  </div>
+
+  <script>
+    let currentArtifact = null;
+
+    function loadArtifact(artifact) {
+      currentArtifact = artifact;
+      document.getElementById('canvasBadge').textContent = artifact.type || 'DOCUMENT';
+      document.getElementById('canvasTitle').textContent = artifact.title || 'Untitled';
+
+      const body = document.getElementById('canvasBody');
+
+      if (artifact.type === 'spreadsheet' && Array.isArray(artifact.data)) {
+        let html = '<table class="sheet-view"><thead><tr>';
+        const headers = artifact.data[0] || [];
+        headers.forEach(h => html += `<th>${escapeHtml(h)}</th>`);
+        html += '</tr></thead><tbody>';
+        for (let i = 1; i < artifact.data.length; i++) {
+          html += '<tr>';
+          artifact.data[i].forEach(cell => html += `<td>${escapeHtml(cell)}</td>`);
+          html += '</tr>';
+        }
+        html += '</tbody></table>';
+        body.innerHTML = html;
+      } else if (artifact.type === 'presentation' && Array.isArray(artifact.slides)) {
+        let html = '<div class="presentation-view">';
+        artifact.slides.forEach((s, idx) => {
+          html += `
+            <div class="slide-card">
+              <div class="slide-title">${escapeHtml(s.title || 'Slide ' + (idx + 1))}</div>
+              <ul class="slide-bullets">
+                ${(s.bullets || []).map(b => `<li>${escapeHtml(b)}</li>`).join('')}
+              </ul>
+            </div>`;
+        });
+        html += '</div>';
+        body.innerHTML = html;
+      } else {
+        body.innerHTML = `<div class="document-view">${artifact.html_content || artifact.content || ''}</div>`;
+      }
+    }
+
+    function escapeHtml(str) {
+      return String(str).replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+    }
+
+    function copyContent() {
+      if (currentArtifact && currentArtifact.content) {
+        navigator.clipboard.writeText(currentArtifact.content);
+        alert('Artifact copied to clipboard!');
+      }
+    }
+
+    function openNativeApp() {
+      if (currentArtifact && currentArtifact.file_path) {
+        fetch('/api/canvas/open_native', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ file_path: currentArtifact.file_path })
+        }).catch(() => {});
+      }
+    }
+
+    function closeCanvas() {
+      if (window.pywebview && window.pywebview.api && window.pywebview.api.post) {
+        window.pywebview.api.post({ canvas_close: true });
+      } else {
+        window.close();
+      }
+    }
+
+    window.loadArtifact = loadArtifact;
+  </script>
+</body>
+</html>

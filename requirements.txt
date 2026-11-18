@@ -27,5 +27,19 @@ pytest>=7.4.0
 openpyxl>=3.1.0
 lxml>=4.9.0
 spotipy>=2.24.0
+# Voice Engine - Silero VAD + System Dictation
+torch>=2.0.0
+torchaudio>=2.0.0
+silero-vad>=5.1
+keyboard>=0.13.5
+# Omnibar - Fuzzy Search Indexer
+rapidfuzz>=3.0.0
+# Mail & Calendar - Google Workspace + Microsoft 365
+google-auth-oauthlib>=1.0.0
+google-api-python-client>=2.100.0
+msal>=1.25.0
+# Semantic Memory - Hybrid Vector Search
+sqlite-vec>=0.1.0
+sentence-transformers>=3.0.0
 
 
