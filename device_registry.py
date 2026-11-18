@@ -201,3 +201,13 @@ def clear_consumed_nonces_for_testing():
                 os.remove(CONSUMED_NONCES_PATH)
             except Exception:
                 pass
+
+
+def clear_registry_for_testing():
+    """Test helper to clear enrolled device registry between test cases."""
+    with _REGISTRY_LOCK:
+        if os.path.exists(DEVICE_REGISTRY_PATH):
+            try:
+                os.remove(DEVICE_REGISTRY_PATH)
+            except Exception:
+                pass

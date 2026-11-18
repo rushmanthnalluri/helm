@@ -45,6 +45,43 @@ from policy_envelope import PolicyEnvelope, PROHIBITED_ENVELOPE_IMAGES
 logger = logging.getLogger("homie.action_broker")
 
 
+def classify_action_risk(tool_name: str, arguments: Optional[Dict[str, Any]] = None) -> str:
+    """Classifies an action as 'LOW', 'MEDIUM', or 'HIGH' risk.
+    - LOW: Pure read-only and safe, easily reversible local actions (Tier 0 & Tier 1).
+    - MEDIUM: Consequential local actions modifying files/messages/settings (Tier 2).
+    - HIGH: Destructive, irreversible actions like shell execution, process killing,
+      file deletion, or financial operations (Tier 3).
+    """
+    clean_name = (tool_name or "").strip()
+    candidate = clean_name if clean_name.startswith("homie_") else f"homie_{clean_name}"
+
+    try:
+        import trust_tiers
+        if candidate in trust_tiers.TOOL_TIERS:
+            tier_val = trust_tiers.TOOL_TIERS[candidate]
+            if tier_val <= trust_tiers.TIER_1_SAFE:
+                return "LOW"
+            elif tier_val == trust_tiers.TIER_2_LOCAL_BIOMETRIC:
+                return "MEDIUM"
+            else:
+                return "HIGH"
+    except Exception:
+        pass
+
+    try:
+        import homie_supervisor
+        allowed = homie_supervisor.get_allowed_tools_map()
+        t = allowed.get(candidate) or allowed.get(clean_name, "WRITE_EXEC")
+        if t in ("READ_ONLY", "REVERSIBLE"):
+            return "LOW"
+        elif t == "WRITE_EXEC":
+            return "MEDIUM"
+        else:
+            return "HIGH"
+    except Exception:
+        return "MEDIUM"
+
+
 class ActionBroker:
     """The central unified execution broker mediating all Homie capabilities."""
 
@@ -52,13 +89,20 @@ class ActionBroker:
         self,
         supervisor_instance: Optional[homie_supervisor.PolicySupervisor] = None,
         pipe_client: Optional[Any] = None,
-        pipe_name: str = r"\\.\pipe\homie_supervisor"
+        pipe_name: str = r"\\.\pipe\homie_supervisor",
+        standalone_mode: bool = False,
     ):
         self.pipe_name = pipe_name
         self.pipe_client = pipe_client
         self.envelope: Optional[PolicyEnvelope] = None
 
-        if pipe_client:
+        if standalone_mode:
+            self.supervisor = homie_supervisor.PolicySupervisor()
+            if self.supervisor.state != homie_supervisor.STATE_LOCKED:
+                self.supervisor.state = homie_supervisor.STATE_ARMED
+            self.client = homie_supervisor.SupervisorClient(self.supervisor)
+            self.client.connect()
+        elif pipe_client:
             self.supervisor = None
             self.client = pipe_client
         elif supervisor_instance is not None:
@@ -128,6 +172,33 @@ class ActionBroker:
             if candidate in allowed:
                 return candidate
         return clean
+
+    def select_gate(self, tool_name: str, arguments: Optional[Dict[str, Any]] = None) -> Optional[Any]:
+        """Selects the authorization gate for an action:
+        - LOW risk: None (ambient / safe local, no step-up required).
+        - MEDIUM risk: WindowsHelloGate if WindowsHello is available (with fallback);
+          otherwise PhoneWebAuthnGate.
+        - HIGH risk: Always full PhoneWebAuthnGate.
+        """
+        import step_up_gate
+        from windows_hello import WindowsHello
+
+        canonical = self.normalize_tool_name(tool_name)
+        risk = classify_action_risk(canonical, arguments)
+
+        if risk == "LOW":
+            return None
+        elif risk == "MEDIUM":
+            if WindowsHello.is_available():
+                return step_up_gate.WindowsHelloGate()
+            else:
+                return step_up_gate.PhoneWebAuthnGate()
+        else:  # HIGH
+            return step_up_gate.PhoneWebAuthnGate()
+
+    def select_gate_for_action(self, tool_name: str, arguments: Optional[Dict[str, Any]] = None) -> Optional[Any]:
+        """Alias for select_gate."""
+        return self.select_gate(tool_name, arguments)
 
     def execute_action(
         self,
@@ -274,7 +345,18 @@ class ActionBroker:
                 caller_id, tier, canonical_tool, args
             )
             if not allowed:
-                return False, f"Security Gate: {taint_reason}", None
+                # If step-up is required, evaluate selected gate
+                gate = self.select_gate(canonical_tool, args)
+                import step_up_gate
+                if isinstance(gate, step_up_gate.WindowsHelloGate):
+                    reason = f"Authorize action '{canonical_tool}'"
+                    ok, msg = gate.verify(reason=reason, tool_name=canonical_tool, arguments=args)
+                    if ok:
+                        logger.info("Broker authorized action '%s' via on-device Windows Hello gate.", canonical_tool)
+                    else:
+                        return False, f"Security Gate: Windows Hello verification failed: {msg}", None
+                else:
+                    return False, f"Security Gate: {taint_reason}", None
 
         # 8. Shadow Mode Simulation
         if shadow_mode.is_shadow_mode_active() and tier in ("REVERSIBLE", "WRITE_EXEC", "ELEVATED_CONFIRM"):
@@ -301,8 +383,25 @@ class ActionBroker:
         except Exception as e:
             return False, f"Execution failed: {e}", None
 
+    def close(self):
+        """Orderly shutdown of broker supervisor and client."""
+        if self.supervisor:
+            try:
+                self.supervisor.clean_shutdown()
+            except Exception:
+                pass
+        if self.client and hasattr(self.client, "close"):
+            try:
+                self.client.close()
+            except Exception:
+                pass
+
 
 _GLOBAL_BROKER: Optional[ActionBroker] = None
+
+def set_action_broker(broker: ActionBroker) -> None:
+    global _GLOBAL_BROKER
+    _GLOBAL_BROKER = broker
 
 def get_action_broker() -> ActionBroker:
     global _GLOBAL_BROKER
@@ -321,3 +420,9 @@ def execute_action(
     return get_action_broker().execute_action(
         tool_name, arguments, caller_id=caller_id, client_token=client_token, step_up_token=step_up_token
     )
+
+def select_gate(tool_name: str, arguments: Optional[Dict[str, Any]] = None) -> Optional[Any]:
+    return get_action_broker().select_gate(tool_name, arguments)
+
+def select_gate_for_action(tool_name: str, arguments: Optional[Dict[str, Any]] = None) -> Optional[Any]:
+    return get_action_broker().select_gate(tool_name, arguments)

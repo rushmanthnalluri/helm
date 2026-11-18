@@ -1,7 +1,8 @@
 """
 Homie Streaming Voice Pipeline — Sub-400ms latency voice I/O.
 Replaces the batch record → transcribe → respond → speak loop.
-Upgraded with Silero VAD v5 neural voice detection and regex filler-word filtering.
+Upgraded with Silero VAD v5 neural voice detection, regex filler-word filtering,
+and local neural TTS (Kokoro / Piper / SAPI5 fallback).
 """
 import threading
 import queue
@@ -77,7 +78,7 @@ class FillerWordFilter:
 
 class StreamingVoicePipeline:
     """
-    Streaming VAD+STT pipeline with GPU acceleration detection.
+    Streaming VAD+STT+TTS pipeline with GPU acceleration detection.
     
     Flow:
     1. Audio chunks stream in via push_audio_chunk()
@@ -333,6 +334,31 @@ class StreamingVoicePipeline:
         except Exception as e:
             logger.error(f"[VoicePipeline] Transcription error: {e}")
             return ""
+
+    def speak(self, text: str, blocking: bool = False) -> None:
+        """
+        Speak response text using NeuralTTS (Kokoro -> Piper -> SAPI5).
+        Replaces legacy SAPI/pyttsx3 calls.
+        """
+        from homie_tts import NeuralTTS
+        NeuralTTS.instance().speak(text, blocking=blocking)
+
+    def stop_speaking(self) -> None:
+        """Stop any active speech playback."""
+        from homie_tts import NeuralTTS
+        NeuralTTS.instance().stop()
+
+
+def speak_text(text: str, blocking: bool = False) -> None:
+    """Module-level helper to speak text using NeuralTTS."""
+    from homie_tts import NeuralTTS
+    NeuralTTS.instance().speak(text, blocking=blocking)
+
+
+def stop_speaking() -> None:
+    """Module-level helper to stop speech playback."""
+    from homie_tts import NeuralTTS
+    NeuralTTS.instance().stop()
 
 
 def create_pipeline(on_transcript: Callable[[str], None], **kwargs) -> StreamingVoicePipeline:

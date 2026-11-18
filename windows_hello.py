@@ -3,7 +3,10 @@ Homie Windows Hello Biometric Authentication Integration.
 Uses WinRT Windows.Security.Credentials.UI.UserConsentVerifier for native
 fingerprint, facial recognition (IR camera), or Windows PIN verification.
 """
+from __future__ import annotations
+
 import asyncio
+import ctypes
 import logging
 import os
 import sys
@@ -17,138 +20,144 @@ _AVAILABILITY_CACHE: Optional[bool] = None
 _CACHE_LOCK = threading.Lock()
 
 
-def is_windows_hello_available() -> bool:
-    """
-    Check if Windows Hello (biometrics or PIN) is configured and available.
-    Returns True if user has Windows Hello enabled.
-    """
-    global _AVAILABILITY_CACHE
-    with _CACHE_LOCK:
-        if _AVAILABILITY_CACHE is not None:
-            return _AVAILABILITY_CACHE
+class WindowsHello:
+    """Windows Hello on-device biometric and PIN verification provider."""
 
-    # In automated test environments, don't trigger interactive UI by default
-    if os.environ.get("HOMIE_TEST_MODE") or os.environ.get("PYTEST_CURRENT_TEST"):
-        return False
+    @classmethod
+    def is_available(cls) -> bool:
+        """Check if Windows Hello (biometrics or PIN) is configured and available.
+        Checks UserConsentVerifier.CheckAvailabilityAsync() returns ConsentVerifierAvailability.AVAILABLE.
+        """
+        # Test mode hook for mocking in automated tests
+        mock_avail = os.environ.get("HOMIE_MOCK_WINDOWS_HELLO_AVAILABLE")
+        if mock_avail is not None:
+            return mock_avail.lower() in ("1", "true", "yes")
 
-    try:
-        import winrt.windows.security.credentials.ui as consent_ui
-        
-        async def _check():
-            avail = await consent_ui.UserConsentVerifier.check_availability_async()
-            # 0 == UserConsentVerifierAvailability.AVAILABLE
-            return int(avail) == 0
+        mock_env = os.environ.get("HOMIE_MOCK_WINDOWS_HELLO")
+        if mock_env is not None:
+            return mock_env.lower() in ("1", "true", "yes")
 
-        # Run in a clean event loop or thread if loop is already active
+        # In automated test mode without explicit mock, avoid interactive prompts or hangs
+        if os.environ.get("HOMIE_TEST_MODE") or os.environ.get("PYTEST_CURRENT_TEST"):
+            return False
+
+        global _AVAILABILITY_CACHE
+        with _CACHE_LOCK:
+            if _AVAILABILITY_CACHE is not None:
+                return _AVAILABILITY_CACHE
+
         try:
-            loop = asyncio.new_event_loop()
-            available = loop.run_until_complete(_check())
-            loop.close()
-        except RuntimeError:
-            # Fallback if in an environment with complex loop lifecycle
-            available = False
+            import winrt.windows.security.credentials.ui as consent_ui
 
-        with _CACHE_LOCK:
-            _AVAILABILITY_CACHE = available
-        logger.info(f"[WindowsHello] Availability check: {'Available' if available else 'Unavailable'}")
-        return available
-    except ImportError:
-        logger.debug("[WindowsHello] winrt.windows.security.credentials.ui not installed.")
-        with _CACHE_LOCK:
-            _AVAILABILITY_CACHE = False
-        return False
-    except Exception as e:
-        logger.warning(f"[WindowsHello] Error checking availability: {e}")
-        with _CACHE_LOCK:
-            _AVAILABILITY_CACHE = False
-        return False
+            verifier = consent_ui.UserConsentVerifier
+            check_fn = getattr(verifier, "check_availability_async", getattr(verifier, "CheckAvailabilityAsync", None))
+            if not check_fn:
+                with _CACHE_LOCK:
+                    _AVAILABILITY_CACHE = False
+                return False
+
+            async def _check():
+                avail = await check_fn()
+                # 0 == UserConsentVerifierAvailability.AVAILABLE
+                return int(avail) == 0
+
+            try:
+                loop = asyncio.new_event_loop()
+                available = loop.run_until_complete(_check())
+                loop.close()
+            except RuntimeError:
+                available = False
+
+            with _CACHE_LOCK:
+                _AVAILABILITY_CACHE = available
+            logger.info("[WindowsHello] Availability check: %s", "Available" if available else "Unavailable")
+            return available
+        except ImportError:
+            logger.debug("[WindowsHello] winrt module not installed.")
+            with _CACHE_LOCK:
+                _AVAILABILITY_CACHE = False
+            return False
+        except Exception as e:
+            logger.warning("[WindowsHello] Error checking availability: %s", e)
+            with _CACHE_LOCK:
+                _AVAILABILITY_CACHE = False
+            return False
+
+    @classmethod
+    async def verify(cls, reason: str = "Homie needs your approval") -> bool:
+        """Trigger UserConsentVerifier.RequestVerificationAsync(reason).
+        Returns True if biometric/PIN passes, False on cancel or failure.
+        """
+        mock_env = os.environ.get("HOMIE_MOCK_WINDOWS_HELLO")
+        if mock_env is not None:
+            res = mock_env.lower() in ("1", "true", "yes")
+            logger.info("[WindowsHello] Mocked verify: %s", res)
+            return res
+
+        try:
+            import winrt.windows.security.credentials.ui as consent_ui
+
+            verifier = consent_ui.UserConsentVerifier
+            req_fn = getattr(verifier, "request_verification_async", getattr(verifier, "RequestVerificationAsync", None))
+            if not req_fn:
+                logger.warning("[WindowsHello] RequestVerificationAsync not found on UserConsentVerifier")
+                return False
+
+            res = await req_fn(reason)
+            # 0 == UserConsentVerificationResult.VERIFIED
+            code = int(res)
+            logger.info("[WindowsHello] RequestVerification result code: %d", code)
+            return code == 0
+        except Exception as e:
+            logger.warning("[WindowsHello] Error during biometric verification: %s", e)
+            return False
+
+    @classmethod
+    def verify_sync(cls, reason: str = "Homie needs your approval", timeout_seconds: float = 30.0) -> bool:
+        """Synchronous wrapper for verify(reason) using asyncio.run() or a dedicated thread worker."""
+        mock_env = os.environ.get("HOMIE_MOCK_WINDOWS_HELLO")
+        if mock_env is not None:
+            return mock_env.lower() in ("1", "true", "yes")
+
+        try:
+            # If an event loop is already running in current thread, run in a dedicated worker thread
+            asyncio.get_running_loop()
+            in_running_loop = True
+        except RuntimeError:
+            in_running_loop = False
+
+        if not in_running_loop:
+            try:
+                return asyncio.run(asyncio.wait_for(cls.verify(reason), timeout=timeout_seconds))
+            except Exception as e:
+                logger.warning("[WindowsHello] verify_sync asyncio.run error: %s", e)
+                return False
+
+        # In running event loop: run in worker thread
+        result = [False]
+
+        def _worker():
+            try:
+                result[0] = asyncio.run(asyncio.wait_for(cls.verify(reason), timeout=timeout_seconds))
+            except Exception as ex:
+                logger.warning("[WindowsHello] verify_sync worker exception: %s", ex)
+                result[0] = False
+
+        t = threading.Thread(target=_worker, name="WindowsHelloWorker", daemon=True)
+        t.start()
+        t.join(timeout=timeout_seconds + 2.0)
+        return result[0]
+
+
+# Backward-compatible module-level functions
+def is_windows_hello_available() -> bool:
+    return WindowsHello.is_available()
 
 
 def prompt_windows_hello(
     prompt_message: str = "Homie AI: Authorize consequential desktop action",
-    timeout_seconds: float = 30.0
+    timeout_seconds: float = 30.0,
 ) -> Dict[str, Any]:
-    """
-    Prompt the user with native Windows Hello biometric / PIN verification.
-    Blocks synchronously until user completes verification, dismisses prompt,
-    or timeout expires.
-
-    Returns:
-        dict with keys:
-            - 'verified' (bool): True if biometrics / PIN matched
-            - 'status' (str): 'verified', 'canceled', 'retries_exhausted', 'disabled', 'error'
-            - 'error' (str): error description if applicable
-    """
-    # Test mode hook for mocking in automated tests
-    mock_env = os.environ.get("HOMIE_MOCK_WINDOWS_HELLO")
-    if mock_env == "1" or mock_env == "true":
-        logger.info("[WindowsHello] Mocked verification: SUCCESS")
-        return {"verified": True, "status": "verified", "method": "mock"}
-    elif mock_env == "0" or mock_env == "false":
-        logger.info("[WindowsHello] Mocked verification: REJECTED")
-        return {"verified": False, "status": "canceled", "method": "mock"}
-
-    try:
-        import winrt.windows.security.credentials.ui as consent_ui
-    except ImportError:
-        return {
-            "verified": False,
-            "status": "unavailable",
-            "error": "WinRT UserConsentVerifier module not installed",
-        }
-
-    result_holder = {"verified": False, "status": "unknown", "error": None}
-
-    async def _verify_async():
-        try:
-            res = await consent_ui.UserConsentVerifier.request_verification_async(prompt_message)
-            code = int(res)
-            # UserConsentVerificationResult:
-            # 0 = Verified
-            # 1 = DeviceNotPresent
-            # 2 = NotConfiguredForUser
-            # 3 = DisabledByPolicy
-            # 4 = DeviceBusy
-            # 5 = RetriesExhausted
-            # 6 = Canceled
-            if code == 0:
-                result_holder["verified"] = True
-                result_holder["status"] = "verified"
-            elif code == 6:
-                result_holder["verified"] = False
-                result_holder["status"] = "canceled"
-            elif code == 5:
-                result_holder["verified"] = False
-                result_holder["status"] = "retries_exhausted"
-            else:
-                result_holder["verified"] = False
-                result_holder["status"] = f"unverified_code_{code}"
-        except Exception as e:
-            result_holder["verified"] = False
-            result_holder["status"] = "error"
-            result_holder["error"] = str(e)
-
-    def _worker():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(
-                asyncio.wait_for(_verify_async(), timeout=timeout_seconds)
-            )
-        except asyncio.TimeoutError:
-            result_holder["verified"] = False
-            result_holder["status"] = "timeout"
-            result_holder["error"] = f"Windows Hello prompt timed out after {timeout_seconds}s"
-        except Exception as e:
-            result_holder["verified"] = False
-            result_holder["status"] = "error"
-            result_holder["error"] = str(e)
-        finally:
-            loop.close()
-
-    t = threading.Thread(target=_worker, name="WindowsHelloWorker", daemon=True)
-    t.start()
-    t.join(timeout=timeout_seconds + 2.0)
-
-    logger.info(f"[WindowsHello] Prompt result: {result_holder['status']} (verified={result_holder['verified']})")
-    return result_holder
+    verified = WindowsHello.verify_sync(prompt_message, timeout_seconds=timeout_seconds)
+    status = "verified" if verified else "canceled"
+    return {"verified": verified, "status": status}

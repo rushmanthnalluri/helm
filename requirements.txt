@@ -15,6 +15,7 @@ winrt-runtime>=4.0.0
 winrt-Windows.UI.Notifications.Management>=4.0.0
 winrt-Windows.UI.Notifications>=4.0.0
 winrt-Windows.ApplicationModel>=4.0.0
+winrt-Windows.Security.Credentials.UI>=4.0.0
 pyaudiowpatch>=0.2.12
 requests>=2.31.0
 cryptography>=41.0.0
@@ -41,5 +42,10 @@ msal>=1.25.0
 # Semantic Memory - Hybrid Vector Search
 sqlite-vec>=0.1.0
 sentence-transformers>=3.0.0
-
-
+# Neural TTS - Local Low-Latency Speech Synthesis
+kokoro>=0.9
+piper-tts>=1.2.0
+pyttsx3>=2.90
+# Windows Packaging & Auto-Updater
+velopack>=0.0.1
+websocket-client>=1.6.0

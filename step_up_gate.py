@@ -88,3 +88,80 @@ def handle_step_up_callback(callback_data, chat_id):
         return True, "❌ **Blocked**: Privileged action was denied and cancelled."
 
     return False, "Unknown callback"
+
+
+class PhoneWebAuthnGate:
+    """Out-of-band Smartphone WebAuthn / Telegram step-up confirmation gate."""
+
+    def __init__(self, name: str = "phone_webauthn"):
+        self.name = name
+
+    def verify(
+        self,
+        reason: str = "Homie needs your approval",
+        tool_name: str = "desktop_action",
+        arguments: Optional[dict] = None,
+        session_id: str = "desktop_session",
+        step_up_id: Optional[str] = None,
+    ) -> tuple[bool, str]:
+        s_id = step_up_id or f"stepup_{int(time.time()*1000)}"
+        return push_step_up_request_to_phone(s_id, session_id, tool_name, arguments or {}, source="webauthn_gate")
+
+    def verify_sync(self, reason: str = "Homie needs your approval", **kwargs) -> bool:
+        ok, _ = self.verify(reason=reason, **kwargs)
+        return ok
+
+
+class WindowsHelloGate:
+    """On-device Windows Hello biometric authentication gate.
+
+    Calls WindowsHello.verify_sync(reason) for local biometric / PIN verification.
+    If Windows Hello is not available (e.g. VM, no enrolled biometrics),
+    automatically falls back to the out-of-band phone WebAuthn gate.
+    """
+
+    def __init__(self, fallback_gate: Optional[PhoneWebAuthnGate] = None):
+        self.name = "windows_hello"
+        self.fallback_gate = fallback_gate or PhoneWebAuthnGate()
+
+    @classmethod
+    def is_available(cls) -> bool:
+        from windows_hello import WindowsHello
+        return WindowsHello.is_available()
+
+    def verify(
+        self,
+        reason: str = "Homie needs your approval",
+        tool_name: str = "desktop_action",
+        arguments: Optional[dict] = None,
+        session_id: str = "desktop_session",
+        step_up_id: Optional[str] = None,
+    ) -> tuple[bool, str]:
+        from windows_hello import WindowsHello
+
+        if WindowsHello.is_available():
+            logger.info("Triggering Windows Hello biometric verification: %s", reason)
+            ok = WindowsHello.verify_sync(reason)
+            if ok:
+                return True, "Windows Hello verification succeeded"
+            else:
+                return False, "Windows Hello verification failed or cancelled by user"
+
+        # Biometrics not available on-device -> Fall back to phone WebAuthn
+        logger.info("Windows Hello unavailable on this device; falling back to phone WebAuthn gate")
+        return self.fallback_gate.verify(
+            reason=reason,
+            tool_name=tool_name,
+            arguments=arguments,
+            session_id=session_id,
+            step_up_id=step_up_id,
+        )
+
+    def verify_sync(self, reason: str = "Homie needs your approval", **kwargs) -> bool:
+        from windows_hello import WindowsHello
+
+        if WindowsHello.is_available():
+            return WindowsHello.verify_sync(reason)
+
+        ok, _ = self.fallback_gate.verify(reason=reason, **kwargs)
+        return ok

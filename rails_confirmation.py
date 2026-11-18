@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional, Tuple
 logger = logging.getLogger("homie.rails_confirmation")
 
 TOKEN_EXPIRY_SECONDS = 300.0  # 5 minutes
+PROGRESSIVE_TRUST_ENABLED = False
 
 
 def _format_impact_summary(tool_name: str, arguments: Dict[str, Any]) -> str:
@@ -175,6 +176,7 @@ class ConfirmationGate:
         signed_evidence: Optional[Dict[str, Any]] = None,
         presence_gesture: Optional[str] = None,
         human_caller_id: Optional[str] = None,
+        use_windows_hello: bool = False,
     ) -> Tuple[bool, str, Optional[str]]:
         if human_caller_id and str(human_caller_id).startswith(("worker", "agent", "ai_", "script", "bot")):
             return False, f"DENIED: Confirmation must be issued by a verified human operator, not '{human_caller_id}'.", None
@@ -193,6 +195,25 @@ class ConfirmationGate:
                 return False, f"Request '{request_id}' not found.", None
             if req.status != "PENDING":
                 return False, f"Request '{request_id}' is already {req.status}.", None
+
+            # Progressive Trust: Windows Hello on-device confirmation
+            if use_windows_hello and PROGRESSIVE_TRUST_ENABLED:
+                import windows_hello
+                prompt_res = windows_hello.prompt_windows_hello(f"Authorize {req.tool_name}")
+                if prompt_res.get("verified"):
+                    token = f"tok_{secrets.token_hex(16)}"
+                    req.status = "APPROVED"
+                    req.approval_token = token
+                    self._tokens[token] = request_id
+                    try:
+                        import taint_tracker
+                        taint_tracker.register_step_up_token(token, req.tool_name, req.arguments)
+                    except Exception:
+                        pass
+                    logger.info("Request %s confirmed via Windows Hello. Issued token %s", request_id, token)
+                    return True, f"Action confirmed: {req.impact_summary}", token
+                else:
+                    return False, "Windows Hello verification failed", None
 
             # 1. Check enrolled hardware devices - fail closed on any error
             try:
@@ -245,7 +266,7 @@ class ConfirmationGate:
             else:
                 # No enrolled mobile device: requires physical presence gesture matching ephemeral challenge
                 if not presence_gesture:
-                    return False, "DENIED: No enrolled device. Physical presence challenge gesture required for confirmation.", None
+                    return False, "DENIED: No mobile device enrolled. Physical presence challenge gesture required for confirmation.", None
                 if not req.presence_challenge or not hmac.compare_digest(str(presence_gesture).strip(), str(req.presence_challenge).strip()):
                     return False, "DENIED: Invalid physical presence challenge gesture.", None
 

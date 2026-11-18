@@ -8,12 +8,16 @@ import time
 import subprocess
 import tempfile
 import re
-from typing import Dict, Any, Tuple, List
+import logging
+from typing import Dict, Any, Tuple, List, Optional, Set
 import win32gui
 import win32con
 import win32api
 import win32process
 from PIL import ImageGrab, Image, ImageDraw, ImageFont
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+logger = logging.getLogger("homie.windows_tools")
 
 VK_MAP: Dict[str, int] = {
     # Enter / Return
@@ -339,6 +343,288 @@ def ensure_desktop_attached():
 
 # Ensure DPI awareness at load time
 enable_dpi_awareness()
+
+
+# =========================================================================
+# DPI-AWARE COORDINATE MAPPING & HARDWARE-LEVEL CLICK EMULATION
+# =========================================================================
+
+import ctypes
+from ctypes import wintypes
+
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", wintypes.LONG),
+        ("dy", wintypes.LONG),
+        ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.c_size_t),
+    ]
+
+class KEYBDINPUT(ctypes.Structure):
+    _fields_ = [
+        ("wVk", wintypes.WORD),
+        ("wScan", wintypes.WORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.c_size_t),
+    ]
+
+class HARDWAREINPUT(ctypes.Structure):
+    _fields_ = [
+        ("uMsg", wintypes.DWORD),
+        ("wParamL", wintypes.WORD),
+        ("wParamH", wintypes.WORD),
+    ]
+
+class _INPUT_UNION(ctypes.Union):
+    _fields_ = [
+        ("mi", MOUSEINPUT),
+        ("ki", KEYBDINPUT),
+        ("hi", HARDWAREINPUT),
+    ]
+
+class INPUT(ctypes.Structure):
+    _fields_ = [
+        ("type", wintypes.DWORD),
+        ("u", _INPUT_UNION),
+    ]
+
+INPUT_MOUSE = 0
+MOUSEEVENTF_MOVE = 0x0001
+MOUSEEVENTF_LEFTDOWN = 0x0002
+MOUSEEVENTF_LEFTUP = 0x0004
+MOUSEEVENTF_RIGHTDOWN = 0x0008
+MOUSEEVENTF_RIGHTUP = 0x0010
+MOUSEEVENTF_MIDDLEDOWN = 0x0020
+MOUSEEVENTF_MIDDLEUP = 0x0040
+MOUSEEVENTF_VIRTUALDESK = 0x4000
+MOUSEEVENTF_ABSOLUTE = 0x8000
+
+
+class DPIAwareCoords:
+    """Per-monitor DPI-aware coordinate mapping and normalization for Windows.
+    Accurately maps logical coordinates to true physical pixels and normalized
+    virtual screen coordinates on heterogeneous mixed-DPI multi-monitor setups.
+    """
+    _cached_map: Optional[List[Dict[str, Any]]] = None
+    _last_refresh: float = 0.0
+    _monitor_count: int = 0
+
+    @classmethod
+    def get_monitor_dpi_map(cls, force_refresh: bool = False) -> List[Dict[str, Any]]:
+        """Uses ctypes.windll.shcore.GetDpiForMonitor + win32api.EnumDisplayMonitors()
+        to build a list of {rect: RECT, dpi: int, scale: float} for each monitor.
+        Caches the monitor map; refreshes if display configuration changes.
+        """
+        curr_time = time.time()
+        try:
+            curr_count = win32api.GetSystemMetrics(win32con.SM_CMONITORS) if hasattr(win32api, "GetSystemMetrics") else 1
+        except Exception:
+            curr_count = 1
+
+        if not force_refresh and cls._cached_map is not None and (curr_count == cls._monitor_count) and (curr_time - cls._last_refresh < 5.0):
+            return cls._cached_map
+
+        monitors = []
+        try:
+            raw_monitors = win32api.EnumDisplayMonitors()
+            for h_mon, hdc_mon, pyrect in raw_monitors:
+                try:
+                    info = win32api.GetMonitorInfo(h_mon)
+                    rc_monitor = info['rcMonitor']  # (left, top, right, bottom)
+                except Exception:
+                    rc_monitor = pyrect
+
+                dpi = 96
+                try:
+                    dpi_x = ctypes.c_uint()
+                    dpi_y = ctypes.c_uint()
+                    handle_val = h_mon.handle if hasattr(h_mon, 'handle') else int(h_mon)
+                    res = ctypes.windll.shcore.GetDpiForMonitor(handle_val, 0, ctypes.byref(dpi_x), ctypes.byref(dpi_y))
+                    if res == 0 and dpi_x.value > 0:
+                        dpi = int(dpi_x.value)
+                except Exception:
+                    try:
+                        dpi = ctypes.windll.user32.GetDpiForSystem() or 96
+                    except Exception:
+                        dpi = 96
+
+                scale = dpi / 96.0
+                monitors.append({
+                    "rect": rc_monitor,
+                    "dpi": dpi,
+                    "scale": scale,
+                    "handle": h_mon,
+                    "left": rc_monitor[0],
+                    "top": rc_monitor[1],
+                    "right": rc_monitor[2],
+                    "bottom": rc_monitor[3],
+                })
+        except Exception as e:
+            logger.debug("Failed to enumerate display monitors for DPI map: %s", e)
+
+        if not monitors:
+            try:
+                sw = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
+                sh = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
+            except Exception:
+                sw, sh = 1920, 1080
+            try:
+                dpi = ctypes.windll.user32.GetDpiForSystem() or 96
+            except Exception:
+                dpi = 96
+            monitors.append({
+                "rect": (0, 0, sw, sh),
+                "dpi": dpi,
+                "scale": dpi / 96.0,
+                "handle": None,
+                "left": 0,
+                "top": 0,
+                "right": sw,
+                "bottom": sh,
+            })
+
+        cls._cached_map = monitors
+        cls._last_refresh = curr_time
+        cls._monitor_count = curr_count
+        return monitors
+
+    @classmethod
+    def find_monitor_for_point(cls, x: int, y: int, monitor_map: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        """Finds the monitor containing (x, y), or returns the primary/first monitor."""
+        monitors = monitor_map if monitor_map is not None else cls.get_monitor_dpi_map()
+        for mon in monitors:
+            rect = mon["rect"]
+            if rect[0] <= x < rect[2] and rect[1] <= y < rect[3]:
+                return mon
+        return monitors[0]
+
+    @classmethod
+    def logical_to_physical(cls, x: int, y: int) -> Tuple[int, int]:
+        """Given logical coordinates (what Python/PyAutoGUI sees), determine which monitor
+        it is on, then apply physical = logical * (dpi / 96) to convert to true physical pixels.
+        """
+        mon = cls.find_monitor_for_point(x, y)
+        scale = mon["scale"]
+        mon_left = mon["rect"][0]
+        mon_top = mon["rect"][1]
+
+        rel_x = x - mon_left
+        rel_y = y - mon_top
+        phys_x = mon_left + int(round(rel_x * scale))
+        phys_y = mon_top + int(round(rel_y * scale))
+        return phys_x, phys_y
+
+    @classmethod
+    def physical_to_logical(cls, x: int, y: int) -> Tuple[int, int]:
+        """Reverse mapping: converts true physical screen pixels to logical coordinates."""
+        mon = cls.find_monitor_for_point(x, y)
+        scale = mon["scale"]
+        mon_left = mon["rect"][0]
+        mon_top = mon["rect"][1]
+
+        rel_x = x - mon_left
+        rel_y = y - mon_top
+        log_x = mon_left + int(round(rel_x / scale))
+        log_y = mon_top + int(round(rel_y / scale))
+        return log_x, log_y
+
+    @classmethod
+    def handle_display_change(cls) -> None:
+        """Invalidates cache when WM_DISPLAYCHANGE is detected."""
+        cls._cached_map = None
+        cls._last_refresh = 0.0
+
+
+def dpi_click(x: int, y: int, button: str = "left") -> bool:
+    """Performs a hardware-level, DPI-accurate mouse click on Windows.
+    1. Calls logical_to_physical(x, y) to get real pixel coordinates.
+    2. Uses ctypes INPUT structs + SendInput with MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE |
+       MOUSEEVENTF_LEFTDOWN/UP on the normalized virtual screen.
+    3. Falls back to pyautogui.click(x, y) if DPI mapping or SendInput fails.
+    """
+    enable_dpi_awareness()
+    try:
+        phys_x, phys_y = DPIAwareCoords.logical_to_physical(x, y)
+
+        try:
+            vx = win32api.GetSystemMetrics(win32con.SM_XVIRTUALSCREEN)
+            vy = win32api.GetSystemMetrics(win32con.SM_YVIRTUALSCREEN)
+            vw = win32api.GetSystemMetrics(win32con.SM_CXVIRTUALSCREEN)
+            vh = win32api.GetSystemMetrics(win32con.SM_CYVIRTUALSCREEN)
+        except Exception:
+            vx, vy = 0, 0
+            vw = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
+            vh = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
+
+        if vw <= 0 or vh <= 0:
+            raise ValueError("Invalid virtual screen dimensions")
+
+        norm_x = int(((phys_x - vx) * 65535) // vw)
+        norm_y = int(((phys_y - vy) * 65535) // vh)
+
+        btn = button.lower().strip()
+        if btn in ("right", "r", "2"):
+            down_flag = MOUSEEVENTF_RIGHTDOWN
+            up_flag = MOUSEEVENTF_RIGHTUP
+        elif btn in ("middle", "m", "center", "3"):
+            down_flag = MOUSEEVENTF_MIDDLEDOWN
+            up_flag = MOUSEEVENTF_MIDDLEUP
+        else:
+            down_flag = MOUSEEVENTF_LEFTDOWN
+            up_flag = MOUSEEVENTF_LEFTUP
+
+        flags_move = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
+
+        inputs = (INPUT * 3)()
+
+        inputs[0].type = INPUT_MOUSE
+        inputs[0].u.mi.dx = norm_x
+        inputs[0].u.mi.dy = norm_y
+        inputs[0].u.mi.dwFlags = flags_move
+        inputs[0].u.mi.mouseData = 0
+        inputs[0].u.mi.time = 0
+        inputs[0].u.mi.dwExtraInfo = 0
+
+        inputs[1].type = INPUT_MOUSE
+        inputs[1].u.mi.dx = norm_x
+        inputs[1].u.mi.dy = norm_y
+        inputs[1].u.mi.dwFlags = flags_move | down_flag
+        inputs[1].u.mi.mouseData = 0
+        inputs[1].u.mi.time = 0
+        inputs[1].u.mi.dwExtraInfo = 0
+
+        inputs[2].type = INPUT_MOUSE
+        inputs[2].u.mi.dx = norm_x
+        inputs[2].u.mi.dy = norm_y
+        inputs[2].u.mi.dwFlags = flags_move | up_flag
+        inputs[2].u.mi.mouseData = 0
+        inputs[2].u.mi.time = 0
+        inputs[2].u.mi.dwExtraInfo = 0
+
+        sent = ctypes.windll.user32.SendInput(3, ctypes.byref(inputs), ctypes.sizeof(INPUT))
+        if sent == 3:
+            return True
+        raise RuntimeError(f"SendInput sent {sent} of 3 events")
+
+    except Exception as e:
+        logger.debug("DPI-aware click failed, falling back to pyautogui.click: %s", e)
+        try:
+            import pyautogui
+            pyautogui.click(x, y, button=button)
+            return True
+        except Exception as py_err:
+            logger.error("Fallback pyautogui.click failed: %s", py_err)
+            return False
+
+
+def click_at(x: int, y: int, button: str = "left") -> bool:
+    """Convenience alias for dpi_click."""
+    return dpi_click(x, y, button=button)
+
+# Note: Any legacy pyautogui.click(x, y) calls across Homie tools should use dpi_click(x, y) for mixed-DPI accuracy.
 
 def force_foreground_window(hwnd):
     """Guarantees bringing a window to the true foreground on Windows 10/11,
@@ -1008,6 +1294,136 @@ def play_youtube(query=""):
     except Exception as e:
         return False, f"Failed to open YouTube: {e}"
 
+def wait_for_window_focus(target_hwnd, timeout=1.5, poll_interval=0.05):
+    """Polls until target_hwnd or its root ancestor has foreground focus or timeout expires."""
+    if not target_hwnd:
+        return False
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            fg = win32gui.GetForegroundWindow()
+            if fg == target_hwnd:
+                return True
+            if fg and win32gui.GetAncestor(fg, win32con.GA_ROOT) == target_hwnd:
+                return True
+        except Exception:
+            pass
+        time.sleep(poll_interval)
+    return False
+
+def safe_clipboard_paste(text, paste_hotkey=('ctrl', 'v'), delay_after=0.2):
+    """Safely pastes text via clipboard while preserving the user's prior clipboard contents."""
+    import pyperclip
+    import pyautogui
+    old_clip = None
+    try:
+        old_clip = pyperclip.paste()
+    except Exception:
+        old_clip = None
+
+    try:
+        pyperclip.copy(text)
+        pyautogui.hotkey(*paste_hotkey)
+        if delay_after > 0:
+            time.sleep(delay_after)
+    finally:
+        if old_clip is not None:
+            try:
+                pyperclip.copy(old_clip)
+            except Exception:
+                pass
+
+def wait_for_search_ready(target_hwnd, query="", timeout=1.2, poll_interval=0.05):
+    """Polls for search results to appear in target_hwnd instead of sleeping blindly."""
+    if not target_hwnd or not query:
+        time.sleep(min(0.2, timeout))
+        return True
+
+    deadline = time.time() + timeout
+    q_lower = query.lower().strip()
+
+    while time.time() < deadline:
+        try:
+            import uiautomation as auto
+            root = auto.ControlFromHandle(target_hwnd)
+            if root and root.Exists(0, 0):
+                for ctrl, _ in auto.WalkControl(root, maxDepth=12):
+                    ct_name = getattr(ctrl, "ControlTypeName", "")
+                    if ct_name in ("ListItemControl", "TextControl", "CustomControl", "ButtonControl"):
+                        name = (ctrl.Name or "").lower()
+                        if q_lower in name:
+                            return True
+        except Exception:
+            pass
+        time.sleep(poll_interval)
+    return False
+
+def grounded_set_input_value(target_hwnd, search_hints, text, app_window_title=None):
+    """Attempts to set input text via grounding_tools or direct UIA ValuePattern.
+    
+    Returns True if value was set via ValuePattern (clipboard untouched), False otherwise.
+    """
+    if not text:
+        return True
+
+    # 1. Attempt using grounding_tools (VLA grounded_type) if app_window_title provided
+    if app_window_title:
+        try:
+            import grounding_tools
+            for hint in search_hints:
+                res = grounding_tools.grounded_type(hint, text, app_window_title=app_window_title)
+                if res.get("ok"):
+                    logger.info("Grounded typing succeeded via grounding_tools for hint '%s'", hint)
+                    return True
+        except Exception as e:
+            logger.debug("grounding_tools attempt failed: %s", e)
+
+    # 2. Attempt direct UIA ValuePattern on target_hwnd
+    if target_hwnd:
+        try:
+            import uiautomation as auto
+            root = auto.ControlFromHandle(target_hwnd)
+            if root and root.Exists(0, 0):
+                target_ctrl = None
+                for ctrl, _ in auto.WalkControl(root, maxDepth=10):
+                    ct_name = getattr(ctrl, "ControlTypeName", "")
+                    if ct_name not in ("EditControl", "DocumentControl"):
+                        continue
+                    c_name = (ctrl.Name or "").lower().strip()
+                    c_id = (getattr(ctrl, "AutomationId", "") or "").lower().strip()
+                    c_help = (getattr(ctrl, "HelpText", "") or "").lower().strip()
+                    for hint in search_hints:
+                        h = hint.lower().strip()
+                        if h == c_name or h in c_name or h in c_id or h in c_help:
+                            target_ctrl = ctrl
+                            break
+                    if target_ctrl:
+                        break
+
+                if target_ctrl:
+                    try:
+                        target_ctrl.SetFocus()
+                    except Exception:
+                        pass
+                    pattern = target_ctrl.GetPattern(auto.PatternId.ValuePattern)
+                    if not pattern:
+                        parent = target_ctrl.GetParentControl()
+                        if parent:
+                            pattern = parent.GetPattern(auto.PatternId.ValuePattern)
+                    if pattern and not getattr(pattern, "IsReadOnly", False):
+                        pattern.SetValue(text)
+                        logger.info("Set input value via direct UIA ValuePattern for control '%s'", getattr(target_ctrl, "Name", ""))
+                        return True
+        except Exception as e:
+            logger.debug("Direct UIA ValuePattern failed: %s", e)
+
+    return False
+
+_wait_for_window_focus = wait_for_window_focus
+_safe_clipboard_paste = safe_clipboard_paste
+_wait_for_search_ready = wait_for_search_ready
+_grounded_set_input_value = grounded_set_input_value
+
 def send_chat_message(app_name, recipient="", message=""):
     """Automates sending a chat message to a contact in WhatsApp or Telegram on Windows."""
     # This low-level entry point is shared by the fast parser, AI tools, and
@@ -1022,7 +1438,6 @@ def send_chat_message(app_name, recipient="", message=""):
         return False, f"Blocked: could not verify Safe Mode ({e})."
 
     import pyautogui
-    import pyperclip
     import urllib.parse
     import re
 
@@ -1047,7 +1462,7 @@ def send_chat_message(app_name, recipient="", message=""):
 
     if target_hwnd:
         force_foreground_window(target_hwnd)
-    time.sleep(0.8)
+        wait_for_window_focus(target_hwnd, timeout=1.0)
 
     try:
         if 'whatsapp' in app_lower:
@@ -1057,82 +1472,112 @@ def send_chat_message(app_name, recipient="", message=""):
                 try:
                     url = f"whatsapp://send?phone={clean_phone}&text={urllib.parse.quote(message)}"
                     os.startfile(url)
-                    time.sleep(1.5)
                     if target_hwnd:
-                        force_foreground_window(target_hwnd)
+                        wait_for_window_focus(target_hwnd, timeout=1.5)
+                    else:
+                        time.sleep(0.5)
                     pyautogui.press('enter')
                     return True, f"Sent '{message}' to phone {clean_phone} on WhatsApp."
                 except Exception:
                     pass
 
-            # Focus and clear current selection
-            pyautogui.press('esc')
-            time.sleep(0.2)
-            pyautogui.press('esc')
-            time.sleep(0.2)
-
             if recipient:
-                # Ctrl+F is universal Search Chats / Contacts in WhatsApp Desktop
-                pyautogui.hotkey('ctrl', 'f')
-                time.sleep(0.3)
-                pyautogui.hotkey('ctrl', 'a')
-                time.sleep(0.1)
-                pyautogui.press('backspace')
-                time.sleep(0.1)
+                search_hints = ["search or start new chat", "search chats", "search", "search input"]
+                search_grounded = grounded_set_input_value(target_hwnd, search_hints, recipient, app_window_title="whatsapp")
+                if search_grounded:
+                    wait_for_search_ready(target_hwnd, recipient, timeout=1.2)
+                    pyautogui.press('enter')
+                    time.sleep(0.2)
+                    pyautogui.press('tab')
+                    time.sleep(0.1)
+                else:
+                    # Focus and clear current selection
+                    pyautogui.press('esc')
+                    time.sleep(0.1)
+                    pyautogui.press('esc')
+                    time.sleep(0.1)
 
-                pyperclip.copy(recipient)
-                pyautogui.hotkey('ctrl', 'v')
-                time.sleep(1.0)  # Wait for contact search results to load
+                    # Ctrl+F / Ctrl+E to search chats in WhatsApp Desktop
+                    pyautogui.hotkey('ctrl', 'f')
+                    time.sleep(0.2)
+                    pyautogui.hotkey('ctrl', 'a')
+                    time.sleep(0.05)
+                    pyautogui.press('backspace')
+                    time.sleep(0.05)
 
-                # Down arrow to first match, then Enter to open conversation
-                pyautogui.press('down')
-                time.sleep(0.2)
-                pyautogui.press('enter')
-                time.sleep(0.8)
+                    safe_clipboard_paste(recipient, delay_after=0.1)
+                    wait_for_search_ready(target_hwnd, recipient, timeout=1.2)
+
+                    # In WhatsApp Desktop UWP/WinUI: Pressing Enter selects the top matched contact directly.
+                    pyautogui.press('enter')
+                    time.sleep(0.3)
+                    # Ensure the message input box is focused
+                    pyautogui.press('tab')
+                    time.sleep(0.1)
 
             if target_hwnd:
                 force_foreground_window(target_hwnd)
+                wait_for_window_focus(target_hwnd, timeout=0.5)
 
             if message:
-                pyperclip.copy(message)
-                pyautogui.hotkey('ctrl', 'v')
-                time.sleep(0.3)
-                pyautogui.press('enter')
+                msg_hints = ["type a message", "write a message", "message"]
+                msg_grounded = grounded_set_input_value(target_hwnd, msg_hints, message, app_window_title="whatsapp")
+                if msg_grounded:
+                    time.sleep(0.1)
+                    pyautogui.press('enter')
+                    time.sleep(0.2)
+                else:
+                    safe_clipboard_paste(message, delay_after=0.2)
+                    pyautogui.press('enter')
+                    time.sleep(0.2)
 
             target_desc = f" to {recipient}" if recipient else ""
             return True, f"Sent '{message}'{target_desc} on WhatsApp."
 
         elif 'telegram' in app_lower:
-            pyautogui.press('esc')
-            time.sleep(0.2)
-            pyautogui.press('esc')
-            time.sleep(0.2)
-
             if recipient:
-                # Ctrl+K is universal Telegram contact / chat search
-                pyautogui.hotkey('ctrl', 'k')
-                time.sleep(0.3)
-                pyautogui.hotkey('ctrl', 'a')
-                time.sleep(0.1)
-                pyautogui.press('backspace')
-                time.sleep(0.1)
+                search_hints = ["search", "search...", "search chats", "search contacts"]
+                search_grounded = grounded_set_input_value(target_hwnd, search_hints, recipient, app_window_title=None)
+                if search_grounded:
+                    wait_for_search_ready(target_hwnd, recipient, timeout=1.0)
+                    pyautogui.press('down')
+                    time.sleep(0.1)
+                    pyautogui.press('enter')
+                    time.sleep(0.3)
+                else:
+                    pyautogui.press('esc')
+                    time.sleep(0.1)
+                    pyautogui.press('esc')
+                    time.sleep(0.1)
 
-                pyperclip.copy(recipient)
-                pyautogui.hotkey('ctrl', 'v')
-                time.sleep(0.8)
-                pyautogui.press('down')
-                time.sleep(0.2)
-                pyautogui.press('enter')
-                time.sleep(0.6)
+                    # Ctrl+K is universal Telegram contact / chat search
+                    pyautogui.hotkey('ctrl', 'k')
+                    time.sleep(0.2)
+                    pyautogui.hotkey('ctrl', 'a')
+                    time.sleep(0.05)
+                    pyautogui.press('backspace')
+                    time.sleep(0.05)
+
+                    safe_clipboard_paste(recipient, delay_after=0.1)
+                    wait_for_search_ready(target_hwnd, recipient, timeout=1.0)
+                    pyautogui.press('down')
+                    time.sleep(0.1)
+                    pyautogui.press('enter')
+                    time.sleep(0.3)
 
             if target_hwnd:
                 force_foreground_window(target_hwnd)
+                wait_for_window_focus(target_hwnd, timeout=0.5)
 
             if message:
-                pyperclip.copy(message)
-                pyautogui.hotkey('ctrl', 'v')
-                time.sleep(0.3)
-                pyautogui.press('enter')
+                msg_hints = ["write a message...", "write a message", "message"]
+                msg_grounded = grounded_set_input_value(target_hwnd, msg_hints, message, app_window_title=None)
+                if msg_grounded:
+                    time.sleep(0.1)
+                    pyautogui.press('enter')
+                else:
+                    safe_clipboard_paste(message, delay_after=0.2)
+                    pyautogui.press('enter')
 
             target_desc = f" to {recipient}" if recipient else ""
             return True, f"Sent '{message}'{target_desc} on Telegram."

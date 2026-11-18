@@ -40,6 +40,14 @@ _LOCAL_REVERSIBLE_TOOLS = {
     "homie_control_media",
 }
 _LOCAL_USER_CALLERS = {"desktop_user", "desktop_voice"}
+_STANDALONE_MODE = False
+
+def set_standalone_mode(enabled: bool = True) -> None:
+    global _STANDALONE_MODE
+    _STANDALONE_MODE = enabled
+
+def is_standalone_mode() -> bool:
+    return _STANDALONE_MODE
 
 def is_workstation_tainted():
     return _WORKSTATION_TAINTED

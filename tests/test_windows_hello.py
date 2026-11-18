@@ -83,3 +83,99 @@ def test_rails_confirmation_windows_hello_tier2_rejection(monkeypatch):
     assert "Windows Hello verification failed" in msg
     assert req.status == "PENDING"
 
+
+# ==============================================================================
+# Phase 2 WindowsHello Class, WindowsHelloGate, and Action Broker Gate Tests
+# ==============================================================================
+
+def test_windows_hello_class_is_available(monkeypatch):
+    monkeypatch.setenv("HOMIE_MOCK_WINDOWS_HELLO_AVAILABLE", "1")
+    assert windows_hello.WindowsHello.is_available() is True
+    monkeypatch.setenv("HOMIE_MOCK_WINDOWS_HELLO_AVAILABLE", "0")
+    assert windows_hello.WindowsHello.is_available() is False
+
+
+def test_windows_hello_class_verify_sync_success(monkeypatch):
+    monkeypatch.setenv("HOMIE_MOCK_WINDOWS_HELLO", "1")
+    assert windows_hello.WindowsHello.verify_sync("Test approval") is True
+
+
+def test_windows_hello_class_verify_sync_failure(monkeypatch):
+    monkeypatch.setenv("HOMIE_MOCK_WINDOWS_HELLO", "0")
+    assert windows_hello.WindowsHello.verify_sync("Test approval") is False
+
+
+@pytest.mark.asyncio
+async def test_windows_hello_class_verify_async(monkeypatch):
+    monkeypatch.setenv("HOMIE_MOCK_WINDOWS_HELLO", "1")
+    res = await windows_hello.WindowsHello.verify("Async approval")
+    assert res is True
+    monkeypatch.setenv("HOMIE_MOCK_WINDOWS_HELLO", "0")
+    res = await windows_hello.WindowsHello.verify("Async approval")
+    assert res is False
+
+
+def test_windows_hello_gate_uses_biometrics_when_available(monkeypatch):
+    from unittest.mock import Mock
+    import step_up_gate
+    monkeypatch.setattr(windows_hello.WindowsHello, "is_available", classmethod(lambda cls: True))
+    monkeypatch.setattr(windows_hello.WindowsHello, "verify_sync", classmethod(lambda cls, reason="": True))
+    fallback_mock = Mock()
+
+    gate = step_up_gate.WindowsHelloGate(fallback_gate=fallback_mock)
+    ok, msg = gate.verify(reason="Approve file modification", tool_name="homie_modify_file")
+    assert ok is True
+    assert "Windows Hello" in msg
+    fallback_mock.verify.assert_not_called()
+
+
+def test_windows_hello_gate_fallback_to_phone_when_unavailable(monkeypatch):
+    from unittest.mock import Mock
+    import step_up_gate
+    monkeypatch.setattr(windows_hello.WindowsHello, "is_available", classmethod(lambda cls: False))
+    fallback_mock = Mock()
+    fallback_mock.verify.return_value = (True, "Simulated phone WebAuthn push")
+
+    gate = step_up_gate.WindowsHelloGate(fallback_gate=fallback_mock)
+    ok, msg = gate.verify(reason="Approve file modification", tool_name="homie_modify_file")
+    assert ok is True
+    assert "Simulated phone WebAuthn push" in msg
+    fallback_mock.verify.assert_called_once()
+
+
+def test_action_broker_gate_selection_medium_risk_uses_windows_hello(monkeypatch):
+    import step_up_gate
+    import action_broker
+    monkeypatch.setattr(windows_hello.WindowsHello, "is_available", classmethod(lambda cls: True))
+    gate = action_broker.select_gate("homie_modify_file")
+    assert isinstance(gate, step_up_gate.WindowsHelloGate)
+
+
+def test_action_broker_gate_selection_medium_risk_falls_back_when_unavailable(monkeypatch):
+    import step_up_gate
+    import action_broker
+    monkeypatch.setattr(windows_hello.WindowsHello, "is_available", classmethod(lambda cls: False))
+    gate = action_broker.select_gate("homie_modify_file")
+    assert isinstance(gate, step_up_gate.PhoneWebAuthnGate)
+
+
+def test_action_broker_gate_selection_high_risk_always_phone(monkeypatch):
+    import step_up_gate
+    import action_broker
+    monkeypatch.setattr(windows_hello.WindowsHello, "is_available", classmethod(lambda cls: True))
+    # High-risk actions must strictly use PhoneWebAuthnGate even if Windows Hello is available
+    gate_shell = action_broker.select_gate("homie_run_shell")
+    assert isinstance(gate_shell, step_up_gate.PhoneWebAuthnGate)
+    gate_kill = action_broker.select_gate("homie_kill_process")
+    assert isinstance(gate_kill, step_up_gate.PhoneWebAuthnGate)
+    gate_del = action_broker.select_gate("homie_delete_file")
+    assert isinstance(gate_del, step_up_gate.PhoneWebAuthnGate)
+
+
+def test_action_broker_gate_selection_low_risk_none():
+    import action_broker
+    gate_read = action_broker.select_gate("homie_read_screen")
+    assert gate_read is None
+    gate_vitals = action_broker.select_gate("homie_get_vitals")
+    assert gate_vitals is None
+

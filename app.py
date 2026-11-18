@@ -8,11 +8,10 @@ import sys
 import json
 import time
 import threading
-import pyperclip
-import pyautogui
 import webview
-from pynput import keyboard
-from PIL import Image
+
+# Lazy module loaders for heavy C-extensions and sub-systems
+from homie_lazy import LazyModule, preload_in_background
 
 # Ensure UTF-8 output on Windows consoles
 if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
@@ -24,14 +23,19 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-import homie
-import windows_tools
-import task_manager
-import assistant_timeline
-from agent_tools import build_default_registry
-from chat_cli import load_mission
-from chat_core import AgentCore, ProviderError, TurnCancelled, build_system_prompt
-from voice import VoiceEngine, SentenceSpeechStreamer
+# Deferred / lazy module wrappers to slash startup latency
+pyperclip = LazyModule("pyperclip")
+pyautogui = LazyModule("pyautogui")
+keyboard = LazyModule("pynput.keyboard")
+Image = LazyModule("PIL.Image")
+homie = LazyModule("homie")
+windows_tools = LazyModule("windows_tools")
+task_manager = LazyModule("task_manager")
+assistant_timeline = LazyModule("assistant_timeline")
+agent_tools = LazyModule("agent_tools")
+chat_cli = LazyModule("chat_cli")
+chat_core = LazyModule("chat_core")
+voice = LazyModule("voice")
 
 class HomieApi:
     """JS Bridge exposed to the webview via pywebview.api."""
@@ -107,25 +111,12 @@ class HomieApi:
 class HomieApp:
     def __init__(self):
         self.prefs = homie.get_prefs()
-        assistant_name = os.environ.get('HOMIE_NAME') or self.prefs.get('assistantName') or 'Homie'
-        import durable_memory
-        memory_store = durable_memory.get_default_memory_store()
-        self.agent_core = AgentCore(
-            build_system_prompt(str(assistant_name), load_mission(), facts=memory_store.list_facts()),
-            self.prefs,
-            tool_registry=build_default_registry(),
-            memory_store=memory_store,
-        )
         self.window = None
-        self.voice = VoiceEngine(
-            model_size=self.prefs.get('whisperModel', 'tiny'),
-            language=self.prefs.get('whisperLanguage', 'en')
-        )
+        self._agent_core = None
+        self._voice = None
+        self._tasks = None
+        self._heartbeat = None
         self.api = HomieApi(self)
-        self.tasks = task_manager.get_task_manager()
-        import heartbeat_service
-        self.heartbeat = heartbeat_service.get_default_heartbeat_service()
-        self.heartbeat.on_surface_callback = self._handle_heartbeat_notice
         self._ask_tasks = []
         self._ask_tasks_lock = threading.Lock()
         self._speech_stream_active = threading.Event()
@@ -140,6 +131,59 @@ class HomieApp:
         self._physical_alt_down = False
         self.tray = None
         self.telegram = None
+
+    @property
+    def agent_core(self):
+        if self._agent_core is None:
+            assistant_name = os.environ.get('HOMIE_NAME') or self.prefs.get('assistantName') or 'Homie'
+            import durable_memory
+            memory_store = durable_memory.get_default_memory_store()
+            self._agent_core = chat_core.AgentCore(
+                chat_core.build_system_prompt(str(assistant_name), chat_cli.load_mission(), facts=memory_store.list_facts()),
+                self.prefs,
+                tool_registry=agent_tools.build_default_registry(),
+                memory_store=memory_store,
+            )
+        return self._agent_core
+
+    @agent_core.setter
+    def agent_core(self, val):
+        self._agent_core = val
+
+    @property
+    def voice(self):
+        if self._voice is None:
+            self._voice = voice.VoiceEngine(
+                model_size=self.prefs.get('whisperModel', 'tiny'),
+                language=self.prefs.get('whisperLanguage', 'en')
+            )
+        return self._voice
+
+    @voice.setter
+    def voice(self, val):
+        self._voice = val
+
+    @property
+    def tasks(self):
+        if self._tasks is None:
+            self._tasks = task_manager.get_task_manager()
+        return self._tasks
+
+    @tasks.setter
+    def tasks(self, val):
+        self._tasks = val
+
+    @property
+    def heartbeat(self):
+        if self._heartbeat is None:
+            import heartbeat_service
+            self._heartbeat = heartbeat_service.get_default_heartbeat_service()
+            self._heartbeat.on_surface_callback = self._handle_heartbeat_notice
+        return self._heartbeat
+
+    @heartbeat.setter
+    def heartbeat(self, val):
+        self._heartbeat = val
 
     def _handle_heartbeat_notice(self, notice):
         """Surfaces proactive alerts in UI or timeline."""
@@ -281,7 +325,7 @@ class HomieApp:
         self.is_processing = True
         speak = caller_id == 'desktop_voice' or bool(self.prefs.get('speak', False))
         self._speech_stream_active.clear()
-        speech = SentenceSpeechStreamer(
+        speech = voice.SentenceSpeechStreamer(
             enabled=speak,
             on_start=self._speech_stream_active.set,
         )
@@ -311,10 +355,10 @@ class HomieApp:
                 return
             speech.finish()
             self.eval_js(f"window.ui.line({json.dumps('✓ ' + result)})")
-        except TurnCancelled:
+        except chat_core.TurnCancelled:
             speech.cancel()
             return
-        except ProviderError as e:
+        except chat_core.ProviderError as e:
             speech.cancel()
             self.eval_js(f"window.ui.line({json.dumps('· ' + str(e))})")
         except Exception as e:
@@ -559,7 +603,21 @@ class HomieApp:
             easy_drag=False
         )
 
+        def on_shown():
+            # Immediately after the first pywebview window is shown, pre-warm heavy modules in background
+            preload_in_background()
+            def _warm_internals():
+                try:
+                    _ = self.voice
+                    _ = self.agent_core
+                except Exception:
+                    pass
+            threading.Thread(target=_warm_internals, daemon=True, name="HomieInternalsWarmer").start()
+
+        self.window.events.shown += on_shown
+
         def on_loaded():
+            preload_in_background()
             self.eval_js("window.ui.status('Homie Ready', false)")
             self.eval_js(f"window.ui.mode({json.dumps(bool(self.prefs.get('safe', True)))})")
             if hasattr(self, 'heartbeat') and self.heartbeat:
@@ -573,6 +631,18 @@ class HomieApp:
 
         # Start webview event loop (runs on main thread)
         webview.start(debug=False)
+
+def __getattr__(name: str):
+    """PEP 562 dynamic attribute resolver for deferred sub-systems."""
+    if name in ('AgentCore', 'ProviderError', 'TurnCancelled', 'build_system_prompt'):
+        return getattr(chat_core, name)
+    if name in ('VoiceEngine', 'SentenceSpeechStreamer'):
+        return getattr(voice, name)
+    if name == 'build_default_registry':
+        return getattr(agent_tools, name)
+    if name == 'load_mission':
+        return getattr(chat_cli, name)
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 def main():
     app = HomieApp()

@@ -10,54 +10,6 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 
-# Global dynamic plugin tool registry for Homie plugins
-PLUGIN_TOOL_REGISTRY: dict[str, dict[str, Any]] = {}
-PLUGIN_TOOLS: dict[str, dict[str, Any]] = PLUGIN_TOOL_REGISTRY
-plugin_tool_registry = PLUGIN_TOOL_REGISTRY
-
-
-def register_plugin_tool(plugin_id: str, tool_def: dict[str, Any]) -> None:
-    """Registers a declared plugin tool into the agent's tool registry."""
-    tool_name = tool_def.get("name")
-    if not tool_name:
-        return
-    entry = {
-        "plugin_id": plugin_id,
-        "name": tool_name,
-        "description": tool_def.get("description", ""),
-        "python_callable": tool_def.get("python_callable", f"plugin:{tool_name}"),
-        "args_schema": tool_def.get("args_schema", tool_def.get("parameters", {"type": "object", "properties": {}})),
-        "parameters": tool_def.get("args_schema", tool_def.get("parameters", {"type": "object", "properties": {}})),
-        "callable": tool_def.get("callable"),
-        "plugin_dir": tool_def.get("plugin_dir", ""),
-        "tier": tool_def.get("tier", "READ_ONLY"),
-    }
-    PLUGIN_TOOL_REGISTRY[tool_name] = entry
-    PLUGIN_TOOL_REGISTRY[f"{plugin_id}:{tool_name}"] = entry
-
-
-def unregister_plugin_tools(plugin_id: str) -> None:
-    """Removes all tools associated with a plugin_id from the registry."""
-    to_delete = [
-        k for k, v in list(PLUGIN_TOOL_REGISTRY.items())
-        if isinstance(v, dict) and v.get("plugin_id") == plugin_id
-    ]
-    for k in to_delete:
-        PLUGIN_TOOL_REGISTRY.pop(k, None)
-
-
-def load_plugin(plugin_id: str, registry: Any = None) -> dict[str, Any]:
-    """Loads a plugin by id and dynamically registers its declared tools."""
-    import homie_plugins
-    return homie_plugins.load_plugin(plugin_id, registry=registry)
-
-
-def execute_plugin_tool(plugin_id: str, tool_name: str, **kwargs) -> dict[str, Any]:
-    """Executes a declared plugin tool safely with timeout and error handling."""
-    import homie_plugins
-    return homie_plugins.execute_plugin_tool(plugin_id, tool_name, **kwargs)
-
-
 MAX_TOOL_RESULT_CHARS = 8_000
 logger = logging.getLogger("homie.agent_tools")
 
@@ -122,7 +74,7 @@ class ToolRegistry:
 
     def schemas(self) -> list[dict[str, Any]]:
         """OpenAI-compatible function schemas for the model request."""
-        schemas_list = [
+        return [
             {
                 "type": "function",
                 "function": {
@@ -133,18 +85,6 @@ class ToolRegistry:
             }
             for tool in self._tools.values()
         ]
-        # Also include dynamically registered plugin tools
-        for tool_name, meta in PLUGIN_TOOL_REGISTRY.items():
-            if ":" not in tool_name and tool_name not in self._tools:
-                schemas_list.append({
-                    "type": "function",
-                    "function": {
-                        "name": tool_name,
-                        "description": meta.get("description", ""),
-                        "parameters": {**meta.get("parameters", {"type": "object", "properties": {}}), "additionalProperties": False},
-                    },
-                })
-        return schemas_list
 
     def execute(
         self,
@@ -157,11 +97,6 @@ class ToolRegistry:
             return {"ok": False, "error": "The tool registry is closed."}
         tool = self._tools.get(name)
         if tool is None:
-            if name in PLUGIN_TOOL_REGISTRY:
-                meta = PLUGIN_TOOL_REGISTRY[name]
-                pid = meta.get("plugin_id", "")
-                args_dict = arguments if isinstance(arguments, dict) else {}
-                return execute_plugin_tool(pid, name, **args_dict)
             return {"ok": False, "error": f"Tool '{name}' is not available."}
         error = _validate_arguments(tool.parameters, arguments)
         if error:
@@ -753,6 +688,27 @@ def build_default_registry() -> ToolRegistry:
         egress="none",
         approval="none",
     ))
+    registry.register(ToolSpec(
+        name="browser_get_text",
+        description="Extracts visible text content from the active Chrome/Edge browser page via CDP.",
+        parameters={"type": "object", "properties": {}, "required": []},
+        capability_tier="READ_ONLY",
+        runner=lambda args, caller_id: _run_browser_tool("browser_get_text", args, caller_id),
+        returns_untrusted=True,
+        egress="none",
+        approval="none",
+        taint_on_read=True,
+    ))
+    registry.register(ToolSpec(
+        name="browser_screenshot",
+        description="Captures a high-resolution screenshot of the active browser viewport via CDP.",
+        parameters={"type": "object", "properties": {}, "required": []},
+        capability_tier="READ_ONLY",
+        runner=lambda args, caller_id: _run_browser_tool("browser_screenshot", args, caller_id),
+        returns_untrusted=False,
+        egress="none",
+        approval="none",
+    ))
     return registry
 
 
@@ -805,6 +761,98 @@ def _run_grounding_tool(tool_name: str, args: dict[str, Any], caller_id: str) ->
         )
         return {"ok": res.get("ok", False), "data": res}
     return {"ok": False, "error": f"Unknown grounding tool '{tool_name}'"}
+
+
+_GLOBAL_CDP_BRIDGE: Any = None
+
+
+def get_cdp_bridge() -> Any:
+    global _GLOBAL_CDP_BRIDGE
+    if _GLOBAL_CDP_BRIDGE is None:
+        import homie_cdp
+        _GLOBAL_CDP_BRIDGE = homie_cdp.CDPBridge()
+    return _GLOBAL_CDP_BRIDGE
+
+
+def set_cdp_bridge(bridge: Any) -> None:
+    global _GLOBAL_CDP_BRIDGE
+    _GLOBAL_CDP_BRIDGE = bridge
+
+
+def browser_navigate(url: str) -> dict[str, Any]:
+    """Navigates the browser to the specified URL via CDP."""
+    bridge = get_cdp_bridge()
+    if not bridge.is_connected:
+        bridge.connect()
+    res = bridge.navigate(url)
+    return {"ok": True, "data": res}
+
+
+def browser_click(selector: str) -> dict[str, Any]:
+    """Clicks an element matching the given CSS selector via CDP."""
+    bridge = get_cdp_bridge()
+    if not bridge.is_connected:
+        bridge.connect()
+    res = bridge.click_element(selector)
+    return {"ok": True, "data": res}
+
+
+def browser_type(selector: str, text: str) -> dict[str, Any]:
+    """Focuses element by CSS selector and types text via CDP."""
+    bridge = get_cdp_bridge()
+    if not bridge.is_connected:
+        bridge.connect()
+    res = bridge.type_text(selector, text)
+    return {"ok": True, "data": res}
+
+
+def browser_evaluate(js: str) -> dict[str, Any]:
+    """Evaluates JavaScript expression in page via CDP."""
+    bridge = get_cdp_bridge()
+    if not bridge.is_connected:
+        bridge.connect()
+    res = bridge.evaluate(js)
+    return {"ok": True, "data": res}
+
+
+def browser_get_text() -> dict[str, Any]:
+    """Extracts visible document text via CDP."""
+    bridge = get_cdp_bridge()
+    if not bridge.is_connected:
+        bridge.connect()
+    text = bridge.get_page_text()
+    return {"ok": True, "data": text}
+
+
+def browser_screenshot() -> dict[str, Any]:
+    """Captures page screenshot via CDP, returning base64-encoded PNG."""
+    import base64
+    bridge = get_cdp_bridge()
+    if not bridge.is_connected:
+        bridge.connect()
+    shot = bridge.screenshot()
+    b64_data = base64.b64encode(shot).decode("utf-8") if isinstance(shot, bytes) else str(shot)
+    return {"ok": True, "data": b64_data}
+
+
+def _run_browser_tool(tool_name: str, args: dict[str, Any], caller_id: str) -> dict[str, Any]:
+    try:
+        if tool_name == "browser_navigate":
+            return browser_navigate(args.get("url", ""))
+        elif tool_name == "browser_click":
+            return browser_click(args.get("selector", ""))
+        elif tool_name == "browser_type":
+            return browser_type(args.get("selector", ""), args.get("text", ""))
+        elif tool_name == "browser_evaluate":
+            return browser_evaluate(args.get("js", ""))
+        elif tool_name == "browser_get_text":
+            return browser_get_text()
+        elif tool_name == "browser_screenshot":
+            return browser_screenshot()
+        return {"ok": False, "error": f"Unknown browser tool '{tool_name}'"}
+    except Exception as e:
+        logger.warning("Error running browser tool %s: %s", tool_name, e)
+        return {"ok": False, "error": str(e)}
 
 
 def add_consequential_tools(registry: ToolRegistry) -> ToolRegistry:
@@ -1091,6 +1139,77 @@ def add_consequential_tools(registry: ToolRegistry) -> ToolRegistry:
             },
             capability_tier="CONSEQUENTIAL",
             runner=lambda args, caller_id: _run_grounding_tool("grounded_type", args, caller_id),
+            returns_untrusted=False,
+            egress="none",
+            approval="explicit",
+        ),
+        allow_consequential=True,
+    )
+    registry.register(
+        ToolSpec(
+            name="browser_navigate",
+            description="Navigates the active Chrome/Edge browser tab to a specified URL via CDP.",
+            parameters={
+                "type": "object",
+                "properties": {"url": {"type": "string"}},
+                "required": ["url"],
+            },
+            capability_tier="CONSEQUENTIAL",
+            runner=lambda args, caller_id: _run_browser_tool("browser_navigate", args, caller_id),
+            returns_untrusted=False,
+            egress="none",
+            approval="explicit",
+        ),
+        allow_consequential=True,
+    )
+    registry.register(
+        ToolSpec(
+            name="browser_click",
+            description="Clicks an interactive web element matching a CSS selector via CDP.",
+            parameters={
+                "type": "object",
+                "properties": {"selector": {"type": "string"}},
+                "required": ["selector"],
+            },
+            capability_tier="CONSEQUENTIAL",
+            runner=lambda args, caller_id: _run_browser_tool("browser_click", args, caller_id),
+            returns_untrusted=False,
+            egress="none",
+            approval="explicit",
+        ),
+        allow_consequential=True,
+    )
+    registry.register(
+        ToolSpec(
+            name="browser_type",
+            description="Focuses a target input element by CSS selector and types text via CDP.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "selector": {"type": "string"},
+                    "text": {"type": "string"},
+                },
+                "required": ["selector", "text"],
+            },
+            capability_tier="CONSEQUENTIAL",
+            runner=lambda args, caller_id: _run_browser_tool("browser_type", args, caller_id),
+            returns_untrusted=False,
+            egress="none",
+            approval="explicit",
+        ),
+        allow_consequential=True,
+    )
+    registry.register(
+        ToolSpec(
+            name="browser_evaluate",
+            description="Evaluates a JavaScript expression in the active browser tab via CDP.",
+            parameters={
+                "type": "object",
+                "properties": {"js": {"type": "string"}},
+                "required": ["js"],
+            },
+            capability_tier="CONSEQUENTIAL",
+            runner=lambda args, caller_id: _run_browser_tool("browser_evaluate", args, caller_id),
             returns_untrusted=False,
             egress="none",
             approval="explicit",
