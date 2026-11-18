@@ -1,0 +1,44 @@
+{
+  "id": "spotify",
+  "name": "Spotify Media Controller",
+  "version": "1.2.0",
+  "description": "Control playback, browse playlists, search tracks and podcasts via Spotify Web API.",
+  "author": "Homie Community",
+  "category": "Media",
+  "capabilities": ["network:api.spotify.com"],
+  "tools": [
+    {
+      "name": "spotify_play",
+      "description": "Search and play a track on Spotify by query.",
+      "python_callable": "plugin:spotify_play",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Track, artist, or album name to search and play"
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "spotify_pause",
+      "description": "Pause current Spotify playback.",
+      "python_callable": "plugin:spotify_pause",
+      "args_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "spotify_now_playing",
+      "description": "Return current track info from Spotify.",
+      "python_callable": "plugin:spotify_now_playing",
+      "args_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  ]
+}
