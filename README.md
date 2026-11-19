@@ -300,7 +300,8 @@ d:\helm\
 â”‚
 â”œâ”€â”€ ðŸ–¥ï¸ UI & Desktop
 â”‚   â”œâ”€â”€ ui/chat.html                # Compact chat window, transcript, voice controls
-â”‚   â”œâ”€â”€ ui/settings.html            # Settings pane (hotkey, models, safe mode)
+â”‚   â”œâ”€â”€ ui/canvas.html              # Interactive Side Canvas & Artifacts 2.0
+│   ├── ui/omnibar.html             # Spotlight/Raycast Omnibar launcher
 â”‚   â”œâ”€â”€ tray_hud.py                 # System tray icon & HUD overlay
 â”‚   â”œâ”€â”€ helm_hud.py                # HUD rendering engine
 â”‚   â”œâ”€â”€ helm_omnibar.py            # Fuzzy search launcher overlay (Ctrl+Space)

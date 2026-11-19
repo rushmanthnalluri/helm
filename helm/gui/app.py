@@ -122,6 +122,18 @@ class HelmApi:
                 notices = [n.to_dict() for n in self._app.heartbeat.load_inbox()]
                 self._app.eval_js(f"window.ui.inbox({json.dumps(notices)})")
 
+        elif 'toggle_canvas' in message:
+            self._app.toggle_canvas()
+
+        elif 'open_canvas' in message:
+            payload = message['open_canvas']
+            if isinstance(payload, dict):
+                self._app.show_artifact_on_canvas(
+                    title=payload.get("title", "Artifact"),
+                    content=payload.get("content", ""),
+                    content_type=payload.get("type", "document")
+                )
+
 class HelmApp:
     def __init__(self):
         self.prefs = helm.get_prefs()
@@ -146,6 +158,7 @@ class HelmApp:
         self.tray = None
         self.telegram = None
         self.omnibar = None
+        self.canvas = None
 
     @property
     def agent_core(self):
@@ -259,6 +272,28 @@ class HelmApp:
             )
         if self.omnibar:
             self.omnibar.toggle()
+
+    def toggle_canvas(self):
+        """Toggles the interactive side Canvas window."""
+        if not hasattr(self, 'canvas') or self.canvas is None:
+            try:
+                import helm_canvas
+                self.canvas = helm_canvas.get_canvas()
+            except Exception:
+                pass
+        if self.canvas:
+            self.canvas.toggle()
+
+    def show_artifact_on_canvas(self, title, content, content_type="document"):
+        """Displays an artifact on the interactive side Canvas."""
+        if not hasattr(self, 'canvas') or self.canvas is None:
+            try:
+                import helm_canvas
+                self.canvas = helm_canvas.get_canvas()
+            except Exception:
+                pass
+        if self.canvas:
+            self.canvas.show_artifact(title=title, content=content, content_type=content_type)
 
     def start_listening(self):
         """Initiates voice recording on hotkey press."""
@@ -677,6 +712,9 @@ def __getattr__(name: str):
     if name == 'HelmOmnibar':
         import helm_omnibar
         return helm_omnibar.HelmOmnibar
+    if name == 'HelmCanvas':
+        import helm_canvas
+        return helm_canvas.CanvasController
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 def main():

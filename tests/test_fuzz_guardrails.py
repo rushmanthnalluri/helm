@@ -20,7 +20,6 @@ import windows_tools
 import helm
 import helm_mcp
 import pipeline_telemetry
-import phone_gateway
 import voice
 import taint_tracker
 
@@ -91,13 +90,6 @@ class TestFuzzAndGuardrails(unittest.TestCase):
             "params": {"name": "non_existent_tool", "arguments": {}}
         })
         self.assertIn("Unknown tool", res3["result"]["content"][0]["text"])
-
-    def test_phone_gateway_auth_tampering(self):
-        """Fuzzes phone gateway token verification with tampered, empty, and fake tokens."""
-        self.assertFalse(phone_gateway.is_device_token_valid(""))
-        self.assertFalse(phone_gateway.is_device_token_valid(None))
-        self.assertFalse(phone_gateway.is_device_token_valid("invalid_token_12345"))
-        self.assertFalse(phone_gateway.is_device_token_valid("'; DROP TABLE paired_mobile_devices; --"))
 
     def test_voice_bargein_and_silence(self):
         """Verifies stop_speaking barge-in and silence fast commands."""

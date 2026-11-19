@@ -309,6 +309,27 @@ def try_fast_command(text, caller_id="desktop_user"):
     if not t:
         return False, ""
 
+    # Canvas Fast Commands ("canvas", "open canvas", "close canvas")
+    if t in ('canvas', 'open canvas', 'toggle canvas', 'show canvas'):
+        try:
+            import helm_canvas
+            c = helm_canvas.get_canvas()
+            if c:
+                c.show()
+        except Exception:
+            pass
+        return True, "Side Canvas opened."
+
+    if t in ('close canvas', 'hide canvas'):
+        try:
+            import helm_canvas
+            c = helm_canvas.get_canvas()
+            if c:
+                c.hide()
+        except Exception:
+            pass
+        return True, "Side Canvas hidden."
+
     # Note: Pairing ceremony was deliberately removed from voice/fast-command processing
     # to prevent acoustic injection attacks (e.g. ambient video/speech triggering enrollment).
     # Mobile pairing requires local physical presence: Ctrl+Alt+P or Console HUD.
