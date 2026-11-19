@@ -1,6 +1,6 @@
-import sys
+﻿import sys
 import time
-sys.path.insert(0, r'd:\homie')
+sys.path.insert(0, r'd:\helm')
 
 import uiautomation as auto
 import windows_tools

@@ -1,4 +1,4 @@
-$desktop = [Environment]::GetFolderPath('Desktop')
+﻿$desktop = [Environment]::GetFolderPath('Desktop')
 $wsh = New-Object -ComObject WScript.Shell
 $shortcutPath = Join-Path $desktop "Helm.lnk"
 $shortcut = $wsh.CreateShortcut($shortcutPath)
@@ -13,10 +13,10 @@ if ($null -ne $pythonCmd) {
 
 $shortcut.TargetPath = $pythonExe
 $shortcut.Arguments = "app.py"
-$shortcut.WorkingDirectory = "D:\homie"
+$shortcut.WorkingDirectory = "D:\helm"
 $shortcut.Description = "Launch Helm AI Workstation Assistant"
 
-$iconPath = "D:\homie\ui\AppIcon.ico"
+$iconPath = "D:\helm\ui\AppIcon.ico"
 if (Test-Path $iconPath) {
     $shortcut.IconLocation = "$iconPath,0"
 }

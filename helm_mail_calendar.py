@@ -1,4 +1,4 @@
-"""helm_mail_calendar.py - Tier B: Mail and Calendar Workflows with Anti-Exfiltration Recipient Policy.
+﻿"""helm_mail_calendar.py - Tier B: Mail and Calendar Workflows with Anti-Exfiltration Recipient Policy.
 
 Key Architecture:
 1. Mail & Calendar Connectors:
@@ -54,8 +54,8 @@ def get_config_dir() -> str:
     env_dir = os.environ.get("HELM_CONFIG_DIR")
     if env_dir:
         return env_dir
-    if os.path.isdir(r"d:\homie\config"):
-        return r"d:\homie\config"
+    if os.path.isdir(r"d:\helm\config"):
+        return r"d:\helm\config"
     config_dir = os.path.join(BASE_DIR, "config")
     os.makedirs(config_dir, exist_ok=True)
     return config_dir
@@ -64,7 +64,7 @@ def get_config_dir() -> str:
 def ensure_settings_file() -> str:
     """Ensures config/settings.yaml exists with default mail_provider: 'mock'."""
     candidate_paths = [
-        r"d:\homie\config\settings.yaml",
+        r"d:\helm\config\settings.yaml",
         os.path.join(BASE_DIR, "config", "settings.yaml")
     ]
     created = None
@@ -84,7 +84,7 @@ def ensure_settings_file() -> str:
 def load_settings() -> Dict[str, Any]:
     """Loads configuration dictionary from settings.yaml."""
     ensure_settings_file()
-    for p in [r"d:\homie\config\settings.yaml", os.path.join(BASE_DIR, "config", "settings.yaml")]:
+    for p in [r"d:\helm\config\settings.yaml", os.path.join(BASE_DIR, "config", "settings.yaml")]:
         if os.path.exists(p):
             try:
                 with open(p, "r", encoding="utf-8") as f:
@@ -111,8 +111,8 @@ def get_google_token_path() -> str:
     env_path = os.environ.get("HELM_GOOGLE_TOKEN_PATH")
     if env_path:
         return env_path
-    if os.path.isdir(r"d:\homie\config"):
-        return r"d:\homie\config\google_token.json"
+    if os.path.isdir(r"d:\helm\config"):
+        return r"d:\helm\config\google_token.json"
     return os.path.join(BASE_DIR, "config", "google_token.json")
 
 
@@ -148,8 +148,8 @@ def get_ms_token_path() -> str:
     env_path = os.environ.get("HELM_MS_TOKEN_PATH")
     if env_path:
         return env_path
-    if os.path.isdir(r"d:\homie\config"):
-        return r"d:\homie\config\ms_token.json"
+    if os.path.isdir(r"d:\helm\config"):
+        return r"d:\helm\config\ms_token.json"
     return os.path.join(BASE_DIR, "config", "ms_token.json")
 
 
@@ -236,8 +236,8 @@ def get_gmail_service(
             os.path.join(os.path.dirname(token_path), "google_credentials.json"),
             os.path.join(BASE_DIR, "config", "credentials.json"),
             os.path.join(BASE_DIR, "config", "google_credentials.json"),
-            r"d:\homie\config\credentials.json",
-            r"d:\homie\config\google_credentials.json",
+            r"d:\helm\config\credentials.json",
+            r"d:\helm\config\google_credentials.json",
         ]
         found_cred = next((c for c in candidates if c and os.path.exists(c)), None)
         if found_cred:
@@ -483,7 +483,7 @@ class RecipientPolicyValidator:
 
         # 2. BCC verification: BCC is denied unless explicitly authorized
         if msg.bcc:
-            warnings.append("⚠️ BCC RECIPIENTS DETECTED: Outbound BCC requires explicit mobile phone confirmation.")
+            warnings.append("âš ï¸ BCC RECIPIENTS DETECTED: Outbound BCC requires explicit mobile phone confirmation.")
 
         # 3. Phishing vector check: if replying, verify From vs Reply-To
         if thread_view and thread_view.reply_to_address:
@@ -492,7 +492,7 @@ class RecipientPolicyValidator:
             if reply_to != from_addr:
                 metadata["reply_to_mismatch"] = True
                 warnings.append(
-                    f"⚠️ PHISHING WARNING: Message Reply-To ({reply_to}) differs from sender From ({from_addr})."
+                    f"âš ï¸ PHISHING WARNING: Message Reply-To ({reply_to}) differs from sender From ({from_addr})."
                 )
 
         # 4. Recipient allowlisting against thread participants + contacts
@@ -508,12 +508,12 @@ class RecipientPolicyValidator:
         for a in all_recipients:
             if a.address not in allowed_recips:
                 new_recipients.append(a.address)
-                warnings.append(f"⚠️ NEW RECIPIENT: '{a.address}' is outside the verified thread/contacts allowlist.")
+                warnings.append(f"âš ï¸ NEW RECIPIENT: '{a.address}' is outside the verified thread/contacts allowlist.")
 
             # Lookalike / Homoglyph / Punycode domain check
             if a.punycode != a.address:
                 metadata["flagged_domains"].append(a.punycode)
-                warnings.append(f"⚠️ IDN / PUNYCODE DOMAIN: Address '{a.address}' resolves to punycode '{a.punycode}'.")
+                warnings.append(f"âš ï¸ IDN / PUNYCODE DOMAIN: Address '{a.address}' resolves to punycode '{a.punycode}'.")
 
         metadata["new_recipients"] = new_recipients
         return True, warnings, metadata

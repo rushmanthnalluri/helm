@@ -1,4 +1,4 @@
-"""helm_plugins.py - 1-Click Community Extension Hub & Package Manager for Helm.
+﻿"""helm_plugins.py - 1-Click Community Extension Hub & Package Manager for Helm.
 
 Provides a unified plugin package manager and execution runtime for Helm:
 - Plugin Manifest Specification: 'manifest.json' defining id, name, version, capabilities, tools, author.
@@ -265,8 +265,8 @@ def _find_bundled_plugin_dir(plugin_id: str) -> Optional[Path]:
     candidates = [
         Path(BASE_DIR) / "plugins" / plugin_id,
         Path(BASE_DIR) / "plugins" / ("spotify" if "spotify" in plugin_id else plugin_id),
-        Path("D:/homie/plugins") / plugin_id,
-        Path("D:/homie/plugins") / ("spotify" if "spotify" in plugin_id else plugin_id),
+        Path("D:/helm/plugins") / plugin_id,
+        Path("D:/helm/plugins") / ("spotify" if "spotify" in plugin_id else plugin_id),
     ]
     for cand in candidates:
         if cand.exists() and cand.is_dir():
@@ -428,8 +428,8 @@ def _resolve_callable(plugin_id: str, py_callable: str, plugin_dir: Optional[str
         get_plugins_dir() / plugin_id,
         Path(BASE_DIR) / "plugins" / plugin_id,
         Path(BASE_DIR) / "plugins" / ("spotify" if "spotify" in plugin_id else plugin_id),
-        Path("D:/homie/plugins") / plugin_id,
-        Path("D:/homie/plugins") / ("spotify" if "spotify" in plugin_id else plugin_id),
+        Path("D:/helm/plugins") / plugin_id,
+        Path("D:/helm/plugins") / ("spotify" if "spotify" in plugin_id else plugin_id),
     ])
 
     py_path: Optional[Path] = None

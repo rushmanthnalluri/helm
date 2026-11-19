@@ -1,7 +1,7 @@
-import subprocess
+﻿import subprocess
 import time
 import sys
-sys.path.insert(0, r'd:\homie')
+sys.path.insert(0, r'd:\helm')
 import windows_tools
 
 print("Attempting to launch WhatsApp via start whatsapp: ...")

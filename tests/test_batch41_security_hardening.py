@@ -1,4 +1,4 @@
-"""tests/test_batch41_security_hardening.py - Batch 41 Security & Architectural Split Test Suite.
+﻿"""tests/test_batch41_security_hardening.py - Batch 41 Security & Architectural Split Test Suite.
 
 Verifies:
 1. Verified mobile signature strictly required when hardware device is enrolled (no local bypass).
@@ -193,7 +193,7 @@ class TestBatch41SecurityHardening(unittest.TestCase):
         actuator = helm_supervisor.SupervisorActuator(sup)
 
         # Mock get_window_under_point to return a window whose title is spoofed ("Notepad")
-        # but whose exe_path resides inside D:\homie (BASE_DIR)
+        # but whose exe_path resides inside D:\helm (BASE_DIR)
         spoofed_window_info = {
             "pid": 99999,
             "proc_name": "python.exe",

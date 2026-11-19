@@ -1,5 +1,5 @@
-import sys
-sys.path.insert(0, r'd:\homie')
+﻿import sys
+sys.path.insert(0, r'd:\helm')
 
 import uiautomation as auto
 import windows_tools

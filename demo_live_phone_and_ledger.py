@@ -1,4 +1,4 @@
-"""demo_live_phone_and_ledger.py - Live Real Phone Approval Flow with Unannotated Ledger Lines.
+﻿"""demo_live_phone_and_ledger.py - Live Real Phone Approval Flow with Unannotated Ledger Lines.
 
 Demonstrates end-to-end:
 1. Workstation session tainted by untrusted external content.
@@ -17,7 +17,7 @@ import hashlib
 from Crypto.PublicKey import ECC
 from Crypto.Signature import eddsa
 
-BASE_DIR = r"D:\homie"
+BASE_DIR = r"D:\helm"
 sys.path.insert(0, BASE_DIR)
 
 import taint_tracker
