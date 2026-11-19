@@ -1,0 +1,50 @@
+{
+  "id": "docker-ops",
+  "name": "Docker Container & Compose Manager",
+  "version": "1.0.1",
+  "description": "Inspect containers, stream logs, restart unhealthy services, and manage compose stacks.",
+  "author": "Helm Community",
+  "category": "DevOps",
+  "capabilities": ["process:docker"],
+  "tools": [
+    {
+      "name": "docker_ps",
+      "description": "List Docker containers.",
+      "python_callable": "plugin:docker_ps",
+      "args_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "docker_logs",
+      "description": "Get container logs.",
+      "python_callable": "plugin:docker_logs",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "container_id": {
+            "type": "string",
+            "description": "Container ID or name"
+          }
+        },
+        "required": ["container_id"]
+      }
+    },
+    {
+      "name": "docker_restart_container",
+      "description": "Restart a container.",
+      "python_callable": "plugin:docker_restart_container",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "container_id": {
+            "type": "string",
+            "description": "Container ID or name"
+          }
+        },
+        "required": ["container_id"]
+      }
+    }
+  ]
+}

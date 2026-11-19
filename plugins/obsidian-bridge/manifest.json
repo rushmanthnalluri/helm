@@ -1,0 +1,56 @@
+{
+  "id": "obsidian-bridge",
+  "name": "Obsidian Vault Bridge",
+  "version": "1.3.0",
+  "description": "Read, search, backlink, and append daily notes directly inside your local Obsidian vault.",
+  "author": "Helm Community",
+  "category": "Notes",
+  "capabilities": ["filesystem:read_write"],
+  "tools": [
+    {
+      "name": "obsidian_search_notes",
+      "description": "Search Obsidian notes by title or content.",
+      "python_callable": "plugin:obsidian_search_notes",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Search term or note title"
+          }
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "obsidian_append_daily",
+      "description": "Append note or action item to daily log.",
+      "python_callable": "plugin:obsidian_append_daily",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "Text content to append"
+          }
+        },
+        "required": ["content"]
+      }
+    },
+    {
+      "name": "obsidian_get_backlinks",
+      "description": "Get backlinks for note.",
+      "python_callable": "plugin:obsidian_get_backlinks",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "note_name": {
+            "type": "string",
+            "description": "Name of the target note"
+          }
+        },
+        "required": ["note_name"]
+      }
+    }
+  ]
+}

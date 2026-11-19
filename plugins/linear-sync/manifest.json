@@ -1,0 +1,58 @@
+{
+  "id": "linear-sync",
+  "name": "Linear Project Sync",
+  "version": "1.0.4",
+  "description": "Two-way sync of personal tasks, action items, bug reports, and roadmap milestones.",
+  "author": "Helm Community",
+  "category": "Productivity",
+  "capabilities": ["network:api.linear.app"],
+  "tools": [
+    {
+      "name": "linear_create_issue",
+      "description": "Create a new issue in Linear.",
+      "python_callable": "plugin:linear_create_issue",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Issue title"
+          },
+          "description": {
+            "type": "string",
+            "description": "Issue markdown description"
+          }
+        },
+        "required": ["title"]
+      }
+    },
+    {
+      "name": "linear_my_issues",
+      "description": "List issues assigned to me.",
+      "python_callable": "plugin:linear_my_issues",
+      "args_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    {
+      "name": "linear_update_state",
+      "description": "Update issue status.",
+      "python_callable": "plugin:linear_update_state",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "issue_id": {
+            "type": "string",
+            "description": "Issue ID"
+          },
+          "state": {
+            "type": "string",
+            "description": "New state name ('In Progress', 'Done', etc.)"
+          }
+        },
+        "required": ["issue_id", "state"]
+      }
+    }
+  ]
+}

@@ -55,6 +55,27 @@ class ToolSpec:
         return self.capability_tier
 
 
+PLUGIN_TOOL_REGISTRY: dict[str, dict[str, Any]] = {}
+
+
+def register_plugin_tool(plugin_id: str, tool_entry: dict[str, Any]) -> None:
+    """Registers a community plugin tool into the active plugin tool registry."""
+    tool_name = tool_entry.get("name", "")
+    if tool_name:
+        PLUGIN_TOOL_REGISTRY[tool_name] = tool_entry
+
+
+def unregister_plugin_tools(plugin_id: str) -> None:
+    """Removes all plugin tools associated with a specific plugin_id."""
+    pid = plugin_id.strip().lower()
+    to_delete = [
+        k for k, v in PLUGIN_TOOL_REGISTRY.items()
+        if v.get("plugin_id", "").strip().lower() == pid
+    ]
+    for k in to_delete:
+        del PLUGIN_TOOL_REGISTRY[k]
+
+
 class ToolRegistry:
     """Registry that accepts read-only tools and validates all arguments."""
 
@@ -74,7 +95,7 @@ class ToolRegistry:
 
     def schemas(self) -> list[dict[str, Any]]:
         """OpenAI-compatible function schemas for the model request."""
-        return [
+        base_schemas = [
             {
                 "type": "function",
                 "function": {
@@ -85,6 +106,17 @@ class ToolRegistry:
             }
             for tool in self._tools.values()
         ]
+        for name, ptool in PLUGIN_TOOL_REGISTRY.items():
+            params = ptool.get("parameters") or ptool.get("args_schema") or {"type": "object", "properties": {}}
+            base_schemas.append({
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": ptool.get("description", f"Plugin tool '{name}'"),
+                    "parameters": params,
+                },
+            })
+        return base_schemas
 
     def execute(
         self,
@@ -97,6 +129,12 @@ class ToolRegistry:
             return {"ok": False, "error": "The tool registry is closed."}
         tool = self._tools.get(name)
         if tool is None:
+            if name in PLUGIN_TOOL_REGISTRY:
+                ptool = PLUGIN_TOOL_REGISTRY[name]
+                pid = ptool.get("plugin_id", "")
+                import helm_plugins
+                args = arguments if isinstance(arguments, dict) else {}
+                return helm_plugins.execute_plugin_tool(pid, name, **args)
             return {"ok": False, "error": f"Tool '{name}' is not available."}
         error = _validate_arguments(tool.parameters, arguments)
         if error:

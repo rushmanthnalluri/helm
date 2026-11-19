@@ -1,0 +1,66 @@
+{
+  "id": "github-pr-tracker",
+  "name": "GitHub PR & Issues Tracker",
+  "version": "1.1.0",
+  "description": "Stream review requests, summarize diffs, track CI/CD checks and open issues.",
+  "author": "Helm Community",
+  "category": "Developer Tools",
+  "capabilities": ["network:api.github.com"],
+  "tools": [
+    {
+      "name": "github_list_prs",
+      "description": "List open pull requests for a repository or user.",
+      "python_callable": "plugin:github_list_prs",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "repo": {
+            "type": "string",
+            "description": "Repository in 'owner/repo' format"
+          },
+          "state": {
+            "type": "string",
+            "description": "PR state ('open', 'closed', 'all')"
+          }
+        }
+      }
+    },
+    {
+      "name": "github_review_diff",
+      "description": "Review PR diff and changed files.",
+      "python_callable": "plugin:github_review_diff",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "repo": {
+            "type": "string",
+            "description": "Repository in 'owner/repo' format"
+          },
+          "pr_id": {
+            "type": "integer",
+            "description": "Pull Request number"
+          }
+        },
+        "required": ["pr_id"]
+      }
+    },
+    {
+      "name": "github_ci_status",
+      "description": "Check CI status for branch or commit ref.",
+      "python_callable": "plugin:github_ci_status",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "repo": {
+            "type": "string",
+            "description": "Repository in 'owner/repo' format"
+          },
+          "ref": {
+            "type": "string",
+            "description": "Branch name or commit SHA"
+          }
+        }
+      }
+    }
+  ]
+}
