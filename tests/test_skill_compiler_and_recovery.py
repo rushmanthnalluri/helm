@@ -25,7 +25,6 @@ import skill_compiler
 import key_recovery
 import log_redactor
 import crypto_vault
-import phone_approval_portal
 
 
 class TestSkillCompilerAndRecovery(unittest.TestCase):
@@ -42,7 +41,7 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
         kill_switch._ENGAGED_REASON = ""
         taint_tracker.clear_all_taints()
         action_broker._GLOBAL_BROKER = None
-        from tests.phone_testing_keys import enroll_test_device, mint_test_action_approval
+        from helm.core.testing_keys import enroll_test_device, mint_test_action_approval
         self.phone_priv, self.phone_pub = enroll_test_device("primary_phone")
         self.mint_test_action_approval = mint_test_action_approval
 
@@ -61,7 +60,7 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
         kill_switch._ENGAGED_REASON = ""
         taint_tracker.clear_all_taints()
         action_broker._GLOBAL_BROKER = None
-        from tests.phone_testing_keys import enroll_test_device, mint_test_action_approval
+        from helm.core.testing_keys import enroll_test_device, mint_test_action_approval
         self.phone_priv, self.phone_pub = enroll_test_device("primary_phone")
         self.mint_test_action_approval = mint_test_action_approval
 

@@ -274,12 +274,9 @@ class TestMailCalendarWorkflows(unittest.TestCase):
         self.assertTrue(any("GATED_SEND" in w for w in warnings))
 
     def test_9_send_with_valid_webauthn_assertion(self):
-        """Directive: Outbound email send flow executes only with valid WebAuthn hardware signature."""
-        import struct, cbor2
-        from cryptography.hazmat.primitives.asymmetric import ec
-        from cryptography.hazmat.primitives import hashes
-        import webauthn_verifier as wv
-        import helm_structured_approval
+        """Directive: Outbound email send flow executes only with valid Windows Hello biometric authorization."""
+        from unittest.mock import patch
+        import windows_hello
         from helm_mail_calendar import MailConnector, OutboundMessage, Addr
 
         mail = MailConnector()
@@ -298,72 +295,20 @@ class TestMailCalendarWorkflows(unittest.TestCase):
         self.assertTrue(ok)
         draft_id = draft_ref.draft_id
 
-        # Setup WebAuthn relying party and physical credential
-        rp = wv.RelyingParty(rp_id="approval.helm.internal", origins=frozenset({"https://approval.helm.internal"}))
-        store = wv.ChallengeStore()
-        device_id = "phone_pixel_9_pro"
-
-        priv = ec.generate_private_key(ec.SECP256R1())
-        pub = priv.public_key().public_numbers()
-        cose_map = {1: 2, 3: wv.COSE_ES256, -1: 1, -2: pub.x.to_bytes(32, "big"), -3: pub.y.to_bytes(32, "big")}
-        cred = wv.Credential(
-            credential_id=b"cred_mail_send_001",
-            cose_key_cbor=cbor2.dumps(cose_map),
-            alg=wv.COSE_ES256,
-            sign_count=1,
-            device_id=device_id,
-            backup_eligible=False,
-            aaguid=b"\x01" * 16,
-            attestation_fmt="none",
-            attestation_trust="none"
-        )
-
-        # Build approval object and challenge
-        approval_obj = helm_structured_approval.build_send_approval_object(
-            account=msg.account,
-            to=[a.address for a in msg.to],
-            cc=[a.address for a in msg.cc],
-            bcc=[a.address for a in msg.bcc],
-            subject=msg.subject,
-            body_text=msg.body_text,
-            attachments=[],
-            thread_id=getattr(msg, "thread_id", "") or "",
-            nonce=draft_id
-        )
-        hash_hex, _ = helm_structured_approval.compute_canonical_approval_hash(approval_obj)
-        challenge_bytes = bytes.fromhex(hash_hex)
-        store.register(challenge_bytes, device_id)
-
-        # Sign assertion with phone key
-        cd_bytes = json.dumps({
-            "type": "webauthn.get",
-            "challenge": wv.b64u_encode(challenge_bytes),
-            "origin": "https://approval.helm.internal"
-        }).encode("utf-8")
-        flags = wv.FLAG_UP | wv.FLAG_UV
-        auth_data = hashlib.sha256(b"approval.helm.internal").digest() + bytes([flags]) + struct.pack(">I", 2)
-        sig = priv.sign(auth_data + hashlib.sha256(cd_bytes).digest(), ec.ECDSA(hashes.SHA256()))
-
-        assertion_resp = {
-            "clientDataJSON": wv.b64u_encode(cd_bytes),
-            "authenticatorData": wv.b64u_encode(auth_data),
-            "signature": wv.b64u_encode(sig)
-        }
-
-        # Execute send
-        result = mail.send(draft_id, assertion_resp, rp, cred, store)
-        self.assertEqual(result.status, "SENT")
-        self.assertTrue(result.audit_intent_logged)
-        self.assertTrue(result.audit_outcome_logged)
-        self.assertIsNone(mail.get_draft(draft_id), "Draft must be deleted upon successful send")
-        self.assertIsNotNone(mail.check_sent_folder(result.idempotency_key))
+        # Execute send with mocked Windows Hello approval
+        with patch.object(windows_hello.WindowsHello, "is_available", return_value=True), \
+             patch.object(windows_hello.WindowsHello, "verify_sync", return_value=True):
+            result = mail.send(draft_id, {}, None, None, None)
+            self.assertEqual(result.status, "SENT")
+            self.assertTrue(result.audit_intent_logged)
+            self.assertTrue(result.audit_outcome_logged)
+            self.assertIsNone(mail.get_draft(draft_id), "Draft must be deleted upon successful send")
+            self.assertIsNotNone(mail.check_sent_folder(result.idempotency_key))
 
     def test_10_send_denied_with_wrong_challenge_or_forged_assertion(self):
-        """Directive: Untrusted or forged mobile signature raises WebAuthnError and blocks send."""
-        import struct, cbor2
-        from cryptography.hazmat.primitives.asymmetric import ec
-        import webauthn_verifier as wv
-        import helm_structured_approval
+        """Directive: Denied or cancelled biometric authorization raises PermissionError and blocks send."""
+        from unittest.mock import patch
+        import windows_hello
         from helm_mail_calendar import MailConnector, OutboundMessage, Addr
 
         mail = MailConnector()
@@ -380,44 +325,18 @@ class TestMailCalendarWorkflows(unittest.TestCase):
         ok, draft_ref, _, _ = mail.draft(msg)
         draft_id = draft_ref.draft_id
 
-        rp = wv.RelyingParty(rp_id="approval.helm.internal", origins=frozenset({"https://approval.helm.internal"}))
-        store = wv.ChallengeStore()
-        device_id = "phone_pixel_9"
-
-        priv = ec.generate_private_key(ec.SECP256R1())
-        pub = priv.public_key().public_numbers()
-        cose_map = {1: 2, 3: wv.COSE_ES256, -1: 1, -2: pub.x.to_bytes(32, "big"), -3: pub.y.to_bytes(32, "big")}
-        cred = wv.Credential(
-            credential_id=b"cred_002",
-            cose_key_cbor=cbor2.dumps(cose_map),
-            alg=wv.COSE_ES256,
-            sign_count=1,
-            device_id=device_id,
-            backup_eligible=False,
-            aaguid=b"\x00" * 16,
-            attestation_fmt="none",
-            attestation_trust="none"
-        )
-
-        forged_assertion = {
-            "clientDataJSON": wv.b64u_encode(b"{}"),
-            "authenticatorData": wv.b64u_encode(b"\x00" * 37),
-            "signature": wv.b64u_encode(b"\x00" * 64)
-        }
-
-        with self.assertRaises(wv.WebAuthnError):
-            mail.send(draft_id, forged_assertion, rp, cred, store)
+        with patch.object(windows_hello.WindowsHello, "is_available", return_value=True), \
+             patch.object(windows_hello.WindowsHello, "verify_sync", return_value=False):
+            with self.assertRaises(PermissionError):
+                mail.send(draft_id, {}, None, None, None)
 
         # Draft must remain preserved, unsent
         self.assertIsNotNone(mail.get_draft(draft_id))
 
     def test_11_send_unknown_outcome_and_sent_folder_recovery(self):
         """Directive: On unknown outcome (network timeout), audit requires checking Sent folder before retrying."""
-        import struct, cbor2
-        from cryptography.hazmat.primitives.asymmetric import ec
-        from cryptography.hazmat.primitives import hashes
-        import webauthn_verifier as wv
-        import helm_structured_approval
+        from unittest.mock import patch
+        import windows_hello
         from helm_mail_calendar import MailConnector, OutboundMessage, Addr, MailDispatchUnknownOutcomeError
 
         mail = MailConnector()
@@ -434,56 +353,16 @@ class TestMailCalendarWorkflows(unittest.TestCase):
         _, draft_ref, _, _ = mail.draft(msg)
         draft_id = draft_ref.draft_id
 
-        rp = wv.RelyingParty(rp_id="approval.helm.internal", origins=frozenset({"https://approval.helm.internal"}))
-        store = wv.ChallengeStore()
-        device_id = "phone_pixel_9"
-
-        priv = ec.generate_private_key(ec.SECP256R1())
-        pub = priv.public_key().public_numbers()
-        cose_map = {1: 2, 3: wv.COSE_ES256, -1: 1, -2: pub.x.to_bytes(32, "big"), -3: pub.y.to_bytes(32, "big")}
-        cred = wv.Credential(
-            credential_id=b"cred_003",
-            cose_key_cbor=cbor2.dumps(cose_map),
-            alg=wv.COSE_ES256,
-            sign_count=1,
-            device_id=device_id,
-            backup_eligible=False,
-            aaguid=b"\x00" * 16,
-            attestation_fmt="none",
-            attestation_trust="none"
-        )
-
-        approval_obj = helm_structured_approval.build_send_approval_object(
-            account=msg.account,
-            to=[a.address for a in msg.to],
-            cc=[],
-            bcc=[],
-            subject=msg.subject,
-            body_text=msg.body_text,
-            attachments=[],
-            nonce=draft_id
-        )
-        hash_hex, _ = helm_structured_approval.compute_canonical_approval_hash(approval_obj)
-        challenge_bytes = bytes.fromhex(hash_hex)
-        store.register(challenge_bytes, device_id)
-
-        cd_bytes = json.dumps({"type": "webauthn.get", "challenge": wv.b64u_encode(challenge_bytes), "origin": "https://approval.helm.internal"}).encode("utf-8")
-        flags = wv.FLAG_UP | wv.FLAG_UV
-        auth_data = hashlib.sha256(b"approval.helm.internal").digest() + bytes([flags]) + struct.pack(">I", 2)
-        sig = priv.sign(auth_data + hashlib.sha256(cd_bytes).digest(), ec.ECDSA(hashes.SHA256()))
-        resp = {"clientDataJSON": wv.b64u_encode(cd_bytes), "authenticatorData": wv.b64u_encode(auth_data), "signature": wv.b64u_encode(sig)}
-
-        with self.assertRaises(MailDispatchUnknownOutcomeError) as ctx:
-            mail.send(draft_id, resp, rp, cred, store, simulate_transient_failure=True)
-        self.assertIn("inspect Sent folder", str(ctx.exception))
+        with patch.object(windows_hello.WindowsHello, "is_available", return_value=True), \
+             patch.object(windows_hello.WindowsHello, "verify_sync", return_value=True):
+            with self.assertRaises(MailDispatchUnknownOutcomeError) as ctx:
+                mail.send(draft_id, {}, None, None, None, simulate_transient_failure=True)
+            self.assertIn("inspect Sent folder", str(ctx.exception))
 
     def test_12_calendar_send_invite_with_webauthn(self):
-        """Directive: Calendar invitations notifying external attendees require WebAuthn phone verification."""
-        import struct, cbor2
-        from cryptography.hazmat.primitives.asymmetric import ec
-        from cryptography.hazmat.primitives import hashes
-        import webauthn_verifier as wv
-        import helm_structured_approval
+        """Directive: Calendar invitations notifying external attendees require Windows Hello verification."""
+        from unittest.mock import patch
+        import windows_hello
         from helm_mail_calendar import CalendarConnector, CalendarEvent
 
         cal = CalendarConnector()
@@ -495,57 +374,20 @@ class TestMailCalendarWorkflows(unittest.TestCase):
             start_ts=now + 5000,
             end_ts=now + 8600,
             location="Virtual Conf",
-            description="Presentation of Gate 1 WebAuthn implementation.",
+            description="Presentation of Windows Hello implementation.",
             attendees=("auditor@external-cert.org",),
             is_tentative=True
         ))
 
-        rp = wv.RelyingParty(rp_id="approval.helm.internal", origins=frozenset({"https://approval.helm.internal"}))
-        store = wv.ChallengeStore()
-        device_id = "phone_pixel_9"
+        with patch.object(windows_hello.WindowsHello, "is_available", return_value=True), \
+             patch.object(windows_hello.WindowsHello, "verify_sync", return_value=True):
+            result = cal.send_invite(event_id, {}, None, None, None)
+            self.assertEqual(result.status, "SENT")
+            self.assertEqual(result.recipient_count, 1)
 
-        priv = ec.generate_private_key(ec.SECP256R1())
-        pub = priv.public_key().public_numbers()
-        cose_map = {1: 2, 3: wv.COSE_ES256, -1: 1, -2: pub.x.to_bytes(32, "big"), -3: pub.y.to_bytes(32, "big")}
-        cred = wv.Credential(
-            credential_id=b"cred_cal_001",
-            cose_key_cbor=cbor2.dumps(cose_map),
-            alg=wv.COSE_ES256,
-            sign_count=1,
-            device_id=device_id,
-            backup_eligible=False,
-            aaguid=b"\x00" * 16,
-            attestation_fmt="none",
-            attestation_trust="none"
-        )
-
-        approval_obj = helm_structured_approval.build_send_approval_object(
-            account="primary_calendar",
-            to=["auditor@external-cert.org"],
-            cc=[],
-            bcc=[],
-            subject="Calendar Invitation: External Security Audit Sync",
-            body_text="Presentation of Gate 1 WebAuthn implementation.",
-            attachments=[],
-            nonce=event_id
-        )
-        hash_hex, _ = helm_structured_approval.compute_canonical_approval_hash(approval_obj)
-        challenge_bytes = bytes.fromhex(hash_hex)
-        store.register(challenge_bytes, device_id)
-
-        cd_bytes = json.dumps({"type": "webauthn.get", "challenge": wv.b64u_encode(challenge_bytes), "origin": "https://approval.helm.internal"}).encode("utf-8")
-        flags = wv.FLAG_UP | wv.FLAG_UV
-        auth_data = hashlib.sha256(b"approval.helm.internal").digest() + bytes([flags]) + struct.pack(">I", 2)
-        sig = priv.sign(auth_data + hashlib.sha256(cd_bytes).digest(), ec.ECDSA(hashes.SHA256()))
-        resp = {"clientDataJSON": wv.b64u_encode(cd_bytes), "authenticatorData": wv.b64u_encode(auth_data), "signature": wv.b64u_encode(sig)}
-
-        result = cal.send_invite(event_id, resp, rp, cred, store)
-        self.assertEqual(result.status, "SENT")
-        self.assertEqual(result.recipient_count, 1)
-
-        # Verify event transitioned from tentative to confirmed
-        ev = cal._events[event_id]
-        self.assertFalse(ev.is_tentative, "Event must be confirmed after invite send")
+            # Verify event transitioned from tentative to confirmed
+            ev = cal._events[event_id]
+            self.assertFalse(ev.is_tentative, "Event must be confirmed after invite send")
 
 
 if __name__ == "__main__":

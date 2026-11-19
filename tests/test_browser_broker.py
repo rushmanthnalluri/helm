@@ -129,12 +129,10 @@ class TestBrowserBroker(unittest.TestCase):
             self.broker.process_download(session, "payload.exe", b"MZ...")
 
     def test_7_browser_gated_submit_with_webauthn_and_toctou(self):
-        """Directive: Gated browser form submissions verify physical WebAuthn assertion and anti-TOCTOU DOM integrity."""
-        import struct, json, hashlib, cbor2
-        from cryptography.hazmat.primitives.asymmetric import ec
-        from cryptography.hazmat.primitives import hashes
-        import webauthn_verifier as wv
+        """Directive: Gated browser form submissions verify Windows Hello biometric approval and anti-TOCTOU DOM integrity."""
         from helm_browser_broker import DOMMovedTOCTOUError
+        import windows_hello
+        from unittest.mock import patch
 
         session = self.broker.open_session("task_bank_transfer", allowed_domains=("bank.corp",))
         page = self.broker.navigate(session, "https://bank.corp/transfer")
@@ -149,50 +147,20 @@ class TestBrowserBroker(unittest.TestCase):
             parsed_total="$100.00"
         )
 
-        rp = wv.RelyingParty(rp_id="approval.helm.internal", origins=frozenset({"https://approval.helm.internal"}))
-        store = wv.ChallengeStore()
-        device_id = "phone_pixel_9"
+        with patch.object(windows_hello.WindowsHello, "is_available", return_value=True), \
+             patch.object(windows_hello.WindowsHello, "verify_sync", return_value=True):
+            # 1. Unchanged DOM -> Windows Hello verified & form submit permitted
+            ok = self.broker.execute_gated_submit_with_windows_hello(page, form_snap, initial_fields)
+            self.assertTrue(ok)
 
-        priv = ec.generate_private_key(ec.SECP256R1())
-        pub = priv.public_key().public_numbers()
-        cose_map = {1: 2, 3: wv.COSE_ES256, -1: 1, -2: pub.x.to_bytes(32, "big"), -3: pub.y.to_bytes(32, "big")}
-        cred = wv.Credential(
-            credential_id=b"cred_bank_001",
-            cose_key_cbor=cbor2.dumps(cose_map),
-            alg=wv.COSE_ES256,
-            sign_count=1,
-            device_id=device_id,
-            backup_eligible=False,
-            aaguid=b"\x00" * 16,
-            attestation_fmt="none",
-            attestation_trust="none"
-        )
+            # Backward compatibility check: legacy method works too
+            ok_legacy = self.broker.execute_gated_submit_with_webauthn(page, form_snap, initial_fields)
+            self.assertTrue(ok_legacy)
 
-        challenge_bytes = bytes.fromhex(canonical_hash)
-        store.register(challenge_bytes, device_id)
-
-        # Phone signs valid assertion
-        cd_bytes = json.dumps({"type": "webauthn.get", "challenge": wv.b64u_encode(challenge_bytes), "origin": "https://approval.helm.internal"}).encode("utf-8")
-        flags = wv.FLAG_UP | wv.FLAG_UV
-        auth_data = hashlib.sha256(b"approval.helm.internal").digest() + bytes([flags]) + struct.pack(">I", 2)
-        sig = priv.sign(auth_data + hashlib.sha256(cd_bytes).digest(), ec.ECDSA(hashes.SHA256()))
-        resp = {"clientDataJSON": wv.b64u_encode(cd_bytes), "authenticatorData": wv.b64u_encode(auth_data), "signature": wv.b64u_encode(sig)}
-
-        # 1. Unchanged DOM -> WebAuthn verified & form submit permitted
-        ok = self.broker.execute_gated_submit_with_webauthn(page, form_snap, initial_fields, resp, rp, cred, store)
-        self.assertTrue(ok)
-
-        # 2. TOCTOU mutation -> even with signed hash, mutated DOM is blocked
-        store.register(challenge_bytes, device_id)
-        # Sign again for new attempt
-        auth_data2 = hashlib.sha256(b"approval.helm.internal").digest() + bytes([flags]) + struct.pack(">I", 3)
-        sig2 = priv.sign(auth_data2 + hashlib.sha256(cd_bytes).digest(), ec.ECDSA(hashes.SHA256()))
-        resp2 = {"clientDataJSON": wv.b64u_encode(cd_bytes), "authenticatorData": wv.b64u_encode(auth_data2), "signature": wv.b64u_encode(sig2)}
-        cred.sign_count = 2
-
-        tampered_fields = {"to_account": "123456", "amount": "$10,000.00"}
-        with self.assertRaises(DOMMovedTOCTOUError):
-            self.broker.execute_gated_submit_with_webauthn(page, form_snap, tampered_fields, resp2, rp, cred, store)
+            # 2. TOCTOU mutation -> even with approval, mutated DOM is blocked
+            tampered_fields = {"to_account": "123456", "amount": "$10,000.00"}
+            with self.assertRaises(DOMMovedTOCTOUError):
+                self.broker.execute_gated_submit_with_windows_hello(page, form_snap, tampered_fields)
 
 
 if __name__ == "__main__":

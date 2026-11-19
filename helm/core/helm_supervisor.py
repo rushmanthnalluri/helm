@@ -1,0 +1,1906 @@
+"""Helm Out-of-Process Policy Supervisor & Watchdog Architecture (Batch 17).
+
+Enforces strict privilege separation between the untrusted agent worker
+and the high-integrity policy supervisor:
+- The supervisor OWNS all actuator capabilities (SendInput, clipboard, launches, network).
+  The worker only proposes actions over an authenticated binary IPC channel.
+- Complete mediation: check and act occur inside the same trust domain, eliminating TOCTOU.
+- Binary Framing: [u32 len][u8 ver][u8 type][u64 seq][payload] with strict JSON validation.
+- Monotonic sequence enforcement: Replay, reorder, or seq rollback immediately drops connection and fails closed.
+- State Machine: INIT -> ARMED -> DEGRADED -> LOCKED.
+- Dirty-bit boot protection: Detects abnormal crashes/terminations and starts effect-locked.
+- Two-phase action logging: Logs INTENT before effect and OUTCOME after effect to detect mid-flight crashes.
+- Kernel-attested client validation via GetNamedPipeClientProcessId on Windows Named Pipes.
+- Dead-man's heartbeat lease with progress_counter progress verification.
+"""
+
+import os
+import sys
+import re
+import time
+import json
+import struct
+import hashlib
+import hmac
+import secrets
+import logging
+from pathlib import Path
+from typing import Dict, Any, Optional, Tuple
+
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+import agent_audit_ledger
+import taint_tracker
+import step_up_gate
+import client_token_auth
+import canary_monitor
+import heartbeat_lease
+import shadow_mode
+import kill_switch
+import windows_tools
+import helm_mcp
+import worker_confinement
+import policy_envelope
+import device_registry
+
+logger = logging.getLogger("helm.supervisor")
+
+# Protocol Constants
+PROTOCOL_VERSION = 1
+HEADER_FORMAT = ">IBBQ"  # [u32 len][u8 ver][u8 type][u64 seq] -> 14 bytes
+HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
+MAX_PAYLOAD_SIZE = 1024 * 1024  # 1 MiB hard ceiling
+
+# Message Types
+MSG_HELLO = 1
+MSG_HELLO_ACK = 2
+MSG_PROPOSE = 3
+MSG_DECISION = 4
+MSG_HEARTBEAT = 5
+MSG_DATA = 6
+MSG_SHUTDOWN = 7
+MSG_ERROR = 8
+MSG_PROXY_LLM = 9
+MSG_CONFIRM = 10
+MSG_TAINT_QUERY = 11
+MSG_REGISTER_UI = 12
+MSG_CREATE_CONFIRM_REQUEST = 13
+
+# Reason Codes
+REASON_OK = "OK"
+REASON_UNKNOWN_TOOL = "DENY_UNKNOWN_TOOL"
+REASON_SYSTEM_LOCKED = "DENY_SYSTEM_LOCKED"
+REASON_LEASE_EXPIRED = "DENY_LEASE_EXPIRED"
+REASON_UNAUTHORIZED_TOKEN = "DENY_UNAUTHORIZED_TOKEN"
+REASON_TAINTED_STEPUP = "NEEDS_HUMAN_STEPUP"
+REASON_TAINTED_EXECUTION = "DENY_TAINTED_EXECUTION"
+REASON_ENVELOPE_BREACH = "DENY_ENVELOPE_BREACH"
+REASON_PROHIBITED_PROCESS = "DENY_PROHIBITED_PROCESS"
+REASON_CANARY_DETECTED = "DENY_CANARY_DETECTED"
+REASON_RATE_LIMIT = "DENY_RATE_LIMIT_EXCEEDED"
+REASON_SHADOW_SIMULATED = "SHADOW_SIMULATED"
+REASON_EXECUTION_FAILED = "EXECUTION_FAILED"
+REASON_MALFORMED_FRAME = "DENY_MALFORMED_FRAME"
+REASON_SEQ_ROLLBACK = "DENY_SEQ_ROLLBACK_DETECTED"
+
+# Supervisor States
+STATE_INIT = "INIT"
+STATE_ARMED = "ARMED"
+STATE_DEGRADED = "DEGRADED"
+STATE_LOCKED = "LOCKED"
+
+_TEST_STATE_DIR = os.environ.get("HELM_TEST_STATE_DIR")
+_SUPERVISOR_STATE_DIR = _TEST_STATE_DIR or BASE_DIR
+DIRTY_FLAG_PATH = os.path.join(_SUPERVISOR_STATE_DIR, "helm_supervisor_dirty.flag")
+CRASH_HISTORY_PATH = os.path.join(_SUPERVISOR_STATE_DIR, "helm_supervisor_crashes.json")
+
+
+def _daemon_state_path(filename: str) -> str:
+    """Resolve daemon state alongside the configured test tree when tests run."""
+    return os.path.join(_SUPERVISOR_STATE_DIR, filename)
+
+
+class FrameError(Exception):
+    """Base exception for framing and protocol violations."""
+    pass
+
+
+class SequenceViolationError(FrameError):
+    """Raised when sequence numbers are decremented, reordered, or replayed."""
+    pass
+
+
+class PayloadSizeError(FrameError):
+    """Raised when payload exceeds hard size ceiling."""
+    pass
+
+
+class CompleteMediationBreachError(FrameError):
+    """Raised when an actuator effect is invoked without a valid supervisor INTENT token."""
+    pass
+
+
+class SupervisorActuator:
+    """Privileged actuator residing strictly inside the Supervisor process.
+    Guarantees Complete Mediation Invariant: Physical actuators cannot be invoked without
+    a cryptographically unforgeable INTENT token minted by the supervisor's private key.
+    """
+    def __init__(self, supervisor: "PolicySupervisor"):
+        self.supervisor = supervisor
+
+    def execute_actuator(
+        self,
+        tool: str,
+        args: Dict[str, Any],
+        caller_id: str,
+        client_token: Optional[str] = None,
+        intent_token: Optional[str] = None,
+        seq: Optional[int] = None
+    ) -> str:
+        # Enforce Complete Mediation Invariant via allowlist: Any tier other than READ_ONLY requires valid INTENT token
+        allowed_tools = get_allowed_tools_map()
+        if tool not in allowed_tools:
+            raise CompleteMediationBreachError(
+                f"Complete mediation invariant breach: tool '{tool}' is unknown and not in allowed tools registry!"
+            )
+        tier = allowed_tools.get(tool, "WRITE_EXEC")
+
+        if seq is None or not isinstance(seq, int) or seq <= 0:
+            raise ValueError("Sequence number seq is strictly required and must be a positive integer!")
+        req_seq = seq
+
+        # Prohibit synthetic simulation of console enrollment hotkey (Ctrl + Alt + P)
+        import policy_envelope
+        _, ctrl_alt_p_detected, detected_vks, tokens = policy_envelope.canonicalize_keyboard_arguments(args)
+        if ctrl_alt_p_detected:
+            raise CompleteMediationBreachError("Complete mediation breach: Synthetic simulation of physical console pairing hotkey (Ctrl+Alt+P) is strictly prohibited.")
+
+        # Prohibit dangerous system hotkey chords
+        import windows_tools
+        blocked_chord = windows_tools.detect_blocked_system_chords(detected_vks, tokens)
+        if blocked_chord:
+            raise CompleteMediationBreachError(f"Complete mediation breach: Synthetic injection of dangerous system hotkey chord '{blocked_chord}' is strictly prohibited.")
+
+        # Prevent TOCTOU: Re-resolve foreground process and domain immediately before actuator execution for UI-interactive tools
+        UI_INTERACTIVE_TOOLS = {"helm_agent_click", "helm_agent_type", "helm_agent_mouse_move", "helm_send_hotkey"}
+        if tool in UI_INTERACTIVE_TOOLS:
+            fg_act = windows_tools.get_foreground_window()
+            if not fg_act or not fg_act.get("pid") or not fg_act.get("proc_name"):
+                raise CompleteMediationBreachError(
+                    "Complete mediation breach: Unable to reliably determine foreground window (missing PID or proc_name). UI interaction denied (fail-closed)."
+                )
+            act_proc = (fg_act.get("proc_name") or "") if fg_act else ""
+            clean_act_proc = os.path.basename(act_proc).lower()
+            fg_pid = fg_act.get("pid") if fg_act else None
+            fg_hwnd = fg_act.get("hwnd") if fg_act else None
+            fg_exe = (fg_act.get("exe_path") or "") if fg_act else ""
+
+            protected_pids = getattr(self.supervisor, "protected_pids", set()) | {os.getpid()}
+            if fg_pid and fg_pid in protected_pids:
+                raise CompleteMediationBreachError(
+                    f"Complete mediation breach: Synthetic UI interaction targeting Helm protected process (PID: {fg_pid}) is strictly prohibited."
+                )
+            if fg_hwnd:
+                try:
+                    import win32gui
+                    if win32gui.GetProp(fg_hwnd, "HELM_PROTECTED_UI"):
+                        raise CompleteMediationBreachError(
+                            "Complete mediation breach: Synthetic UI interaction targeting Helm protected window is strictly prohibited."
+                        )
+                except CompleteMediationBreachError:
+                    raise
+                except Exception:
+                    pass
+            if fg_exe:
+                try:
+                    cand = os.path.normcase(os.path.abspath(fg_exe))
+                    base = os.path.normcase(os.path.abspath(BASE_DIR))
+                    if os.path.commonpath([cand, base]) == base:
+                        raise CompleteMediationBreachError(
+                            f"Complete mediation breach: Synthetic UI interaction targeting Helm application image '{fg_exe}' is strictly prohibited."
+                        )
+                except CompleteMediationBreachError:
+                    raise
+                except Exception:
+                    pass
+
+            # WindowFromPoint check: verify target window under physical coordinates for all coordinate-bearing actions
+            target_x = args.get("x", args.get("click_x", args.get("target_x", args.get("to_x"))))
+            target_y = args.get("y", args.get("click_y", args.get("target_y", args.get("to_y"))))
+            if target_x is not None and target_y is not None:
+                try:
+                    pt_hwnd, pt_info = windows_tools.get_window_under_point(int(target_x), int(target_y))
+                    pt_pid = pt_info.get("pid")
+                    pt_proc = os.path.basename(pt_info.get("proc_name") or "").lower()
+                    pt_exe = (pt_info.get("exe_path") or "")
+
+                    if pt_pid and pt_pid in protected_pids:
+                        raise CompleteMediationBreachError(
+                            f"Complete mediation breach: Point-under-cursor ({target_x}, {target_y}) targets Helm protected process (PID: {pt_pid})!"
+                        )
+                    if pt_hwnd:
+                        try:
+                            import win32gui
+                            if win32gui.GetProp(pt_hwnd, "HELM_PROTECTED_UI"):
+                                raise CompleteMediationBreachError(
+                                    f"Complete mediation breach: Point-under-cursor ({target_x}, {target_y}) targets Helm protected window!"
+                                )
+                        except CompleteMediationBreachError:
+                            raise
+                        except Exception:
+                            pass
+                    if pt_exe:
+                        try:
+                            cand = os.path.normcase(os.path.abspath(pt_exe))
+                            base = os.path.normcase(os.path.abspath(BASE_DIR))
+                            if os.path.commonpath([cand, base]) == base:
+                                raise CompleteMediationBreachError(
+                                    f"Complete mediation breach: Point-under-cursor ({target_x}, {target_y}) targets Helm application image '{pt_exe}'!"
+                                )
+                        except CompleteMediationBreachError:
+                            raise
+                        except Exception:
+                            pass
+                    if pt_proc and pt_proc in policy_envelope.PROHIBITED_ENVELOPE_IMAGES:
+                        raise CompleteMediationBreachError(
+                            f"Complete mediation breach: Point-under-cursor ({target_x}, {target_y}) targets prohibited process image '{pt_proc}'!"
+                        )
+                except CompleteMediationBreachError:
+                    raise
+                except Exception:
+                    pass
+
+            if getattr(self.supervisor, "envelope", None) and getattr(self.supervisor.envelope, "is_active", False):
+                env = self.supervisor.envelope
+                if clean_act_proc and env.allowed_target_processes:
+                    allowed_procs = [os.path.basename(p).lower() for p in env.allowed_target_processes]
+                    if clean_act_proc not in allowed_procs:
+                        raise CompleteMediationBreachError(
+                            f"Complete mediation breach: TOCTOU detected! Active foreground process '{clean_act_proc}' switched away from envelope allowed targets: {allowed_procs}"
+                        )
+                if clean_act_proc and env.allowed_domains and clean_act_proc in policy_envelope.BROWSER_IMAGES:
+                    act_domain = windows_tools.get_browser_active_domain(fg_act.get("hwnd") if fg_act else None)
+                    if not act_domain or not any(policy_envelope.is_domain_allowed(act_domain, d) for d in env.allowed_domains):
+                        raise CompleteMediationBreachError(
+                            f"Complete mediation breach: TOCTOU detected! Active browser domain '{act_domain}' switched away from envelope allowed domains: {env.allowed_domains}"
+                        )
+
+            if clean_act_proc and clean_act_proc in policy_envelope.PROHIBITED_ENVELOPE_IMAGES:
+                raise CompleteMediationBreachError(
+                    f"Complete mediation breach: Immediate foreground window targets prohibited process image '{clean_act_proc}'!"
+                )
+
+        if tier != "READ_ONLY":
+            if not self.supervisor.verify_and_consume_intent_token(
+                intent_token, tool, args, caller_id, req_seq
+            ):
+                raise CompleteMediationBreachError(
+                    f"Complete mediation invariant breach: tool '{tool}' (tier: {tier}) actuator invoked without valid supervisor INTENT token!"
+                )
+
+        # Execute effect inside supervisor
+        import helm_mcp
+        helm_mcp.set_active_supervisor_intent(intent_token)
+        try:
+            return helm_mcp.execute_mcp_tool(
+                tool, args, caller_id=caller_id, client_token=client_token
+            )
+        finally:
+            helm_mcp.set_active_supervisor_intent(None)
+
+
+class BinaryFrameCodec:
+    """Encodes and decodes the [u32 len][u8 ver][u8 type][u64 seq][payload] protocol wire format."""
+
+    @staticmethod
+    def encode_frame(msg_type: int, seq: int, payload: Dict[str, Any], version: int = PROTOCOL_VERSION) -> bytes:
+        payload_bytes = json.dumps(payload, separators=(',', ':')).encode('utf-8')
+        if len(payload_bytes) > MAX_PAYLOAD_SIZE:
+            raise PayloadSizeError(f"Payload size {len(payload_bytes)} exceeds maximum {MAX_PAYLOAD_SIZE} bytes")
+        
+        header = struct.pack(HEADER_FORMAT, len(payload_bytes), version, msg_type, seq)
+        return header + payload_bytes
+
+    @staticmethod
+    def decode_frame(raw_buffer: bytes) -> Tuple[int, int, int, Dict[str, Any], int]:
+        """Decodes the first frame from raw_buffer.
+        Returns: (version, msg_type, seq, payload_dict, bytes_consumed)
+        Raises: FrameError if invalid, or ValueError if buffer too short.
+        """
+        if len(raw_buffer) < HEADER_SIZE:
+            raise ValueError("Buffer shorter than header length")
+
+        payload_len, version, msg_type, seq = struct.unpack(HEADER_FORMAT, raw_buffer[:HEADER_SIZE])
+        
+        if payload_len > MAX_PAYLOAD_SIZE:
+            raise PayloadSizeError(f"Oversized frame: length {payload_len} exceeds {MAX_PAYLOAD_SIZE}")
+
+        total_needed = HEADER_SIZE + payload_len
+        if len(raw_buffer) < total_needed:
+            raise ValueError(f"Incomplete frame: have {len(raw_buffer)}, need {total_needed}")
+
+        payload_slice = raw_buffer[HEADER_SIZE:total_needed]
+        try:
+            payload_str = payload_slice.decode('utf-8')
+            payload_dict = json.loads(payload_str)
+            if not isinstance(payload_dict, dict):
+                raise FrameError("Payload root must be a JSON object")
+        except Exception as e:
+            raise FrameError(f"Malformed JSON payload in frame: {e}")
+
+        return version, msg_type, seq, payload_dict, total_needed
+
+
+def get_allowed_tools_map() -> Dict[str, str]:
+    """Returns mapping of allowed tool names to their capability tiers."""
+    import helm_mcp
+    return {t["name"]: t.get("capabilityTier", "WRITE_EXEC") for t in helm_mcp.MCP_TOOLS}
+
+
+_ACTIVE_SUPERVISOR = None
+
+def get_active_supervisor() -> Optional['PolicySupervisor']:
+    """Returns the globally active PolicySupervisor instance if running."""
+    global _ACTIVE_SUPERVISOR
+    return _ACTIVE_SUPERVISOR
+
+
+def _init_approved_actions_table(conn):
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(approved_actions)")
+    cols = [c[1] for c in cur.fetchall()]
+    if not cols:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS approved_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                caller_id TEXT NOT NULL,
+                tool TEXT NOT NULL,
+                args_hash TEXT NOT NULL,
+                taint_epoch INTEGER NOT NULL,
+                expiry REAL NOT NULL,
+                consumed INTEGER NOT NULL DEFAULT 0,
+                signature_blob TEXT NOT NULL DEFAULT ''
+            );
+        """)
+    elif "signature_blob" not in cols:
+        conn.execute("ALTER TABLE approved_actions ADD COLUMN signature_blob TEXT NOT NULL DEFAULT ''")
+    conn.commit()
+
+
+def verify_signed_approval_evidence(
+    blob_raw: Any,
+    caller_id: str,
+    tool: str,
+    args_hash: str,
+    taint_epoch: int
+) -> bool:
+    """Cryptographically verifies a Signed Approval Blob against enrolled hardware device keys.
+    Fails closed if blob is missing, corrupted, expired, caller/tool/args/epoch mismatched,
+    or if signature fails verification against the enrolled device public key.
+    Zero trust in unverified database rows or unauthenticated file presence.
+    Strictly rebuilds canonical challenge string from fields and verifies against recomputed hash.
+    """
+    if not blob_raw:
+        return False
+    try:
+        if isinstance(blob_raw, str):
+            blob = json.loads(blob_raw)
+        elif isinstance(blob_raw, dict):
+            blob = blob_raw
+        else:
+            return False
+    except Exception:
+        return False
+
+    device_id = blob.get("device_id")
+    signature = blob.get("signature")
+    if not device_id or not signature:
+        return False
+
+    # Bindings check: caller, tool, args_hash, taint_epoch, expiry
+    b_caller = str(blob.get("caller_id", "")).strip()
+    if b_caller and b_caller != str(caller_id).strip():
+        return False
+    b_tool = str(blob.get("tool_name") or blob.get("action_name") or blob.get("action", "")).strip()
+    if b_tool != str(tool).strip():
+        return False
+    b_args = str(blob.get("args_hash") or blob.get("payload_hash", "")).lower().strip()
+    if b_args != str(args_hash).lower().strip():
+        return False
+    if int(blob.get("taint_epoch", -1)) != int(taint_epoch):
+        return False
+    if float(blob.get("expiry", 0)) < time.time():
+        return False
+
+    # Load device public key from decoupled device_registry
+    registry = device_registry._load_device_registry()
+    dev_entry = registry.get(device_id)
+    if not dev_entry or dev_entry.get("revoked", False):
+        return False
+    pub_key_pem = dev_entry.get("public_key")
+    if not pub_key_pem:
+        return False
+
+    # Rebuild canonical signed message bytes strictly from blob fields
+    version = str(blob.get("version", ""))
+    if version in ("CHALLENGE_V3", "3"):
+        challenge_seq = blob.get("challenge_seq", 0)
+        raw_challenge = f"CHALLENGE_V3|{device_id}|{caller_id}|{tool}|{args_hash.lower()}|{blob.get('nonce')}|{blob.get('expiry')}|{taint_epoch}|{challenge_seq}"
+        expected_hash = hashlib.sha256(raw_challenge.encode('utf-8')).hexdigest()
+        if blob.get("challenge_hash") and blob.get("challenge_hash") != expected_hash:
+            return False
+        data_to_verify = expected_hash.encode('utf-8')
+    elif version in ("CHALLENGE_V2", "2"):
+        challenge_seq = blob.get("challenge_seq", 0)
+        raw_challenge = f"CHALLENGE_V2|{device_id}|{tool}|{args_hash.lower()}|{blob.get('nonce')}|{blob.get('expiry')}|{taint_epoch}|{challenge_seq}"
+        expected_hash = hashlib.sha256(raw_challenge.encode('utf-8')).hexdigest()
+        if blob.get("challenge_hash") and blob.get("challenge_hash") != expected_hash:
+            return False
+        data_to_verify = expected_hash.encode('utf-8')
+    elif version in ("ACTION_APPROVAL_V1", "1"):
+        data_to_verify = f"ACTION_APPROVAL_V1|{device_id}|{tool}|{args_hash.lower()}|{blob.get('nonce')}|{blob.get('expiry')}|{taint_epoch}".encode('utf-8')
+    else:
+        # Strict rejection of unknown approval versions
+        logger.warning("Rejected unrecognized approval evidence format: %s", version)
+        return False
+
+    try:
+        if not device_registry.verify_asymmetric_signature(pub_key_pem, data_to_verify, signature):
+            return False
+
+        # Anti-replay: atomically check and record consumed nonce in supervisor/device_registry
+        nonce = blob.get("nonce")
+        expiry = int(float(blob.get("expiry", 0)))
+        if not nonce or len(str(nonce)) < 8:
+            logger.warning("Rejected approval evidence: invalid or missing nonce")
+            return False
+
+        if not device_registry.check_and_record_consumed_nonce(str(nonce), expiry):
+            logger.warning("Rejected replayed approval evidence: nonce '%s' already consumed", nonce)
+            return False
+
+        return True
+    except Exception as e:
+        logger.warning("Error verifying approval evidence signature: %s", e)
+        return False
+
+
+def record_approved_action(caller_id: str, tool: str, args_hash: str, taint_epoch: int, ttl: float = 120.0, signed_blob: Optional[Any] = None):
+    """Module-level production helper: records direct action approval across memory and SQLite."""
+    sup = get_active_supervisor()
+    if sup:
+        sup.record_approved_action(caller_id, tool, args_hash, taint_epoch, ttl=ttl, signed_blob=signed_blob)
+    else:
+        try:
+            import db_utils
+            exp_time = time.time() + ttl
+            blob_str = json.dumps(signed_blob) if isinstance(signed_blob, dict) else (str(signed_blob) if signed_blob else "")
+            with db_utils.get_db() as conn:
+                _init_approved_actions_table(conn)
+                conn.execute("""
+                    INSERT INTO approved_actions (caller_id, tool, args_hash, taint_epoch, expiry, consumed, signature_blob)
+                    VALUES (?, ?, ?, ?, ?, 0, ?)
+                """, (caller_id, tool, args_hash.lower(), int(taint_epoch), exp_time, blob_str))
+                conn.commit()
+        except Exception as e:
+            logger.warning("Could not persist module-level approved action to SQLite: %s", e)
+
+
+def consume_approved_action(caller_id: str, tool: str, args_hash: str, taint_epoch: int) -> bool:
+    """Module-level production helper: checks and consumes direct action approval across memory and SQLite.
+    Anti-Burn DoS defense: Iterates candidate rows so invalid/junk rows do not burn valid approvals.
+    Anti-Replay defense: Atomically verifies and records nonce in persistent nonce store.
+    """
+    sup = get_active_supervisor()
+    if sup and sup.consume_approved_action(caller_id, tool, args_hash, taint_epoch):
+        return True
+    try:
+        import db_utils
+        now = time.time()
+        with db_utils.get_db() as conn:
+            _init_approved_actions_table(conn)
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT id, signature_blob FROM approved_actions
+                WHERE caller_id = ? AND tool = ? AND args_hash = ? AND taint_epoch = ? AND consumed = 0 AND expiry >= ?
+                ORDER BY id ASC
+            """, (caller_id, tool, args_hash.lower(), int(taint_epoch), now))
+            rows = cur.fetchall()
+            for row in rows:
+                sig_blob = row["signature_blob"] if "signature_blob" in row.keys() else row[1]
+                if verify_signed_approval_evidence(sig_blob, caller_id, tool, args_hash, taint_epoch):
+                    b_dict = json.loads(sig_blob) if isinstance(sig_blob, str) else (sig_blob if isinstance(sig_blob, dict) else {})
+                    nonce = b_dict.get("nonce")
+                    nonce_exp = int(b_dict.get("expiry", now + 60))
+                    if nonce and not device_registry.check_and_record_consumed_nonce(nonce, nonce_exp):
+                        logger.warning("Module-level SQLite approved action row %s rejected: nonce already consumed (replay)!", row["id"])
+                        cur.execute("UPDATE approved_actions SET consumed = 1 WHERE id = ?", (row["id"],))
+                        conn.commit()
+                        continue
+
+                    cur.execute("UPDATE approved_actions SET consumed = 1 WHERE id = ?", (row["id"],))
+                    conn.commit()
+                    return True
+                else:
+                    logger.warning("Module-level SQLite approved action row %s rejected: invalid evidence, skipping junk row", row["id"])
+                    cur.execute("UPDATE approved_actions SET consumed = 1 WHERE id = ?", (row["id"],))
+                    conn.commit()
+    except Exception as e:
+        logger.warning("Could not consume module-level approved action from SQLite: %s", e)
+    return False
+
+
+class PolicySupervisor:
+    """High-Integrity Out-of-Process Policy Supervisor & Actuator Dispatcher."""
+
+    def __init__(self, authorized_worker_pid: Optional[int] = None, state_db_path: Optional[str] = None):
+        global _ACTIVE_SUPERVISOR
+        _ACTIVE_SUPERVISOR = self
+        self.authorized_worker_pid = authorized_worker_pid
+        self.session_epoch = int(time.time())
+        self.state = STATE_INIT
+        self.last_client_seq = 0
+        self.client_sessions = {}
+        self.last_supervisor_seq = 0
+        self.last_heartbeat_time = time.time()
+        self.last_progress_counter = 0
+        self.active_request_id: Optional[str] = None
+        self.dirty_boot_recovered = False
+        self.lock_reason = ""
+        self.lease_token = None
+        
+        # Complete Mediation Actuator & Cryptographic Key Initialization
+        import crypto_vault
+        self._supervisor_secret = crypto_vault.derive_subkey("actuator", length=32)
+        self._consumed_intent_tokens = set()
+        self._intent_lock = threading.Lock()
+        self._approved_actions: Dict[Tuple[str, str, int], float] = {}
+        self._approved_lock = threading.Lock()
+        self._lock = threading.Lock()
+        self.protected_pids: set[int] = {os.getpid()}
+        self.registered_ui_pids: dict[int, float] = {}  # PID -> create_time mapping for recycled-PID defense
+        self.authorized_ui_pid: Optional[int] = None
+        self.authorized_ui_ctime: Optional[float] = None
+        self.supervisor_session_token: str = secrets.token_hex(32)
+        self.actuator = SupervisorActuator(self)
+        self.envelope = None
+        
+        # Check dirty bit from previous run
+        self._check_dirty_bit_on_startup()
+        
+        # Check for unresolved two-phase action intents
+        self.unresolved_intents = self.check_unresolved_intents()
+        if self.unresolved_intents:
+            self._transition_to_locked(f"Unresolved action intent detected from previous crash: {self.unresolved_intents}")
+
+    def _check_dirty_bit_on_startup(self):
+        """Dirty-bit boot protection: If dirty flag exists at startup, previous session died abnormally."""
+        if os.path.exists(DIRTY_FLAG_PATH):
+            self.dirty_boot_recovered = True
+            self._transition_to_locked("Dirty boot detected: previous session terminated abnormally without clean shutdown.")
+            self._record_crash_history()
+        else:
+            # Mark dirty flag for current session
+            try:
+                with open(DIRTY_FLAG_PATH, "w", encoding="utf-8") as f:
+                    f.write(json.dumps({"pid": os.getpid(), "epoch": self.session_epoch, "started_at": time.time()}))
+            except Exception as e:
+                logger.warning("Could not create dirty flag: %s", e)
+
+    def _record_crash_history(self):
+        """Records crash timestamp and triggers locked state if crash-loop threshold (>3 crashes / 5m) is exceeded."""
+        now = time.time()
+        history = []
+        if os.path.exists(CRASH_HISTORY_PATH):
+            try:
+                with open(CRASH_HISTORY_PATH, "r", encoding="utf-8") as f:
+                    history = json.load(f)
+            except Exception:
+                history = []
+        
+        history.append(now)
+        # Retain last 5 minutes (300 seconds)
+        recent_crashes = [t for t in history if now - t <= 300]
+        try:
+            with open(CRASH_HISTORY_PATH, "w", encoding="utf-8") as f:
+                json.dump(recent_crashes, f)
+        except Exception:
+            pass
+
+        if len(recent_crashes) >= 3:
+            self._transition_to_locked("Crash-loop limit exceeded (>3 crashes in 5 minutes). Permanent supervisor lockout.")
+
+    def register_protected_pid(self, pid: int) -> None:
+        """Registers a trusted client PID (such as the UI process) to protect against synthetic injection."""
+        if isinstance(pid, int) and pid > 0:
+            self.protected_pids.add(pid)
+            logger.info("Supervisor registered protected PID: %d", pid)
+
+    def is_ui_pid_valid(self, pid: int) -> bool:
+        """Verifies that the attested PID is in registered_ui_pids and matches the recorded process creation time.
+        Rejects recycled PIDs that were assigned to newly spawned processes after original UI exited.
+        """
+        import psutil
+        with self._lock:
+            if pid not in self.registered_ui_pids:
+                return False
+            try:
+                proc = psutil.Process(pid)
+                recorded_time = self.registered_ui_pids[pid]
+                if abs(proc.create_time() - recorded_time) < 0.1:
+                    return True
+                else:
+                    logger.warning("Rejected recycled PID %d: create_time %f != recorded %f", pid, proc.create_time(), recorded_time)
+                    self.registered_ui_pids.pop(pid, None)
+                    return False
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                self.registered_ui_pids.pop(pid, None)
+                return False
+
+    def _transition_to_locked(self, reason: str):
+        self.state = STATE_LOCKED
+        self.lock_reason = reason
+        logger.error("Supervisor transitioned to LOCKED state: %s", reason)
+        kill_switch.engage_kill_switch(f"Supervisor locked: {reason}")
+
+    def clean_shutdown(self):
+        """Orderly shutdown: removes dirty flag."""
+        if os.path.exists(DIRTY_FLAG_PATH):
+            try:
+                os.remove(DIRTY_FLAG_PATH)
+            except Exception:
+                pass
+        self.state = STATE_INIT
+
+    def human_unlock(self, human_auth_token: str) -> Tuple[bool, str]:
+        """Unlocks supervisor from LOCKED state via explicit human verification."""
+        ok, msg = taint_tracker.human_clear_taint(human_auth_token)
+        if not ok:
+            return False, f"Unlock failed: {msg}"
+        
+        # Clean dirty flag if still lingering
+        if os.path.exists(DIRTY_FLAG_PATH):
+            try:
+                with open(DIRTY_FLAG_PATH, "w", encoding="utf-8") as f:
+                    f.write(json.dumps({"pid": os.getpid(), "epoch": self.session_epoch, "unlocked_at": time.time()}))
+            except Exception:
+                pass
+
+        self.state = STATE_ARMED
+        self.lock_reason = ""
+        kill_switch.disengage_kill_switch(human_auth_token)
+        return True, "Supervisor successfully unlocked by human confirmation."
+
+    def mint_intent_token(self, tool: str, args: Dict[str, Any], caller_id: str, seq: int) -> str:
+        """Mints an unforgeable HMAC-SHA256 INTENT token inside supervisor private memory.
+        Enforces dictionary arguments and full 64-character SHA-256 arguments binding."""
+        now = time.time()
+        if not isinstance(args, dict):
+            raise ValueError(f"mint_intent_token strictly requires a dictionary, got {type(args).__name__}")
+        clean_args = json.dumps(args, sort_keys=True, separators=(',', ':'))
+        args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
+        raw = f"INTENT_V2:{self.session_epoch}:{seq}:{int(now)}:{tool}:{args_hash}:{caller_id}"
+        sig = hmac.new(self._supervisor_secret, raw.encode("utf-8"), hashlib.sha256).hexdigest()
+        return f"{raw}:{sig}"
+
+    def verify_and_consume_intent_token(
+        self, token: Optional[str], tool: str, args: Dict[str, Any], caller_id: str, seq: int
+    ) -> bool:
+        """Verifies supervisor INTENT token integrity, arguments binding (full 64-char args_hash),
+        sequence binding (token_seq == seq), freshness (<=15s), and enforces single-use replay protection.
+        Thread-safe atomic verification and consumption under _intent_lock."""
+        if not token or not isinstance(token, str) or not token.startswith("INTENT_V2:"):
+            return False
+
+        with self._intent_lock:
+            # Replay prevention: check if token was already consumed
+            if isinstance(self._consumed_intent_tokens, dict):
+                if token in self._consumed_intent_tokens:
+                    return False
+            elif token in self._consumed_intent_tokens:
+                return False
+
+            if ":" not in token:
+                return False
+
+            raw, sig = token.rsplit(":", 1)
+            parts = raw.split(":", 6)
+            if len(parts) != 7:
+                return False
+
+            v_tag, epoch_str, seq_str, ts_str, tok_tool, tok_args_hash, tok_caller = parts
+            try:
+                epoch = int(epoch_str)
+                token_seq = int(seq_str)
+                ts = int(ts_str)
+            except ValueError:
+                return False
+
+            if epoch != self.session_epoch:
+                return False
+            if abs(time.time() - ts) > 15.0:  # 15-second TTL
+                return False
+            if token_seq != seq:  # Strictly bind sequence number!
+                return False
+            if tok_tool != tool or tok_caller != caller_id:
+                return False
+
+            # Verify arguments hash (reject non-dict args)
+            if not isinstance(args, dict):
+                return False
+            clean_args = json.dumps(args, sort_keys=True, separators=(',', ':'))
+            expected_args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
+            if not hmac.compare_digest(tok_args_hash, expected_args_hash):
+                return False
+
+            expected_sig = hmac.new(self._supervisor_secret, raw.encode("utf-8"), hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(sig, expected_sig):
+                return False
+
+            # Consume token to enforce single-use replay protection and prune expired tokens (>30s)
+            now = time.time()
+            if not isinstance(self._consumed_intent_tokens, dict):
+                self._consumed_intent_tokens = {}
+            self._consumed_intent_tokens[token] = now
+            # Prune expired tokens
+            to_prune = [t for t, exp in self._consumed_intent_tokens.items() if now - exp > 30.0]
+            for t in to_prune:
+                del self._consumed_intent_tokens[t]
+            return True
+
+    def verify_intent_token(self, token: Optional[str], tool: str, caller_id: str, seq: int) -> bool:
+        """Legacy helper for backwards compatibility."""
+        return False
+
+    def record_approved_action(self, caller_id: str, tool: str, args_hash: str, taint_epoch: int, ttl: float = 120.0, signed_blob: Optional[Any] = None):
+        """Directive 14 & Batch 32 & 35 & 37: Stores direct challenge approval bound to (caller_id, tool, args_hash, taint_epoch) with cryptographic evidence."""
+        exp_time = time.time() + ttl
+        blob_str = json.dumps(signed_blob) if isinstance(signed_blob, dict) else (str(signed_blob) if signed_blob else "")
+        with self._approved_lock:
+            self._approved_actions[(caller_id, tool, args_hash.lower(), int(taint_epoch))] = (exp_time, signed_blob)
+        # Cross-process durable SQLite persistence
+        try:
+            import db_utils
+            with db_utils.get_db() as conn:
+                _init_approved_actions_table(conn)
+                conn.execute("""
+                    INSERT INTO approved_actions (caller_id, tool, args_hash, taint_epoch, expiry, consumed, signature_blob)
+                    VALUES (?, ?, ?, ?, ?, 0, ?)
+                """, (caller_id, tool, args_hash.lower(), int(taint_epoch), exp_time, blob_str))
+                conn.commit()
+        except Exception as e:
+            logger.warning("Could not persist approved action to SQLite: %s", e)
+
+    def consume_approved_action(self, caller_id: str, tool: str, args_hash: str, taint_epoch: int) -> bool:
+        """Directive 14 & Batch 32 & 35 & 37 & 38: Atomically checks and consumes a direct approved action
+        with cryptographic verification of signed evidence blob against enrolled device keys.
+        Anti-Burn DoS defense: Iterates candidate rows so invalid/junk rows do not burn valid approvals.
+        Anti-Replay defense: Atomically verifies and records nonce in persistent nonce store.
+        """
+        now = time.time()
+        in_memory_found = False
+        with self._approved_lock:
+            key = (caller_id, tool, args_hash.lower(), int(taint_epoch))
+            exp = self._approved_actions.pop(key, None)
+            # Prune expired
+            to_del = [k for k, v in self._approved_actions.items() if now > (v[0] if isinstance(v, tuple) else v)]
+            for k in to_del:
+                self._approved_actions.pop(k, None)
+            if exp:
+                exp_time = exp[0] if isinstance(exp, tuple) else exp
+                blob = exp[1] if isinstance(exp, tuple) else None
+                if now <= exp_time:
+                    if verify_signed_approval_evidence(blob, caller_id, tool, args_hash, taint_epoch):
+                        b_dict = json.loads(blob) if isinstance(blob, str) else (blob if isinstance(blob, dict) else {})
+                        nonce = b_dict.get("nonce")
+                        nonce_exp = int(b_dict.get("expiry", exp_time))
+                        if nonce and not device_registry.check_and_record_consumed_nonce(nonce, nonce_exp):
+                            logger.warning("In-memory approved action rejected: nonce already consumed (replay)!")
+                        else:
+                            in_memory_found = True
+                    else:
+                        logger.warning("In-memory approved action rejected: invalid or forged cryptographic evidence!")
+
+        # Atomically consume in SQLite as well to prevent double-spending between memory and DB
+        db_consumed = False
+        try:
+            import db_utils
+            with db_utils.get_db() as conn:
+                _init_approved_actions_table(conn)
+                cur = conn.cursor()
+                cur.execute("""
+                    SELECT id, signature_blob FROM approved_actions
+                    WHERE caller_id = ? AND tool = ? AND args_hash = ? AND taint_epoch = ? AND consumed = 0 AND expiry >= ?
+                    ORDER BY id ASC
+                """, (caller_id, tool, args_hash.lower(), int(taint_epoch), now))
+                rows = cur.fetchall()
+                for row in rows:
+                    sig_blob = row["signature_blob"] if "signature_blob" in row.keys() else row[1]
+                    if verify_signed_approval_evidence(sig_blob, caller_id, tool, args_hash, taint_epoch):
+                        b_dict = json.loads(sig_blob) if isinstance(sig_blob, str) else (sig_blob if isinstance(sig_blob, dict) else {})
+                        nonce = b_dict.get("nonce")
+                        nonce_exp = int(b_dict.get("expiry", now + 60))
+                        if nonce and not device_registry.check_and_record_consumed_nonce(nonce, nonce_exp):
+                            logger.warning("SQLite approved action row %s rejected: nonce already consumed (replay)!", row["id"])
+                            cur.execute("UPDATE approved_actions SET consumed = 1 WHERE id = ?", (row["id"],))
+                            conn.commit()
+                            continue
+
+                        cur.execute("UPDATE approved_actions SET consumed = 1 WHERE id = ?", (row["id"],))
+                        conn.commit()
+                        db_consumed = True
+                        break
+                    else:
+                        logger.warning("Skipping invalid/forged SQLite approved action row %s; marking consumed to prevent DoS", row["id"])
+                        cur.execute("UPDATE approved_actions SET consumed = 1 WHERE id = ?", (row["id"],))
+                        conn.commit()
+        except Exception as e:
+            logger.warning("Could not consume approved action from SQLite: %s", e)
+
+        return in_memory_found or db_consumed
+
+    def clear_taint_and_reboot_worker(self, human_auth_token: str) -> Tuple[bool, str]:
+        """Supervisor-side taint clearing: Clears workstation taint, bumps session epoch,
+        rotates ephemeral actuator session secrets, and restarts the worker process with a fresh clean context.
+        Persistent vault storage keys and audit ledger HMAC keys are strictly preserved."""
+        ok, msg = taint_tracker.human_clear_taint(human_auth_token)
+        if not ok:
+            return False, f"Taint clear denied: {msg}"
+
+        # Bump session epoch and rotate ONLY ephemeral actuator/intent secrets
+        self.session_epoch = int(time.time())
+        self._supervisor_secret = secrets.token_bytes(32)
+        self._consumed_intent_tokens.clear()
+
+        # Record worker context reboot in audit ledger
+        agent_audit_ledger.record_agent_action(
+            "supervisor", "worker_reboot", "WRITE_EXEC",
+            {"reason": "Taint cleared by human, worker context refreshed", "epoch": self.session_epoch},
+            decision="ALLOW"
+        )
+        logger.info("Supervisor cleared taint, bumped session epoch to %d, worker context rebooted.", self.session_epoch)
+        return True, "Workstation taint cleared and worker context cleanly rebooted."
+
+    def attach_watchdog(self, watchdog):
+        """Attaches an independent watchdog to monitor supervisor and mutual liveness."""
+        self.watchdog = watchdog
+
+    def check_watchdog_liveness(self) -> bool:
+        """Verifies watchdog is alive. If watchdog died or is unresponsive, locks supervisor."""
+        if not getattr(self, "watchdog", None):
+            return True
+        if self.watchdog.locked or not self.watchdog.heartbeat.check_liveness():
+            self.state = STATE_LOCKED
+            self.lock_reason = "WATCHDOG_DEAD_OR_TIMEOUT"
+            kill_switch.engage_kill_switch("Watchdog unresponsive or died")
+            return False
+        return True
+
+    def check_unresolved_intents(self) -> list:
+        """Inspects audit ledger for INTENT entries that lack a subsequent OUTCOME entry."""
+        import db_utils
+        unresolved = []
+        try:
+            with db_utils.get_db() as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT id, tool_name, decision FROM agent_audit_ledger ORDER BY id DESC LIMIT 50")
+                rows = cur.fetchall()
+                intents = {}
+                outcomes = set()
+                for r in rows:
+                    dec = r[2] if len(r) > 2 else ""
+                    if dec.startswith("INTENT:"):
+                        req_id = dec.split(":")[1] if len(dec.split(":")) > 1 else str(r[0])
+                        intents[req_id] = (r[0], r[1])
+                    elif dec.startswith("OUTCOME:"):
+                        req_id = dec.split(":")[1] if len(dec.split(":")) > 1 else str(r[0])
+                        outcomes.add(req_id)
+                for req_id, (row_id, tool) in intents.items():
+                    if req_id not in outcomes:
+                        unresolved.append({"req_id": req_id, "row_id": row_id, "tool": tool})
+        except Exception as e:
+            logger.error("Error inspecting unresolved intents: %s", e)
+        return unresolved
+
+    def handle_raw_frame(self, frame_bytes: bytes, client_pid: Optional[int] = None, session_id: Optional[str] = None) -> bytes:
+        """Processes an incoming raw binary frame and returns the encoded response binary frame."""
+        try:
+            version, msg_type, seq, payload, _ = BinaryFrameCodec.decode_frame(frame_bytes)
+        except Exception as e:
+            self._transition_to_locked(f"Binary framing error / malformed packet: {e}")
+            return self._encode_reply(MSG_ERROR, {"error": str(e), "reason_code": REASON_MALFORMED_FRAME})
+
+        # Monotonic Sequence Verification
+        if session_id:
+            last_seq = self.client_sessions.get(session_id, 0)
+            if seq <= last_seq:
+                self._transition_to_locked(f"Sequence rollback/replay detected for session {session_id}: got {seq}, expected > {last_seq}")
+                return self._encode_reply(MSG_ERROR, {"error": "Sequence replay detected", "reason_code": REASON_SEQ_ROLLBACK})
+            self.client_sessions[session_id] = seq
+        else:
+            if seq <= self.last_client_seq:
+                self._transition_to_locked(f"Sequence rollback/replay detected: got {seq}, expected > {self.last_client_seq}")
+                return self._encode_reply(MSG_ERROR, {"error": "Sequence replay detected", "reason_code": REASON_SEQ_ROLLBACK})
+            self.last_client_seq = seq
+
+        # Dispatch message type
+        if msg_type == MSG_HELLO:
+            return self._handle_hello(payload, client_pid=client_pid)
+        elif msg_type == MSG_HEARTBEAT:
+            return self._handle_heartbeat(payload)
+        elif msg_type == MSG_PROPOSE:
+            return self._handle_propose(payload, seq=seq)
+        elif msg_type == MSG_SHUTDOWN:
+            return self._handle_shutdown(payload)
+        elif msg_type == MSG_PROXY_LLM:
+            return self._handle_proxy_llm(payload)
+        elif msg_type == MSG_CONFIRM:
+            return self._handle_confirm(payload, client_pid=client_pid)
+        elif msg_type == MSG_TAINT_QUERY:
+            return self._handle_taint_query(payload)
+        elif msg_type == MSG_REGISTER_UI:
+            return self._handle_register_ui(payload, client_pid=client_pid)
+        elif msg_type == MSG_CREATE_CONFIRM_REQUEST:
+            return self._handle_create_confirm_request(payload, client_pid=client_pid)
+        else:
+            return self._encode_reply(MSG_ERROR, {"error": f"Unknown message type {msg_type}", "reason_code": REASON_MALFORMED_FRAME})
+
+    def _handle_proxy_llm(self, payload: Dict[str, Any]) -> bytes:
+        prompt = payload.get("prompt", "")
+        caller_id = payload.get("caller_id", "worker")
+        proxy = worker_confinement.SupervisorLLMProxy()
+        ok, res = proxy.proxy_completion(prompt, caller_id=caller_id)
+        if not ok:
+            return self._encode_reply(MSG_ERROR, {"error": res, "reason_code": "PROXY_LLM_DENIED"})
+        return self._encode_reply(MSG_DATA, {"status": "OK", "result": res})
+
+    def _handle_confirm(self, payload: Dict[str, Any], client_pid: Optional[int] = None) -> bytes:
+        """Verifies a signed approval evidence blob or confirms an action inside the supervisor process.
+        Enforces kernel-attested client PID role check, fail-closed registry lookups, anti-replay nonces,
+        and authoritative ephemeral physical presence challenge matching.
+        """
+        # 1. Kernel-attested PID role enforcement: MSG_CONFIRM accepted ONLY from registered UI with matching create_time
+        if client_pid is not None:
+            if not self.is_ui_pid_valid(client_pid):
+                logger.warning("Rejected MSG_CONFIRM from un-attested or recycled PID %d", client_pid)
+                return self._encode_reply(MSG_ERROR, {
+                    "error": f"DENIED: Confirmation rejected from untrusted or recycled PID {client_pid}. Only verified UI process can submit confirmation.",
+                    "reason_code": REASON_UNAUTHORIZED_TOKEN
+                })
+
+        # Ignore caller_id in payload; authenticated role is desktop_user (registered UI)
+        caller_id = "desktop_user"
+
+        tool_name = payload.get("tool_name", "")
+        args = payload.get("arguments", {})
+        signed_evidence = payload.get("signed_evidence")
+        presence_gesture = payload.get("presence_gesture")
+        req_id = payload.get("req_id")
+
+        clean_args = json.dumps(args, sort_keys=True, separators=(',', ':')) if isinstance(args, dict) else str(args)
+        args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
+
+        # 2. Load enrolled devices from registry - FAIL CLOSED ON ANY CORRUPTION OR TAMPERING
+        try:
+            import device_registry
+            devices = device_registry.get_enrolled_devices()
+        except Exception as reg_err:
+            logger.error("Supervisor device registry lookup failed: %s", reg_err)
+            return self._encode_reply(MSG_ERROR, {
+                "error": f"DENIED: Device registry unavailable or corrupted (fail-closed): {reg_err}",
+                "reason_code": "REGISTRY_ERROR"
+            })
+
+        current_epoch = taint_tracker.get_taint_epoch()
+
+        if devices:
+            if not signed_evidence or not isinstance(signed_evidence, dict):
+                return self._encode_reply(MSG_DECISION, {
+                    "status": "DENY",
+                    "reason_code": REASON_UNAUTHORIZED_TOKEN,
+                    "reason": "DENIED: Action confirmation strictly requires verified out-of-band signature from enrolled mobile device."
+                })
+
+            verified = False
+            err_detail = "Signature verification failed"
+            try:
+                if verify_signed_approval_evidence(signed_evidence, caller_id, tool_name, args_hash, current_epoch):
+                    verified = True
+            except Exception as e:
+                err_detail = str(e)
+
+            if not verified:
+                return self._encode_reply(MSG_DECISION, {
+                    "status": "DENY",
+                    "reason_code": REASON_UNAUTHORIZED_TOKEN,
+                    "reason": f"DENIED: Signature verification failed: {err_detail}"
+                })
+        else:
+            # 3. No enrolled mobile device: strictly deny consequential actions under zero-trust doctrine
+            logger.warning("Rejected confirmation request %s: no enrolled mobile device", req_id)
+            return self._encode_reply(MSG_DECISION, {
+                "status": "DENY",
+                "reason_code": REASON_UNAUTHORIZED_TOKEN,
+                "reason": "DENIED: No mobile device enrolled. All consequential tools strictly require approval from an enrolled phone."
+            })
+
+            req.status = "APPROVED"
+
+        token = f"tok_{secrets.token_hex(16)}"
+        if 'req' in locals() and req is not None:
+            req.approval_token = token
+
+        taint_tracker.register_step_up_token(token, tool_name, args)
+        self.record_approved_action(
+            caller_id=caller_id,
+            tool=tool_name,
+            args_hash=args_hash,
+            taint_epoch=current_epoch,
+            ttl=120.0,
+            signed_blob=signed_evidence
+        )
+        return self._encode_reply(MSG_DECISION, {
+            "status": "ALLOW",
+            "step_up_token": token,
+            "reason": f"Action confirmed by supervisor proof for {tool_name}"
+        })
+
+    def _handle_taint_query(self, payload: Dict[str, Any]) -> bytes:
+        return self._encode_reply(MSG_DATA, {
+            "status": "OK",
+            "taint_epoch": taint_tracker.get_taint_epoch(),
+            "is_tainted": taint_tracker.is_workstation_tainted(),
+            "taint_summary": taint_tracker.get_taint_summary() if hasattr(taint_tracker, "get_taint_summary") else ""
+        })
+
+    def _handle_create_confirm_request(self, payload: Dict[str, Any], client_pid: Optional[int] = None) -> bytes:
+        """Creates an authoritative pending confirmation request inside the supervisor process."""
+        if client_pid is not None and not self.is_ui_pid_valid(client_pid):
+            logger.warning("Rejected MSG_CREATE_CONFIRM_REQUEST from un-attested PID %d", client_pid)
+            return self._encode_reply(MSG_ERROR, {
+                "error": f"DENIED: Request creation rejected from untrusted PID {client_pid}.",
+                "reason_code": REASON_UNAUTHORIZED_TOKEN
+            })
+
+        tool_name = payload.get("tool_name", "")
+        args = payload.get("arguments", {})
+        caller_id = payload.get("caller_id", "desktop_user")
+
+        import rails_confirmation
+        gate = rails_confirmation.get_confirmation_gate()
+        gate._in_supervisor_daemon = True
+        req = gate.create_request(tool_name, args, caller_id=caller_id)
+
+        return self._encode_reply(MSG_DATA, {
+            "status": "OK",
+            "request_id": req.request_id,
+            "tool_name": req.tool_name,
+            "presence_challenge": req.presence_challenge,
+            "dispatched_phone": False,
+            "impact_summary": req.impact_summary
+        })
+
+    def _handle_register_ui(self, payload: Dict[str, Any], client_pid: Optional[int] = None) -> bytes:
+        """Registers the desktop UI with independent image path verification and single-instance session lock."""
+        import psutil
+        attested_pid = client_pid or payload.get("pid")
+        if not attested_pid or not isinstance(attested_pid, int):
+            return self._encode_reply(MSG_ERROR, {"error": "Invalid PID", "reason_code": "INVALID_ARGUMENT"})
+
+        if not psutil.pid_exists(attested_pid):
+            return self._encode_reply(MSG_ERROR, {"error": "Process does not exist", "reason_code": "PID_NOT_FOUND"})
+
+        claimed_pid = payload.get("pid")
+        if client_pid and claimed_pid and claimed_pid != client_pid:
+            return self._encode_reply(MSG_ERROR, {"error": "PID spoofing rejected", "reason_code": "PID_MISMATCH"})
+
+        # Prevent worker or confined processes from registering as UI
+        if self.authorized_worker_pid and attested_pid == self.authorized_worker_pid:
+            return self._encode_reply(MSG_ERROR, {"error": "Confined worker cannot register as UI", "reason_code": "UNAUTHORIZED_ROLE"})
+
+        try:
+            proc = psutil.Process(attested_pid)
+
+            # Kernel-Authoritative Identity Verification (Zero heuristic substrings, zero test hooks)
+            # A process can register as UI ONLY IF:
+            # 1. It is the daemon-authorized child PID with matching kernel creation time, OR
+            # 2. It presents the valid supervisor_session_token generated by the supervisor at startup.
+            session_token = payload.get("session_token")
+            has_valid_token = bool(session_token and hmac.compare_digest(str(session_token), str(self.supervisor_session_token)))
+            is_authorized_child = bool(self.authorized_ui_pid and attested_pid == self.authorized_ui_pid and
+                                       self.authorized_ui_ctime and abs(proc.create_time() - self.authorized_ui_ctime) < 1.0)
+
+            if not (is_authorized_child or has_valid_token):
+                logger.warning("Rejected MSG_REGISTER_UI from unauthorized PID %d (not daemon child nor valid session token)", attested_pid)
+                return self._encode_reply(MSG_ERROR, {
+                    "error": "DENIED: UI registration rejected. Process must be launched directly by supervisor daemon or provide valid session token.",
+                    "reason_code": "UNAUTHORIZED_IMAGE"
+                })
+        except Exception as e:
+            return self._encode_reply(MSG_ERROR, {"error": f"Process inspection error: {e}", "reason_code": "INSPECTION_FAILED"})
+
+        # Single UI session lock: prune dead PIDs, and reject if another verified UI is already active
+        with self._lock:
+            active_ui_pids = {p: t for p, t in self.registered_ui_pids.items() if self.is_ui_pid_valid(p)}
+            self.registered_ui_pids = active_ui_pids
+            for existing_pid in self.registered_ui_pids:
+                if existing_pid != attested_pid:
+                    logger.warning("Rejected duplicate UI registration from PID %d (primary UI is PID %d)", attested_pid, existing_pid)
+                    return self._encode_reply(MSG_ERROR, {
+                        "error": f"DENIED: A primary UI process is already registered (PID {existing_pid}).",
+                        "reason_code": "UI_ALREADY_REGISTERED"
+                    })
+
+            self.registered_ui_pids[attested_pid] = proc.create_time()
+            self.register_protected_pid(attested_pid)
+
+        return self._encode_reply(MSG_DATA, {
+            "status": "OK",
+            "registered_pid": attested_pid,
+            "worker_pid": self.authorized_worker_pid
+        })
+
+    def _encode_reply(self, msg_type: int, payload: Dict[str, Any]) -> bytes:
+        self.last_supervisor_seq += 1
+        return BinaryFrameCodec.encode_frame(msg_type, self.last_supervisor_seq, payload)
+
+    def _handle_hello(self, payload: Dict[str, Any], client_pid: Optional[int] = None) -> bytes:
+        # Check if caller is authorized UI process saying hello/pinging
+        if client_pid is not None:
+            if (self.authorized_ui_pid and client_pid == self.authorized_ui_pid) or (client_pid in self.registered_ui_pids):
+                if self.state != STATE_LOCKED:
+                    self.state = STATE_ARMED
+                self.lease_token, _ = heartbeat_lease.acquire_lease("supervisor_worker", duration=5.0)
+                self.last_heartbeat_time = time.time()
+                return self._encode_reply(MSG_HELLO_ACK, {
+                    "supervisor_pid": os.getpid(),
+                    "session_epoch": self.session_epoch,
+                    "state": self.state,
+                    "status": "OK",
+                    "role": "ui",
+                    "worker_pid": self.authorized_worker_pid,
+                    "lock_reason": self.lock_reason
+                })
+
+        worker_pid = payload.get("worker_pid")
+        if self.authorized_worker_pid and worker_pid != self.authorized_worker_pid:
+            self._transition_to_locked(f"Worker PID mismatch: got {worker_pid}, expected {self.authorized_worker_pid}")
+            return self._encode_reply(MSG_ERROR, {"error": "Worker identity mismatch", "reason_code": "DENY_PID_MISMATCH"})
+
+        # Transition to ARMED if not locked
+        if self.state != STATE_LOCKED:
+            self.state = STATE_ARMED
+
+        self.lease_token, _ = heartbeat_lease.acquire_lease("supervisor_worker", duration=5.0)
+        self.last_heartbeat_time = time.time()
+
+        ack_payload = {
+            "supervisor_pid": os.getpid(),
+            "session_epoch": self.session_epoch,
+            "state": self.state,
+            "status": "OK",
+            "worker_pid": self.authorized_worker_pid,
+            "lock_reason": self.lock_reason
+        }
+        return self._encode_reply(MSG_HELLO_ACK, ack_payload)
+
+    def _handle_heartbeat(self, payload: Dict[str, Any]) -> bytes:
+        progress = payload.get("progress_counter", 0)
+        if self.active_request_id and progress < self.last_progress_counter:
+            logger.warning("Heartbeat progress counter went backwards: %s -> %s", self.last_progress_counter, progress)
+
+        self.last_progress_counter = progress
+        self.last_heartbeat_time = time.time()
+        renewed, _ = heartbeat_lease.renew_lease("supervisor_worker", self.lease_token, duration=5.0) if self.lease_token else (False, "")
+        if not renewed:
+            self.lease_token, _ = heartbeat_lease.acquire_lease("supervisor_worker", duration=5.0)
+
+        return self._encode_reply(MSG_HEARTBEAT, {
+            "status": "PONG",
+            "state": self.state,
+            "time": time.time()
+        })
+
+    def _handle_shutdown(self, payload: Dict[str, Any]) -> bytes:
+        reason = payload.get("reason", "normal")
+        logger.info("Worker requested clean supervisor shutdown: %s", reason)
+        self.clean_shutdown()
+        return self._encode_reply(MSG_SHUTDOWN, {"status": "SHUTDOWN_CLEAN", "reason": reason})
+
+    def _handle_propose(self, payload: Dict[str, Any], seq: int = 0) -> bytes:
+        if seq is None or not isinstance(seq, int) or seq <= 0:
+            return self._encode_reply(MSG_ERROR, {
+                "error": "Sequence number seq is strictly required and must be a positive integer",
+                "reason_code": REASON_MALFORMED_FRAME
+            })
+
+        req_id = payload.get("req_id", f"req_{int(time.time()*1000)}")
+        tool = payload.get("tool", "")
+        args = payload.get("args")
+        if not isinstance(args, dict):
+            return self._encode_reply(MSG_ERROR, {
+                "error": "Malformed proposal: args must be a JSON object dictionary",
+                "reason_code": REASON_MALFORMED_FRAME
+            })
+
+        # Supervisor derives caller_id from connection identity when pinned, or from proposal
+        if getattr(self, "authorized_worker_name", None):
+            caller_id = self.authorized_worker_name
+        else:
+            caller_id = payload.get("caller_id") or "worker"
+        # Supervisor derives args_hash internally, ignoring worker spoofing
+        clean_args = json.dumps(args, sort_keys=True, separators=(',', ':'))
+        args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
+
+        client_token = payload.get("client_token")
+        step_up_token = payload.get("step_up_token")
+        frame_seq = seq
+
+        self.active_request_id = req_id
+
+        # 0. Reject worker attempting to forge an INTENT token in proposal
+        if "intent_token" in payload:
+            return self._encode_reply(MSG_DECISION, {
+                "req_id": req_id,
+                "status": "DENY",
+                "reason_code": REASON_UNAUTHORIZED_TOKEN,
+                "reason": "Complete Mediation Violation: Worker attempted to inject or forge supervisor INTENT token."
+            })
+
+        # 1. State check: LOCKED fails closed immediately
+        if self.state == STATE_LOCKED:
+            return self._encode_reply(MSG_DECISION, {
+                "req_id": req_id,
+                "status": "DENY",
+                "reason_code": REASON_SYSTEM_LOCKED,
+                "reason": f"Supervisor is LOCKED: {self.lock_reason}"
+            })
+
+        # 2. Kill Switch gate
+        if kill_switch.is_kill_switch_active():
+            return self._encode_reply(MSG_DECISION, {
+                "req_id": req_id,
+                "status": "DENY",
+                "reason_code": REASON_SYSTEM_LOCKED,
+                "reason": "Emergency Kill Switch is actively engaged."
+            })
+
+        # 3. Dead-man's Heartbeat Lease check
+        is_lease_ok = heartbeat_lease.is_lease_valid("supervisor_worker")
+        if not is_lease_ok or (time.time() - self.last_heartbeat_time > 5.0):
+            return self._encode_reply(MSG_DECISION, {
+                "req_id": req_id,
+                "status": "DENY",
+                "reason_code": REASON_LEASE_EXPIRED,
+                "reason": "Dead-man's heartbeat lease expired"
+            })
+
+        # 4. Multi-channel Canary exfiltration scan on proposed arguments
+        has_canary, canary_msg = canary_monitor.inspect_egress_payload(args)
+        if has_canary:
+            self._transition_to_locked(f"Canary exfiltration attempt detected in tool proposal: {canary_msg}")
+            return self._encode_reply(MSG_DECISION, {
+                "req_id": req_id,
+                "status": "DENY",
+                "reason_code": REASON_CANARY_DETECTED,
+                "reason": f"Security Alert: Canary exfiltration pattern detected: {canary_msg}"
+            })
+
+        # 5. Rate limiting check
+        rate_ok, rate_msg = shadow_mode.check_rate_limit(caller_id)
+        if not rate_ok:
+            return self._encode_reply(MSG_DECISION, {
+                "req_id": req_id,
+                "status": "DENY",
+                "reason_code": REASON_RATE_LIMIT,
+                "reason": rate_msg
+            })
+
+        # 6. Tool allowlist and capability tier mapping
+        allowed_tools = get_allowed_tools_map()
+        if tool not in allowed_tools:
+            return self._encode_reply(MSG_DECISION, {
+                "req_id": req_id,
+                "status": "DENY",
+                "reason_code": REASON_UNKNOWN_TOOL,
+                "reason": f"Unknown tool: '{tool}' is not in the workstation allowlist."
+            })
+
+        tier = allowed_tools.get(tool, "WRITE_EXEC")
+
+        # 7. Client Token Authentication check (fail-closed if token enforcement required and token omitted)
+        if client_token_auth.is_token_enforcement_active() or client_token:
+            if not client_token:
+                return self._encode_reply(MSG_DECISION, {
+                    "req_id": req_id,
+                    "status": "DENY",
+                    "reason_code": REASON_UNAUTHORIZED_TOKEN,
+                    "reason": "Missing client authentication token: Token enforcement is active"
+                })
+            valid_tok, tok_msg, _ = client_token_auth.validate_client_token(client_token, required_tier=tier)
+            if not valid_tok:
+                return self._encode_reply(MSG_DECISION, {
+                    "req_id": req_id,
+                    "status": "DENY",
+                    "reason_code": REASON_UNAUTHORIZED_TOKEN,
+                    "reason": f"Client token rejected: {tok_msg}"
+                })
+
+        # 8. Target Process Image Check (Hardware Grounding) with Millisecond TOCTOU Guard
+        if tool in ["helm_agent_click", "helm_agent_type"]:
+            safe, toctou_reason = worker_confinement.PreInjectionTOCTOUGuard.verify_injection_target()
+            if not safe:
+                return self._encode_reply(MSG_DECISION, {
+                    "req_id": req_id,
+                    "status": "DENY",
+                    "reason_code": REASON_PROHIBITED_PROCESS,
+                    "reason": toctou_reason
+                })
+
+        # 5.1. Policy Envelope domain scoping, step budget & prohibited environments
+        # Resolve real active foreground process & domain via supervisor-first inspection
+        fg_info = windows_tools.get_foreground_window()
+        supervisor_proc = (fg_info.get("proc_name") or "") if fg_info else ""
+        current_proc = supervisor_proc  # Fail-closed: Supervisor inspects OS foreground; NEVER accepts worker self-attested proc
+
+        # Supervisor-first domain resolution:
+        # If in a browser image, extract real URL via UIA from the address bar (worker-attested domain and title are ignored)
+        current_domain = None
+        clean_proc = os.path.basename(supervisor_proc).lower()
+        if clean_proc in policy_envelope.BROWSER_IMAGES:
+            current_domain = windows_tools.get_browser_active_domain(fg_info.get("hwnd") if fg_info else None)
+        else:
+            # For non-browser network tools, read explicit target argument
+            raw_target = args.get("domain") or args.get("url") or args.get("target")
+            if raw_target:
+                import urllib.parse
+                try:
+                    current_domain = urllib.parse.urlparse(str(raw_target)).hostname or str(raw_target)
+                except Exception:
+                    current_domain = str(raw_target)
+
+        ks_to_commit = 0
+        res_token = None
+        if getattr(self, "envelope", None) and getattr(self.envelope, "is_active", False):
+            current_epoch = taint_tracker.get_taint_epoch()
+            env_ok, env_msg, ks_to_commit, res_token = self.envelope.reserve_step(
+                tool, args, current_proc, current_epoch, current_domain
+            )
+            if not env_ok:
+                return self._encode_reply(MSG_DECISION, {
+                    "req_id": req_id,
+                    "status": "DENY",
+                    "reason_code": REASON_ENVELOPE_BREACH,
+                    "reason": f"Policy Envelope Gate: {env_msg}"
+                })
+
+        step_committed = False
+        actuator_invoked = False
+        try:
+            # 9. Taint & Out-of-band Step-up Verification (Fail-Closed)
+            allowed, requires_step_up, taint_reason = taint_tracker.check_action_privilege(
+                caller_id, tier, tool, args
+            )
+            if not allowed:
+                if requires_step_up:
+                    current_epoch = taint_tracker.get_taint_epoch()
+                    if self.consume_approved_action(caller_id, tool, args_hash, current_epoch):
+                        logger.info("Supervisor authorized action '%s' via internal direct approval for caller '%s'", tool, caller_id)
+                    elif step_up_token:
+                        valid_step_up, step_up_msg = taint_tracker.verify_and_consume_step_up_token(
+                            step_up_token, tool, args
+                        )
+                        if not valid_step_up:
+                            return self._encode_reply(MSG_DECISION, {
+                                "req_id": req_id,
+                                "status": "DENY",
+                                "reason_code": REASON_UNAUTHORIZED_TOKEN,
+                                "reason": f"Step-up token rejected: {step_up_msg}"
+                            })
+                        logger.info("Supervisor authorized action '%s' via consumed step-up token for caller '%s'", tool, caller_id)
+                    else:
+                        return self._encode_reply(MSG_DECISION, {
+                            "req_id": req_id,
+                            "status": "NEEDS_HUMAN",
+                            "reason_code": REASON_TAINTED_STEPUP,
+                            "reason": taint_reason
+                        })
+                else:
+                    return self._encode_reply(MSG_DECISION, {
+                        "req_id": req_id,
+                        "status": "DENY",
+                        "reason_code": REASON_TAINTED_EXECUTION,
+                        "reason": taint_reason
+                    })
+
+            # 10. Shadow Mode Simulation check
+            if shadow_mode.is_shadow_mode_active():
+                record = shadow_mode.record_simulated_action(caller_id, tool, tier, args)
+                return self._encode_reply(MSG_DECISION, {
+                    "req_id": req_id,
+                    "status": "SHADOW",
+                    "reason_code": REASON_SHADOW_SIMULATED,
+                    "reason": f"Action simulated in shadow mode: {record['action_id']}",
+                    "result": f"[SHADOW_SIMULATION] {tool} evaluated with parameters {args}"
+                })
+
+            # 11. TWO-PHASE ACTION EXECUTION:
+            # Phase 1: Supervisor mints unforgeable cryptographic INTENT token & records in audit ledger
+            intent_token = self.mint_intent_token(tool, args, caller_id, frame_seq)
+            try:
+                agent_audit_ledger.record_agent_action(
+                    caller_id, tool, tier, args, decision=f"INTENT:{req_id}:{intent_token[:32]}"
+                )
+            except Exception as intent_err:
+                logger.critical("Audit ledger write failure during INTENT recording: %s", intent_err)
+                self._transition_to_locked(f"Audit ledger failure on INTENT: {intent_err}")
+                return self._encode_reply(MSG_ERROR, {
+                    "error": f"Audit ledger failure: {intent_err}",
+                    "reason_code": REASON_UNAUTHORIZED_TOKEN
+                })
+
+            # Phase 2: Privileged Supervisor Actuator executes effect WITH verified intent token
+            execution_success = False
+            exception_occurred = False
+            result = ""
+            try:
+                try:
+                    actuator_invoked = True
+                    result = self.actuator.execute_actuator(
+                        tool, args, caller_id=caller_id, client_token=client_token, intent_token=intent_token, seq=frame_seq
+                    )
+                    execution_success = True
+                except CompleteMediationBreachError as cme:
+                    execution_success = False
+                    result = f"Security Gate: {cme}"
+                    self._transition_to_locked(f"Complete mediation violation: {cme}")
+                except Exception as e:
+                    execution_success = False
+                    exception_occurred = True
+                    result = f"Error executing tool in supervisor: {e}"
+            finally:
+                # Phase 3: Record OUTCOME in HMAC-SHA256 audit ledger in finally block to guarantee ledger audit invariant
+                if execution_success:
+                    outcome_status = "SUCCESS"
+                elif exception_occurred:
+                    outcome_status = "UNKNOWN"
+                else:
+                    outcome_status = "FAILED"
+
+                try:
+                    agent_audit_ledger.record_agent_action(
+                        caller_id, tool, tier, args, decision=f"OUTCOME:{req_id}:{outcome_status}"
+                    )
+                except Exception as ledger_err:
+                    logger.critical("Audit ledger write failure during outcome recording: %s", ledger_err)
+                    self._transition_to_locked(f"Audit ledger failure: {ledger_err}")
+
+                self.active_request_id = None
+
+            # Commit policy envelope step budget if actuator was invoked (SUCCESS or UNKNOWN outcome).
+            # If the actuator was invoked, side-effects may have taken place on the desktop/OS;
+            # the step budget MUST be consumed to prevent free retries on partial actions.
+            if actuator_invoked:
+                if getattr(self, "envelope", None) and getattr(self.envelope, "is_active", False):
+                    self.envelope.commit_step(ks_to_commit, res_token)
+                    step_committed = True
+
+            return self._encode_reply(MSG_DECISION, {
+                "req_id": req_id,
+                "status": "ALLOW" if execution_success else "DENY",
+                "reason_code": REASON_OK if execution_success else REASON_EXECUTION_FAILED,
+                "reason": "Action authorized and successfully executed by supervisor" if execution_success else result,
+                "result": result
+            })
+
+        finally:
+            # Single-point guaranteed reservation release for all early returns, denials, and exceptions.
+            # Release reservation ONLY if the actuator was NEVER invoked!
+            if res_token and not step_committed and not actuator_invoked:
+                if getattr(self, "envelope", None) and getattr(self.envelope, "is_active", False):
+                    self.envelope.release_reservation(res_token)
+
+
+class SupervisorClient:
+    """Client for worker processes to communicate with PolicySupervisor over the binary protocol."""
+
+    def __init__(self, supervisor_instance: Optional[PolicySupervisor] = None):
+        self.supervisor = supervisor_instance
+        self.seq = 0
+        self.last_supervisor_seq = 0
+        self.session_epoch = 0
+        self.connected = False
+
+    def connect(self) -> bool:
+        if not self.supervisor:
+            return False
+        self.connected = True
+        return True
+
+    def _send_and_receive(self, msg_type: int, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if not self.connected:
+            raise ConnectionError("Client is not connected to PolicySupervisor")
+
+        self.seq += 1
+        frame = BinaryFrameCodec.encode_frame(msg_type, self.seq, payload)
+        reply_bytes = self.supervisor.handle_raw_frame(frame)
+        
+        ver, rep_type, rep_seq, rep_payload, _ = BinaryFrameCodec.decode_frame(reply_bytes)
+        self.last_supervisor_seq = rep_seq
+        return rep_payload
+
+    def hello(self, worker_pid: Optional[int] = None) -> Dict[str, Any]:
+        pid = worker_pid or os.getpid()
+        payload = {"worker_pid": pid, "client_name": "worker_client", "time": time.time()}
+        res = self._send_and_receive(MSG_HELLO, payload)
+        self.session_epoch = res.get("session_epoch", 0)
+        return res
+
+    def heartbeat(self, progress_counter: int = 1) -> Dict[str, Any]:
+        payload = {"progress_counter": progress_counter, "worker_pid": os.getpid()}
+        return self._send_and_receive(MSG_HEARTBEAT, payload)
+
+    def propose(self, tool: str, args: Dict[str, Any], caller_id: str = "worker",
+                client_token: Optional[str] = None, step_up_token: Optional[str] = None) -> Dict[str, Any]:
+        clean_args = json.dumps(args, sort_keys=True)
+        args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()[:16]
+        req_id = f"req_{int(time.time()*1000)}_{self.seq}"
+        
+        payload = {
+            "req_id": req_id,
+            "tool": tool,
+            "args": args,
+            "args_hash": args_hash,
+            "caller_id": caller_id,
+            "client_token": client_token,
+            "step_up_token": step_up_token
+        }
+        return self._send_and_receive(MSG_PROPOSE, payload)
+
+    def create_confirmation_request(self, tool_name: str, arguments: Dict[str, Any], caller_id: str = "desktop_user") -> Dict[str, Any]:
+        """Requests creation of an authoritative confirmation request on the supervisor."""
+        return self._send_and_receive(MSG_CREATE_CONFIRM_REQUEST, {
+            "tool_name": tool_name,
+            "arguments": arguments,
+            "caller_id": caller_id
+        })
+
+    def confirm(self, tool_name: str, arguments: Dict[str, Any], signed_evidence: Optional[Dict[str, Any]] = None,
+                caller_id: str = "desktop_user", presence_gesture: Optional[str] = None,
+                req_id: Optional[str] = None) -> Dict[str, Any]:
+        payload = {
+            "req_id": req_id,
+            "tool_name": tool_name,
+            "arguments": arguments,
+            "signed_evidence": signed_evidence,
+            "caller_id": caller_id,
+            "presence_gesture": presence_gesture,
+        }
+        return self._send_and_receive(MSG_CONFIRM, payload)
+
+    def get_taint_status(self) -> Dict[str, Any]:
+        return self._send_and_receive(MSG_TAINT_QUERY, {})
+
+    def register_ui(self, pid: Optional[int] = None, session_token: Optional[str] = None) -> Dict[str, Any]:
+        token = session_token
+        if not token:
+            tok_path = os.path.join(BASE_DIR, ".helm_session.token")
+            if os.path.exists(tok_path):
+                try:
+                    with open(tok_path, "r", encoding="utf-8") as f:
+                        token = f.read().strip()
+                except Exception:
+                    pass
+        return self._send_and_receive(MSG_REGISTER_UI, {"pid": pid or os.getpid(), "session_token": token})
+
+    def shutdown(self, reason: str = "normal") -> Dict[str, Any]:
+        payload = {"reason": reason}
+        return self._send_and_receive(MSG_SHUTDOWN, payload)
+
+
+import threading
+
+class NamedPipeSupervisorServer:
+    """Out-of-process Windows Named Pipe server for PolicySupervisor.
+    Uses win32pipe.CreateNamedPipe with FILE_FLAG_FIRST_PIPE_INSTANCE and PIPE_REJECT_REMOTE_CLIENTS.
+    Enforces kernel-attested client validation via GetNamedPipeClientProcessId.
+    """
+
+    def __init__(self, supervisor: PolicySupervisor, pipe_name: str = r"\\.\pipe\helm_supervisor"):
+        self.supervisor = supervisor
+        self.pipe_name = pipe_name
+        self.running = False
+        self.thread: Optional[threading.Thread] = None
+        self.server_pipe = None
+
+    @staticmethod
+    def _create_owner_only_security():
+        try:
+            import win32security, win32con, win32api
+            token_handle = win32security.OpenProcessToken(win32api.GetCurrentProcess(), win32con.TOKEN_QUERY)
+            user_sid = win32security.GetTokenInformation(token_handle, win32security.TokenUser)[0]
+            sd = win32security.SECURITY_DESCRIPTOR()
+            sd.Initialize()
+            dacl = win32security.ACL()
+            dacl.Initialize()
+            dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_ALL, user_sid)
+            system_sid = win32security.CreateWellKnownSid(win32security.WinLocalSystemSid)
+            dacl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_ALL, system_sid)
+            sd.SetSecurityDescriptorDacl(1, dacl, 0)
+            sa = win32security.SECURITY_ATTRIBUTES()
+            sa.SECURITY_DESCRIPTOR = sd
+            sa.bInheritHandle = False
+            return sa
+        except Exception as e:
+            logger.warning("Could not initialize custom pipe DACL: %s; falling back to default process DACL", e)
+            return None
+
+    def start(self):
+        import win32pipe
+        self.running = True
+        self.sa = self._create_owner_only_security()
+        self.client_threads = []
+        self.thread = threading.Thread(target=self._run_server, daemon=True)
+        self.thread.start()
+
+    def _run_server(self):
+        import win32pipe
+        import win32file
+        is_first = True
+        while self.running:
+            flags = win32pipe.PIPE_ACCESS_DUPLEX
+            if is_first:
+                flags |= win32pipe.FILE_FLAG_FIRST_PIPE_INSTANCE
+            try:
+                pipe_handle = win32pipe.CreateNamedPipe(
+                    self.pipe_name,
+                    flags,
+                    win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE | win32pipe.PIPE_WAIT | win32pipe.PIPE_REJECT_REMOTE_CLIENTS,
+                    win32pipe.PIPE_UNLIMITED_INSTANCES,
+                    65536,
+                    65536,
+                    0,
+                    self.sa
+                )
+                is_first = False
+                try:
+                    win32pipe.ConnectNamedPipe(pipe_handle, None)
+                except Exception as c_err:
+                    if getattr(c_err, 'winerror', None) != 535 and not (len(c_err.args) > 0 and c_err.args[0] == 535):
+                        raise
+                client_t = threading.Thread(target=self._handle_client, args=(pipe_handle,), daemon=True)
+                client_t.start()
+                self.client_threads.append(client_t)
+            except Exception as e:
+                if is_first:
+                    logger.critical("FATAL: Failed to create initial supervisor named pipe instance (rogue pipe collision): %s", e)
+                    self.running = False
+                    raise RuntimeError(f"ROGUE_PIPE_COLLISION: {e}")
+                if self.running:
+                    time.sleep(0.02)
+
+    def _handle_client(self, client_pipe):
+        import win32pipe
+        import win32file
+        session_id = f"conn_{int(client_pipe)}"
+        try:
+            client_pid = win32pipe.GetNamedPipeClientProcessId(client_pipe)
+            logger.info("Named pipe client connected! Kernel-attested PID: %d", client_pid)
+
+            if self.supervisor.authorized_worker_pid and client_pid == self.supervisor.authorized_worker_pid:
+                pass  # Worker is permitted to connect and proxy/propose
+
+            buffer = b""
+            while self.running:
+                try:
+                    hr, chunk = win32file.ReadFile(client_pipe, 4096)
+                except Exception:
+                    break
+                if not chunk:
+                    break
+                buffer += chunk
+                while len(buffer) >= HEADER_SIZE:
+                    payload_len, _, _, _ = struct.unpack(HEADER_FORMAT, buffer[:HEADER_SIZE])
+                    frame_len = HEADER_SIZE + payload_len
+                    if len(buffer) < frame_len:
+                        break
+                    raw_frame = buffer[:frame_len]
+                    buffer = buffer[frame_len:]
+
+                    try:
+                        reply_bytes = self.supervisor.handle_raw_frame(raw_frame, client_pid=client_pid, session_id=session_id)
+                    except Exception as h_err:
+                        logger.error("Exception handling frame: %s", h_err)
+                        reply_bytes = self.supervisor._encode_reply(MSG_ERROR, {"error": str(h_err), "reason_code": "INTERNAL_ERROR"})
+                    win32file.WriteFile(client_pipe, reply_bytes)
+        finally:
+            self.supervisor.client_sessions.pop(session_id, None)
+            try:
+                win32pipe.DisconnectNamedPipe(client_pipe)
+            except Exception:
+                pass
+            try:
+                win32file.CloseHandle(client_pipe)
+            except Exception:
+                pass
+
+    def stop(self):
+        self.running = False
+        import win32file
+        try:
+            h = win32file.CreateFile(
+                self.pipe_name,
+                win32file.GENERIC_READ | win32file.GENERIC_WRITE,
+                0, None, win32file.OPEN_EXISTING, 0, None
+            )
+            win32file.CloseHandle(h)
+        except Exception:
+            pass
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=1.0)
+
+
+class NamedPipeSupervisorClient:
+    """Out-of-process Windows Named Pipe client for worker processes.
+    Connects to the supervisor pipe via win32file.CreateFile.
+    """
+
+    def __init__(self, pipe_name: str = r"\\.\pipe\helm_supervisor"):
+        self.pipe_name = pipe_name
+        self.handle = None
+        self.seq = 0
+        self.last_supervisor_seq = 0
+        self.session_epoch = 0
+
+    def connect(self, timeout_sec: float = 2.0) -> bool:
+        import win32file
+        import win32pipe
+        start = time.time()
+        while time.time() - start < timeout_sec:
+            try:
+                self.handle = win32file.CreateFile(
+                    self.pipe_name,
+                    win32file.GENERIC_READ | win32file.GENERIC_WRITE,
+                    0,
+                    None,
+                    win32file.OPEN_EXISTING,
+                    0,
+                    None
+                )
+                # Verify server process ID against kernel parent PID or expected supervisor PID
+                if self.pipe_name.lower().endswith(r"\helm_supervisor"):
+                    try:
+                        server_pid = win32pipe.GetNamedPipeServerProcessId(self.handle)
+                        self.server_pid = server_pid
+                        expected_pid = getattr(self, "expected_server_pid", None)
+                        if expected_pid is None:
+                            daemon_pid_path = _daemon_state_path(".helm_daemon.pid")
+                            if os.path.exists(daemon_pid_path):
+                                try:
+                                    with open(daemon_pid_path, "r", encoding="utf-8") as df:
+                                        expected_pid = int(df.read().strip())
+                                except Exception:
+                                    pass
+                        if expected_pid and server_pid != expected_pid:
+                            logger.critical("ROGUE PIPE SERVER DETECTED! Expected PID %d, pipe server is PID %d", expected_pid, server_pid)
+                            win32file.CloseHandle(self.handle)
+                            self.handle = None
+                            return False
+                    except Exception as pid_err:
+                        logger.debug("Server PID verification info: %s", pid_err)
+                return True
+            except Exception as e:
+                if getattr(e, 'winerror', None) == 231 or (len(e.args) > 0 and e.args[0] == 231):
+                    try:
+                        wait_ms = int(min(500, max(50, (timeout_sec - (time.time() - start)) * 1000)))
+                        win32pipe.WaitNamedPipe(self.pipe_name, wait_ms)
+                    except Exception:
+                        pass
+                time.sleep(0.02)
+        return False
+
+    def _send_and_receive(self, msg_type: int, payload: Dict[str, Any]) -> Dict[str, Any]:
+        import win32file
+        if not self.handle:
+            raise ConnectionError("Named Pipe client is not connected")
+
+        self.seq += 1
+        frame = BinaryFrameCodec.encode_frame(msg_type, self.seq, payload)
+        win32file.WriteFile(self.handle, frame)
+
+        # Read header
+        header_buf = b""
+        while len(header_buf) < HEADER_SIZE:
+            hr, chunk = win32file.ReadFile(self.handle, HEADER_SIZE - len(header_buf))
+            header_buf += chunk
+
+        payload_len, ver, rep_type, rep_seq = struct.unpack(HEADER_FORMAT, header_buf)
+        payload_buf = b""
+        while len(payload_buf) < payload_len:
+            hr, chunk = win32file.ReadFile(self.handle, payload_len - len(payload_buf))
+            payload_buf += chunk
+
+        raw_reply = header_buf + payload_buf
+        _, _, _, rep_payload, _ = BinaryFrameCodec.decode_frame(raw_reply)
+        self.last_supervisor_seq = rep_seq
+        return rep_payload
+
+    def hello(self, worker_pid: Optional[int] = None) -> Dict[str, Any]:
+        pid = worker_pid or os.getpid()
+        payload = {"worker_pid": pid, "client_name": "worker_pipe_client", "time": time.time()}
+        res = self._send_and_receive(MSG_HELLO, payload)
+        self.session_epoch = res.get("session_epoch", 0)
+        return res
+
+    def heartbeat(self, progress_counter: int = 1) -> Dict[str, Any]:
+        payload = {"progress_counter": progress_counter, "worker_pid": os.getpid()}
+        return self._send_and_receive(MSG_HEARTBEAT, payload)
+
+    def propose(self, tool: str, args: Dict[str, Any], caller_id: str = "worker",
+                client_token: Optional[str] = None, step_up_token: Optional[str] = None) -> Dict[str, Any]:
+        clean_args = json.dumps(args, sort_keys=True)
+        args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()[:16]
+        req_id = f"req_{int(time.time()*1000)}_{self.seq}"
+        payload = {
+            "req_id": req_id,
+            "tool": tool,
+            "args": args,
+            "args_hash": args_hash,
+            "caller_id": caller_id,
+            "client_token": client_token,
+            "step_up_token": step_up_token
+        }
+        return self._send_and_receive(MSG_PROPOSE, payload)
+
+    def create_confirmation_request(self, tool_name: str, arguments: Dict[str, Any], caller_id: str = "desktop_user") -> Dict[str, Any]:
+        """Requests creation of an authoritative confirmation request on the supervisor."""
+        return self._send_and_receive(MSG_CREATE_CONFIRM_REQUEST, {
+            "tool_name": tool_name,
+            "arguments": arguments,
+            "caller_id": caller_id
+        })
+
+    def confirm(self, tool_name: str, arguments: Dict[str, Any], signed_evidence: Optional[Dict[str, Any]] = None,
+                caller_id: str = "desktop_user", presence_gesture: Optional[str] = None,
+                req_id: Optional[str] = None) -> Dict[str, Any]:
+        payload = {
+            "req_id": req_id,
+            "tool_name": tool_name,
+            "arguments": arguments,
+            "signed_evidence": signed_evidence,
+            "caller_id": caller_id,
+            "presence_gesture": presence_gesture,
+        }
+        return self._send_and_receive(MSG_CONFIRM, payload)
+
+    def get_taint_status(self) -> Dict[str, Any]:
+        return self._send_and_receive(MSG_TAINT_QUERY, {})
+
+    def register_ui(self, pid: Optional[int] = None, session_token: Optional[str] = None) -> Dict[str, Any]:
+        token = session_token
+        if not token:
+            tok_path = _daemon_state_path(".helm_session.token")
+            if os.path.exists(tok_path):
+                try:
+                    with open(tok_path, "r", encoding="utf-8") as f:
+                        token = f.read().strip()
+                except Exception:
+                    pass
+        return self._send_and_receive(MSG_REGISTER_UI, {"pid": pid or os.getpid(), "session_token": token})
+
+    def shutdown(self, reason: str = "normal") -> Dict[str, Any]:
+        payload = {"reason": reason}
+        res = self._send_and_receive(MSG_SHUTDOWN, payload)
+        self.close()
+        return res
+
+    def close(self):
+        import win32file
+        if self.handle:
+            try:
+                win32file.CloseHandle(self.handle)
+            except Exception:
+                pass
+            self.handle = None

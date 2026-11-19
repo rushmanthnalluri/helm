@@ -16,6 +16,9 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
+from helm import install_shim_hook
+install_shim_hook()
+
 # All test persistence lives in an ephemeral tree. In particular, device
 # enrollment and daemon tests must not touch the user's registry, recovery
 # token, PID, session token, settings, or SQLite database.
@@ -29,7 +32,6 @@ os.makedirs(os.environ["HELM_DIR"], exist_ok=True)
 
 import helm_supervisor
 import device_registry
-import phone_approval_portal
 import kill_switch
 import taint_tracker
 import action_broker
@@ -87,8 +89,6 @@ def clean_helm_test_isolation():
     taint_tracker.set_standalone_mode(True)
     device_registry.clear_registry_for_testing()
     device_registry.clear_consumed_nonces_for_testing()
-    phone_approval_portal._CONSOLE_RECOVERY_TOKENS.clear()
-    phone_approval_portal._LOCAL_ENROLLMENT_SESSIONS.clear()
     action_broker._GLOBAL_BROKER = None
     if prior_test_env is None:
         os.environ.pop("HELM_TEST_ENV", None)

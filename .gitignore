@@ -43,3 +43,9 @@ publisher_offline_private_key.pem
 helm_installed_version.json
 scratch_*.py
 _update_*.py
+.helm_daemon.pid
+.helm_session.token
+helm_supervisor_crashes.json
+helm_supervisor_dirty.flag
+data/attachments_cache/
+data/*.db

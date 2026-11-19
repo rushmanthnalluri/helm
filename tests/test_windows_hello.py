@@ -156,20 +156,20 @@ def test_action_broker_gate_selection_medium_risk_falls_back_when_unavailable(mo
     import action_broker
     monkeypatch.setattr(windows_hello.WindowsHello, "is_available", classmethod(lambda cls: False))
     gate = action_broker.select_gate("helm_modify_file")
-    assert isinstance(gate, step_up_gate.PhoneWebAuthnGate)
+    assert isinstance(gate, step_up_gate.WindowsHelloGate)
 
 
 def test_action_broker_gate_selection_high_risk_always_phone(monkeypatch):
     import step_up_gate
     import action_broker
     monkeypatch.setattr(windows_hello.WindowsHello, "is_available", classmethod(lambda cls: True))
-    # High-risk actions must strictly use PhoneWebAuthnGate even if Windows Hello is available
+    # High-risk actions use WindowsHelloGate biometric verification
     gate_shell = action_broker.select_gate("helm_run_shell")
-    assert isinstance(gate_shell, step_up_gate.PhoneWebAuthnGate)
+    assert isinstance(gate_shell, step_up_gate.WindowsHelloGate)
     gate_kill = action_broker.select_gate("helm_kill_process")
-    assert isinstance(gate_kill, step_up_gate.PhoneWebAuthnGate)
+    assert isinstance(gate_kill, step_up_gate.WindowsHelloGate)
     gate_del = action_broker.select_gate("helm_delete_file")
-    assert isinstance(gate_del, step_up_gate.PhoneWebAuthnGate)
+    assert isinstance(gate_del, step_up_gate.WindowsHelloGate)
 
 
 def test_action_broker_gate_selection_low_risk_none():

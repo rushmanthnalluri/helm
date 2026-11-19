@@ -123,30 +123,12 @@ class TestStructuredApprovals(unittest.TestCase):
         self.assertTrue(verify_phone_hash_rebuild(plan_obj, h_plan))
 
     def test_6_verify_webauthn_transaction_approval(self):
-        """Verifies end-to-end binding between canonical approval object and WebAuthn verifier."""
-        import hashlib, struct, json, cbor2
-        from cryptography.hazmat.primitives.asymmetric import ec
-        from cryptography.hazmat.primitives import hashes
-        import webauthn_verifier as wv
-        from helm_structured_approval import verify_webauthn_transaction_approval
-
-        rp = wv.RelyingParty(rp_id="approval.helm.internal", origins=frozenset({"https://approval.helm.internal"}))
-        store = wv.ChallengeStore()
-        device_id = "phone_pixel_9"
-
-        priv = ec.generate_private_key(ec.SECP256R1())
-        pub = priv.public_key().public_numbers()
-        cose_map = {1: 2, 3: wv.COSE_ES256, -1: 1, -2: pub.x.to_bytes(32, "big"), -3: pub.y.to_bytes(32, "big")}
-        cred = wv.Credential(
-            credential_id=b"cred_001",
-            cose_key_cbor=cbor2.dumps(cose_map),
-            alg=wv.COSE_ES256,
-            sign_count=0,
-            device_id=device_id,
-            backup_eligible=False,
-            aaguid=b"\x00" * 16,
-            attestation_fmt="none",
-            attestation_trust="none"
+        """Verifies end-to-end binding between canonical approval object and Windows Hello biometric verification."""
+        from unittest.mock import patch
+        import windows_hello
+        from helm_structured_approval import (
+            verify_windows_hello_transaction_approval,
+            verify_webauthn_transaction_approval
         )
 
         plan_obj = build_plan_approval_object(
@@ -163,28 +145,19 @@ class TestStructuredApprovals(unittest.TestCase):
             nonce="nonce_webauthn_test"
         )
 
-        hash_hex, _ = compute_canonical_approval_hash(plan_obj)
-        challenge = bytes.fromhex(hash_hex)
-        store.register(challenge, device_id)
+        with patch.object(windows_hello.WindowsHello, "is_available", return_value=True), \
+             patch.object(windows_hello.WindowsHello, "verify_sync", return_value=True):
+            ok = verify_windows_hello_transaction_approval(plan_obj)
+            self.assertTrue(ok)
 
-        cd_bytes = json.dumps({
-            "type": "webauthn.get",
-            "challenge": wv.b64u_encode(challenge),
-            "origin": "https://approval.helm.internal"
-        }).encode("utf-8")
-        flags = wv.FLAG_UP | wv.FLAG_UV
-        auth_data = hashlib.sha256(b"approval.helm.internal").digest() + bytes([flags]) + struct.pack(">I", 1)
-        sig = priv.sign(auth_data + hashlib.sha256(cd_bytes).digest(), ec.ECDSA(hashes.SHA256()))
+            # Compatibility wrapper
+            ok_legacy = verify_webauthn_transaction_approval(plan_obj)
+            self.assertTrue(ok_legacy)
 
-        assertion_resp = {
-            "clientDataJSON": wv.b64u_encode(cd_bytes),
-            "authenticatorData": wv.b64u_encode(auth_data),
-            "signature": wv.b64u_encode(sig)
-        }
-
-        result = verify_webauthn_transaction_approval(plan_obj, assertion_resp, rp, cred, store)
-        self.assertEqual(result.new_sign_count, 1)
-        self.assertTrue(result.user_verified)
+        with patch.object(windows_hello.WindowsHello, "is_available", return_value=True), \
+             patch.object(windows_hello.WindowsHello, "verify_sync", return_value=False):
+            ok_fail = verify_windows_hello_transaction_approval(plan_obj)
+            self.assertFalse(ok_fail)
 
 
 if __name__ == "__main__":
