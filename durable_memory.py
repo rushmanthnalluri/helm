@@ -45,6 +45,53 @@ class DurableMemoryStore:
     def __init__(self, file_path: Optional[Path | str] = None):
         self.file_path = Path(file_path).resolve() if file_path else get_default_facts_path()
         self._lock = threading.RLock()
+        self._sync_listeners: list = []
+
+    def register_sync_listener(self, listener) -> None:
+        """Registers a listener callback (key, value, deleted) -> None."""
+        with self._lock:
+            if listener not in self._sync_listeners:
+                self._sync_listeners.append(listener)
+
+    def unregister_sync_listener(self, listener) -> None:
+        """Removes a registered sync listener."""
+        with self._lock:
+            if listener in self._sync_listeners:
+                self._sync_listeners.remove(listener)
+
+    def _notify_listeners(self, key: str, value: str, deleted: bool) -> None:
+        """Safely notifies registered sync listeners of fact mutations."""
+        listeners = list(self._sync_listeners)
+        for listener in listeners:
+            try:
+                listener(key, value, deleted)
+            except Exception as e:
+                logger.debug("Sync listener notification error: %s", e)
+
+    def export_facts(self) -> Dict[str, str]:
+        """Exports all durable facts currently saved."""
+        return self.list_facts()
+
+    def import_facts(self, facts: Dict[str, str], merge: bool = True) -> int:
+        """Imports facts into the store.
+        If merge is True, updates existing facts; if False, replaces all facts.
+        Returns the number of facts imported.
+        """
+        with self._lock:
+            current = self.list_facts() if merge else {}
+            count = 0
+            for k, v in facts.items():
+                clean_k = str(k).strip()
+                clean_v = str(v).strip()
+                if clean_k and clean_v and len(clean_k) <= MAX_KEY_LENGTH and len(clean_v) <= MAX_FACT_LENGTH:
+                    if len(current) < MAX_FACTS_COUNT or clean_k in current:
+                        current[clean_k] = clean_v
+                        count += 1
+            ok, err = self._write_facts(current)
+            if ok:
+                return count
+            logger.warning("Failed to persist imported facts: %s", err)
+            return 0
 
     def list_facts(self) -> Dict[str, str]:
         """Reads all stored facts directly from disk.
@@ -109,6 +156,7 @@ class DurableMemoryStore:
             if not ok:
                 return False, f"Failed to persist fact to disk: {err}"
             logger.info("Persisted durable fact '%s'", clean_key)
+            self._notify_listeners(clean_key, clean_fact, False)
             return True, f"Durable fact '{clean_key}' successfully saved."
 
     def delete_fact(self, key: str) -> Tuple[bool, str]:
@@ -131,6 +179,7 @@ class DurableMemoryStore:
             if not ok:
                 return False, f"Failed to persist fact deletion: {err}"
             logger.info("Deleted durable fact '%s'", clean_key)
+            self._notify_listeners(clean_key, "", True)
             return True, f"Durable fact '{clean_key}' successfully removed."
 
     def clear_facts(self) -> None:
@@ -165,6 +214,10 @@ def set_default_memory_store(store: Optional[DurableMemoryStore]) -> None:
     global _DEFAULT_STORE
     with _STORE_LOCK:
         _DEFAULT_STORE = store
+
+
+get_durable_store = get_default_memory_store
+
 
 
 def format_facts_for_prompt(facts: Dict[str, str]) -> str:
