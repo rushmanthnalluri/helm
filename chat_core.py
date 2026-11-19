@@ -129,19 +129,34 @@ def stream_provider_turn(
     provider = ai_engine.get_active_provider(prefs)
     _raise_if_cancelled(cancel_event)
     provider_id = provider["provider"]
-    if provider_id not in {"gemini", "nvidia", "groq", "ollama"}:
+    if provider_id not in {"gemini", "nvidia", "groq", "ollama", "local_offline"}:
         raise ProviderError(
             f"Provider '{provider_id}' is not supported by terminal chat. "
-            "Choose gemini, nvidia, groq, or ollama in Helm's settings."
+            "Choose gemini, nvidia, groq, ollama, or local_offline in Helm's settings."
         )
-    if provider["api_key"] == "none" and provider_id != "ollama":
-        env_key = ai_engine.PROVIDER_CONFIGS[provider_id]["env_key"]
+    if provider["api_key"] == "none" and provider_id not in {"ollama", "local_offline"}:
+        env_key = ai_engine.PROVIDER_CONFIGS[provider_id].get("env_key")
         raise ProviderError(
-            f"No API key found for {provider['name']}. Set {env_key} in your environment."
+            f"No API key found for {provider['name']}. Set {env_key} in your environment or use local Ollama."
         )
 
     try:
-        if provider_id == "gemini":
+        if provider_id == "local_offline":
+            last_user_text = ""
+            for m in reversed(messages):
+                if m.get("role") == "user":
+                    content = m.get("content", "")
+                    if isinstance(content, str):
+                        last_user_text = content
+                    elif isinstance(content, list):
+                        for part in content:
+                            if isinstance(part, dict) and part.get("type") == "text":
+                                last_user_text = part.get("text", "")
+                    break
+            reply = ai_engine.run_query(last_user_text, prefs)
+            on_delta(reply)
+            return ModelTurn(text=reply)
+        elif provider_id == "gemini":
             return _stream_gemini(messages, system_prompt, provider, tools, on_delta, cancel_event)
         return _stream_openai_compatible(messages, system_prompt, provider, tools, on_delta, cancel_event)
     except ProviderError:

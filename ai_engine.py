@@ -45,6 +45,13 @@ PROVIDER_CONFIGS = {
         'default_model': 'qwen2.5:latest',
         'env_key': None,
         'doc_url': 'https://ollama.ai'
+    },
+    'local_offline': {
+        'name': 'Local Zero-Config Mode',
+        'base_url': '',
+        'default_model': 'helm-local-assistant',
+        'env_key': None,
+        'doc_url': 'https://github.com/helm-ai/helm'
     }
 }
 
@@ -205,19 +212,50 @@ GEMINI_TOOLS = [
     }
 ]
 
+def detect_local_ollama(base_url=None):
+    """Detects whether a local Ollama server is running and returns available models."""
+    target_base = (base_url or os.environ.get('OLLAMA_API_BASE') or 'http://localhost:11434').rstrip('/')
+    tags_url = f"{target_base}/api/tags"
+    try:
+        resp = requests.get(tags_url, timeout=0.35)
+        if resp.status_code == 200:
+            data = resp.json()
+            models = [m.get('name') for m in data.get('models', []) if m.get('name')]
+            default_m = models[0] if models else 'llama3.2'
+            return {'available': True, 'models': models, 'default_model': default_m, 'base_url': f"{target_base}/v1"}
+    except Exception:
+        pass
+    return {'available': False, 'models': [], 'default_model': None, 'base_url': f"{target_base}/v1"}
+
 def get_active_provider(prefs):
-    """Determines the active provider and credentials from settings and env vars."""
+    """Determines the active provider and credentials from settings and env vars.
+    Falls back gracefully to Local Ollama or Local Zero-Config Mode when no cloud API keys exist.
+    """
     provider = prefs.get('provider', '').lower().strip()
     if not provider or provider == 'auto':
         if os.environ.get('GEMINI_API_KEY') or prefs.get('geminiKey'):
             provider = 'gemini'
         elif os.environ.get('NVIDIA_API_KEY') or prefs.get('nvidiaKey'):
             provider = 'nvidia'
+        elif os.environ.get('GROQ_API_KEY') or prefs.get('groqKey'):
+            provider = 'groq'
         else:
-            provider = 'gemini'
+            # Zero-config check: see if local Ollama daemon is live
+            ollama_info = detect_local_ollama(prefs.get('apiBase'))
+            if ollama_info['available']:
+                provider = 'ollama'
+            else:
+                provider = 'local_offline'
 
-    cfg = PROVIDER_CONFIGS.get(provider, PROVIDER_CONFIGS['gemini'])
-    model = prefs.get('model') or cfg['default_model']
+    cfg = PROVIDER_CONFIGS.get(provider, PROVIDER_CONFIGS['local_offline'])
+    model = prefs.get('model')
+    if not model:
+        if provider == 'ollama':
+            ollama_info = detect_local_ollama(prefs.get('apiBase'))
+            model = ollama_info['default_model'] or cfg['default_model']
+        else:
+            model = cfg['default_model']
+
     base_url = prefs.get('apiBase') or cfg.get('base_url', '')
 
     api_key = prefs.get(f'{provider}Key') or prefs.get('apiKey')
@@ -670,14 +708,57 @@ def run_gemini_vision(prompt_text, image_source, api_key=None, step_callback=Non
 # ----------------- Main Query Dispatcher -----------------
 
 def run_query(prompt_text, prefs, step_callback=None):
-    """Dispatches query to the active provider (Gemini or NVIDIA NIM)."""
+    """Dispatches query to the active provider (Gemini, NVIDIA, Groq, Ollama, or Local Zero-Config)."""
     prov = get_active_provider(prefs)
 
-    if prov['api_key'] == 'none' and prov['provider'] != 'ollama':
+    # 1. Local Zero-Config Mode (No API keys and Ollama offline)
+    if prov['provider'] == 'local_offline':
+        if step_callback:
+            step_callback("· Processing in Local Zero-Config Mode (Offline)...")
+        # Try local desktop automation & tools first
+        action_reply = check_and_execute_fallback(prompt_text, "")
+        if action_reply:
+            return action_reply
+
+        # Handle system queries directly
+        low = prompt_text.lower().strip()
+        if any(w in low for w in ('vital', 'health', 'ram', 'cpu', 'battery')):
+            return execute_tool("get_system_vitals", {})
+        if any(w in low for w in ('download', 'recent file')):
+            return execute_tool("list_downloads", {})
+        if 'clipboard' in low:
+            return execute_tool("get_clipboard", {})
+
+        return (
+            "👋 **Helm is running in Local Zero-Config Mode** (Private & Offline)\n\n"
+            "Desktop controls, window snapping, media, and system vitals are fully active right now:\n"
+            "• Try: *\"open notepad\"*, *\"lock pc\"*, *\"play lofi on youtube\"*, *\"vitals\"*\n\n"
+            "**To enable free conversational intelligence:**\n"
+            "1. **Local AI (Zero Cloud):** Install [Ollama](https://ollama.ai) and run `ollama run llama3.2`. Helm connects automatically!\n"
+            "2. **Cloud AI:** Add a free API key (Google AI Studio, Groq, or NVIDIA) in **Settings**."
+        )
+
+    # 2. Local Ollama Provider
+    if prov['provider'] == 'ollama':
+        if step_callback:
+            step_callback(f"· Connecting to {prov['name']} ({prov['model']})...")
+        res = run_openai_compat(prompt_text, prov, step_callback=step_callback)
+        if "Error contacting" in res or "Failed to establish" in res or "Connection refused" in res:
+            return (
+                "⚠️ **Local Ollama Server Not Reachable**\n\n"
+                f"Helm attempted to connect to Ollama at `{prov['base_url']}`, but the daemon is not running.\n"
+                "• Start Ollama by launching the Ollama app or running `ollama serve`.\n"
+                "• Or download a model: `ollama run llama3.2`"
+            )
+        return res
+
+    # 3. Cloud Provider missing API key
+    if prov['api_key'] == 'none':
         return (
             f"No API key found for {prov['name']}.\n"
             f"Set it via `setx {PROVIDER_CONFIGS[prov['provider']]['env_key']} your_key` "
-            f"or in ~/.config/helm/settings.json"
+            f"or in ~/.config/helm/settings.json\n\n"
+            f"Tip: You can also use free local AI with no keys by running `ollama run llama3.2`."
         )
 
     if step_callback:

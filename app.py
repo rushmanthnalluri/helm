@@ -87,6 +87,15 @@ class HelmApi:
             self._app.prefs['safe'] = safe_enabled
             self._app.eval_js(f"window.ui.mode({json.dumps(safe_enabled)})")
 
+        # Telemetry opt-in switch
+        elif 'telemetry' in message or (message.get('do') == 'set' and message.get('k') == 'telemetry'):
+            telem_val = bool(message.get('telemetry') if 'telemetry' in message else message.get('v', False))
+            try:
+                import helm_telemetry
+                helm_telemetry.set_telemetry_enabled(telem_val)
+            except Exception as e:
+                print(f"[Telemetry] Error setting telemetry consent: {e}")
+
         # 6. User clicked tip / support
         elif 'kofi' in message:
             import webbrowser
