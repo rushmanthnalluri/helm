@@ -11,10 +11,10 @@ Helm provides a modern, production-grade release toolchain for Windows:
 ## Architecture Overview
 
 ```
-                      ┌──────────────────────┐
-                      │   Helm Source Code   │
-                      │ (app.py, UI, engines)│
-                      └──────────┬───────────┘
+                      ┌───────────────────────────────────────┐
+                      │        Helm Modular Source Code       │
+                      │ (helm.gui.app, helm.engine, helm.core)│
+                      └───────────────────┬───────────────────┘
                                  │
                                  ▼
                      [ PyInstaller Compiler ]

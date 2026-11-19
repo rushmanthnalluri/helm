@@ -1,344 +1,94 @@
 # Helm Distribution & Release Engineering Guide
 
-This guide documents the standalone release engineering, packaging, and distribution architecture for the **Helm Windows Desktop Assistant**.
+This guide documents the release engineering, packaging, and distribution architecture for the **Helm Windows Desktop Assistant**.
 
 ---
 
-## 1. Distribution Architecture Overview
+## 1. Distribution Channels Overview
 
-Helm provides two primary distribution channels for Windows 10/11 x64 systems:
+Helm provides three modern distribution channels for Windows 10/11 x64 systems:
 
 | Distribution Channel | Target Artifact | Target Audience & Use Case |
 |---|---|---|
-| **Windows Installer** | `Helm-Setup-<version>.exe` | Primary end-user distribution. Installs Start Menu shortcuts, Desktop shortcuts, `helm://` custom protocol handler, App Paths, and uninstaller. Supports silent enterprise rollout. |
-| **Portable Zip Archive** | `Helm-Windows-x64-portable-v<version>.zip` | Developers, portable USB installations, and testing environments. Includes `.bat` and silent `.vbs` launchers with a 1-click PowerShell desktop shortcut creator. |
-| **Standalone Folder (PyInstaller)** | `dist/Helm/Helm.exe` | Compiled onedir distribution bundling the Python runtime, PyWebView Chromium runtime, Faster-Whisper, WinRT, and Cryptography. |
-| **Verified Signed Updates** | `helm_update_manifest.json` | Incremental cryptographic auto-update system protected by Ed25519 digital signatures and monotonic epoch rollback counters. |
+| **Modern MSIX Package** | `packaging/Helm.msix` | Official Windows store-compatible signed package. Installs natively with zero elevation prompts, isolated execution, seamless Windows Start integration, and clean uninstallation. |
+| **WinGet Package Manager** | `winget install HelmAI.Helm` | Command-line deployment via Windows Package Manager. Manifest verified with authentic SHA-256 digest in `packaging/winget/Helm.yaml`. |
+| **Velopack Monotonic Updates** | `helm_update_manifest.json` | Incremental cryptographic delta updates verified by pinned Ed25519 digital signatures (`helm/core/update_verifier.py`) with monotonic anti-rollback epoch protection. |
 
 ---
 
-## 2. Packaging Toolchain & CLI Reference
+## 2. Packaging Toolchain & Scripts
 
-Helm includes automated release engineering scripts under `scripts/`.
+Automated release scripts are located under [`scripts/`](file:///d:/homie/scripts):
 
-### 2.1 The Unified Packager: `scripts/package_helm.py`
+### 2.1 Single-Click MSIX Packager: `scripts/build_msix.ps1`
 
-The main entry point for building release artifacts.
+Compiles the Windows modern package bundle using `MakeAppx.exe` and `SignTool.exe` based on [`packaging/AppxManifest.xml`](file:///d:/homie/packaging/AppxManifest.xml):
 
 ```powershell
-# Build everything (standalone binary + Inno Setup installer + portable zip)
-python scripts/package_helm.py --all --version 1.0.0
-
-# Build portable zip bundle only
-python scripts/package_helm.py --portable --version 1.0.0
-
-# Compile standalone PyInstaller binary only
-python scripts/package_helm.py --standalone
-
-# Compile Inno Setup installer only
-python scripts/package_helm.py --installer --version 1.0.0
-
-# Clean build and dist caches prior to building
-python scripts/package_helm.py --all --clean
+# Build signed MSIX package
+powershell -ExecutionPolicy Bypass -File scripts/build_msix.ps1 -Version "1.0.0"
 ```
 
-### 2.2 Standalone Binary Compiler: `scripts/build_standalone.py`
+The MSIX package declares:
+- **Application ID**: `HelmAI.Helm`
+- **Capabilities**: RunFullTrust, BackgroundTasks
+- **Visual Assets**: Windows 11 high-DPI icons (`Square44x44Logo.png`, `Square150x150Logo.png`, `SplashScreen.png`)
 
-Orchestrates PyInstaller compilation against `helm.spec`.
+### 2.2 WinGet Manifest: `packaging/winget/Helm.yaml`
 
-```powershell
-# Run a pre-flight dry run to audit assets and dependencies
-python scripts/build_standalone.py --dry-run
-
-# Automatically install PyInstaller and compile standalone executable
-python scripts/build_standalone.py --install-deps --clean
-
-# Compile with a specific spec file and version tag
-python scripts/build_standalone.py --spec helm.spec --version 1.0.0
-```
-
-### 2.3 PyInstaller Specification: `helm.spec`
-
-The declarative PyInstaller configuration:
-- **Entry Point**: `app.py` (Desktop HUD, Floating Omnibar, Voice Pipeline & Agent Core).
-- **Console Mode**: `console=False` (suppresses black CMD window popups; native desktop GUI).
-- **Bundled Assets**: `ui/` (HTML/CSS/JS/Icons) and `config/` (MCP catalogs).
-- **Runtime Hook**: `scripts/pyi_rth_helm.py` configures paths and UTF-8 console output.
-- **Hidden Imports**:
-  - `webview`, `webview.platforms.winforms`, `webview.platforms.edgechromium`, `clr`, `pythonnet`
-  - `faster_whisper`, `ctranslate2`, `tokenizers`, `sounddevice`, `pyaudio`, `pyaudiowpatch`
-  - `winrt`, `winrt.windows.ui.notifications`, `winrt.windows.media.ocr`
-  - `cryptography`, `Crypto`
-  - `pynput`, `pyautogui`, `pystray`, `win32gui`, `win32api`, `mss`
-
----
-
-## 3. Inno Setup Installer: `scripts/helm_installer.iss`
-
-The Inno Setup script compiles a single-file Windows setup wizard (`Helm-Setup-1.0.0.exe`).
-
-### Key Installer Capabilities:
-1. **Dynamic Payload Fallback**:
-   - If `dist/Helm/Helm.exe` has been compiled, it packages the standalone binary distribution.
-   - If not yet compiled to a standalone binary, it seamlessly packages the source tree and configures shortcuts to target `run.bat`.
-2. **Dual-Scope Installation**:
-   - Defaults to `PrivilegesRequired=lowest` (`%LOCALAPPDATA%\Programs\Helm`), allowing non-admin installation without UAC prompt.
-   - Automatically supports machine-wide installation to `C:\Program Files\Helm` if elevated (`/ALLUSERS`).
-3. **Shortcuts & Icons**:
-   - Start Menu: `{autoprograms}\Helm`
-   - Desktop Shortcut: `{autodesktop}\Helm` (optional task)
-   - Startup Tray: `{autostartup}\Helm --tray` (optional task to run minimized in system tray on login)
-4. **URL Protocol Handler**:
-   - Registers `helm://` protocol in Windows registry (`HKA\Software\Classes\helm`).
-   - Allows external applications or browsers to trigger Helm actions (e.g. `helm://chat?prompt=hello`, `helm://omnibar`).
-5. **Windows Run / CMD Integration**:
-   - Registers Windows App Paths (`HKA\Software\Microsoft\Windows\CurrentVersion\App Paths\Helm.exe`).
-   - Typing `helm` in the Windows Run dialog (<kbd>Win</kbd> + <kbd>R</kbd>) or Command Prompt instantly launches Helm.
-6. **Silent & Unattended Enterprise Deployment**:
-   ```cmd
-   Helm-Setup-1.0.0.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
-   ```
-7. **Clean Uninstallation**:
-   - Fully removes application files, staging directories (`.helm_staging`), and registry keys.
-
----
-
-## 4. GitHub Actions CI/CD Release Pipeline
-
-To automate the compilation and publishing of Helm releases on every Git tag (`v*.*.*`), create `.github/workflows/release.yml`:
-
-```yaml
-name: Release Engineering Pipeline
-
-on:
-  push:
-    tags:
-      - "v*.*.*"
-  workflow_dispatch:
-    inputs:
-      version:
-        description: "Release version (e.g. 1.0.0)"
-        required: true
-        default: "1.0.0"
-
-jobs:
-  build-windows:
-    name: Build Windows Distribution
-    runs-on: windows-latest
-    permissions:
-      contents: write
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: "pip"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller>=6.0.0
-
-      - name: Install Inno Setup 6
-        run: |
-          choco install innosetup --no-progress
-          echo "C:\Program Files (x86)\Inno Setup 6" >> $env:GITHUB_PATH
-
-      - name: Extract Version
-        id: get_version
-        shell: pwsh
-        run: |
-          $ver = "${{ github.event.inputs.version }}"
-          if (-not $ver) {
-            $ver = "${{ github.ref_name }}".TrimStart("v")
-          }
-          echo "VERSION=$ver" >> $env:GITHUB_OUTPUT
-
-      - name: Build Standalone Executable (PyInstaller)
-        run: |
-          python scripts/build_standalone.py --clean --version ${{ steps.get_version.outputs.VERSION }}
-
-      - name: Compile Inno Setup Installer
-        run: |
-          iscc /DMyAppVersion=${{ steps.get_version.outputs.VERSION }} /Q scripts/helm_installer.iss
-
-      - name: Build Portable Zip Bundle
-        run: |
-          python scripts/package_helm.py --portable --version ${{ steps.get_version.outputs.VERSION }}
-
-      - name: Sign Binaries (Authenticode)
-        if: env.SIGNING_CERT_BASE64 != ''
-        env:
-          SIGNING_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}
-          CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
-        shell: pwsh
-        run: |
-          $certBytes = [Convert]::FromBase64String($env:SIGNING_CERT_BASE64)
-          [IO.File]::WriteAllBytes("cert.pfx", $certBytes)
-          & "signtool.exe" sign /f cert.pfx /p $env:CERT_PASSWORD /fd sha256 /tr http://timestamp.digicert.com /td sha256 dist\Helm\Helm.exe
-          & "signtool.exe" sign /f cert.pfx /p $env:CERT_PASSWORD /fd sha256 /tr http://timestamp.digicert.com /td sha256 dist\Helm-Setup-${{ steps.get_version.outputs.VERSION }}.exe
-          Remove-Item cert.pfx -Force
-
-      - name: Generate SHA-256 Checksums
-        shell: pwsh
-        run: |
-          Get-ChildItem -Path dist -Filter "*.exe", "*.zip" | ForEach-Object {
-            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
-            "$hash  $($_.Name)" | Out-File -Append -FilePath "dist/SHA256SUMS.txt" -Encoding ascii
-          }
-
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/Helm-Setup-*.exe
-            dist/Helm-Windows-x64-portable-*.zip
-            dist/SHA256SUMS.txt
-          generate_release_notes: true
-```
-
----
-
-## 5. Windows Package Manager (Winget) Manifest Specification
-
-To publish Helm to the official Microsoft `winget-pkgs` repository:
-
-### 5.1 Package Directory Layout
-```text
-manifests/
-└── h/
-    └── HelmAI/
-        └── Helm/
-            └── 1.0.0/
-                ├── HelmAI.Helm.yaml
-                ├── HelmAI.Helm.installer.yaml
-                └── HelmAI.Helm.locale.en-US.yaml
-```
-
-### 5.2 Version Manifest: `HelmAI.Helm.yaml`
+Official singleton manifest for Windows Package Manager:
 ```yaml
 PackageIdentifier: HelmAI.Helm
 PackageVersion: 1.0.0
-DefaultLocale: en-US
-ManifestType: version
-ManifestVersion: 1.6.0
-```
-
-### 5.3 Installer Manifest: `HelmAI.Helm.installer.yaml`
-```yaml
-PackageIdentifier: HelmAI.Helm
-PackageVersion: 1.0.0
-InstallerType: inno
-Scope: user
-InstallModes:
-  - interactive
-  - silent
-  - silentWithProgress
-InstallerSwitches:
-  Silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
-  SilentWithProgress: /SILENT /SUPPRESSMSGBOXES /NORESTART
-UpgradeBehavior: install
-Protocols:
-  - helm
-Commands:
-  - helm
+PackageName: Helm
+Publisher: Helm AI
+License: MIT
+ShortDescription: Sovereign Windows Desktop AI Assistant
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/helm-ai/helm/releases/download/v1.0.0/Helm-Setup-1.0.0.exe
-    InstallerSha256: <CALCULATED_SHA256_OF_HELM_SETUP_EXE>
-ManifestType: installer
+    InstallerType: msix
+    InstallerUrl: https://github.com/helm-ai/helm/releases/download/v1.0.0/Helm.msix
+    InstallerSha256: 1064D9341F556732739DFE104743DF8CC9BE517A236F663A7C70518835265577
+    SignatureSha256: 1064D9341F556732739DFE104743DF8CC9BE517A236F663A7C70518835265577
+ManifestType: singleton
 ManifestVersion: 1.6.0
 ```
 
-### 5.4 Locale Manifest: `HelmAI.Helm.locale.en-US.yaml`
-```yaml
-PackageIdentifier: HelmAI.Helm
-PackageVersion: 1.0.0
-PackageLocale: en-US
-Publisher: Helm AI
-PublisherUrl: https://github.com/helm-ai/helm
-PublisherSupportUrl: https://github.com/helm-ai/helm/issues
-PrivacyUrl: https://github.com/helm-ai/helm/blob/master/SECURITY_NOTES.md
-PackageName: Helm
-PackageUrl: https://github.com/helm-ai/helm
-License: MIT
-LicenseUrl: https://github.com/helm-ai/helm/blob/master/LICENSE
-Copyright: Copyright (c) 2026 Helm AI
-ShortDescription: Offline-first voice assistant, Raycast-style omnibar, and autonomous desktop automation companion.
-Description: |
-  Helm is a next-generation Windows desktop AI assistant.
-  Features include:
-  - Floating Raycast-style Omnibar (<kbd>Ctrl</kbd> + <kbd>Space</kbd>).
-  - Sub-400ms Streaming Voice Pipeline with local Whisper and OneCore neural TTS.
-  - Interactive Canvas for visual document editing, tables, and live widgets.
-  - Multi-tier security governance with step-up verification and audit logging.
-  - Offline-first operation with optional Claude AI cloud synthesis.
-Tags:
-  - ai
-  - assistant
-  - voice
-  - omnibar
-  - productivity
-  - automation
-ManifestType: defaultLocale
-ManifestVersion: 1.6.0
-```
-
-### 5.5 Submitting to Winget
-Using the official `wingetcreate` CLI tool:
+Install locally via WinGet:
 ```powershell
-# Install wingetcreate
-winget install Microsoft.WingetCreate
-
-# Generate and submit manifests automatically
-wingetcreate new https://github.com/helm-ai/helm/releases/download/v1.0.0/Helm-Setup-1.0.0.exe
+winget install --manifest packaging/winget/Helm.yaml
 ```
+
+### 2.3 Velopack Setup & Delta Releases: `scripts/setup_velopack.py`
+
+Manages Velopack update deployment and packaging.
 
 ---
 
-## 6. Code Signing & Security Verification
+## 3. Cryptographic Verification & Offline Signing
 
-### 6.1 Windows Authenticode Signing
-To eliminate Windows SmartScreen warnings ("Windows protected your PC"), sign both the executable and setup installer:
+### 3.1 Ed25519 Manifest Signing: `scripts/sign_release.py`
+
+For in-app auto-updates, manifests are signed offline using the publisher's private Ed25519 key:
+
 ```powershell
-signtool.exe sign `
-  /tr http://timestamp.digicert.com `
-  /td sha256 `
-  /fd sha256 `
-  /a `
-  dist\Helm\Helm.exe
-
-signtool.exe sign `
-  /tr http://timestamp.digicert.com `
-  /td sha256 `
-  /fd sha256 `
-  /a `
-  dist\Helm-Setup-1.0.0.exe
-```
-
-### 6.2 Ed25519 Auto-Update Manifest Signing
-For in-app auto-updates (`update_verifier.py`), manifests must be signed offline with the publisher's private Ed25519 key:
-```powershell
-# Generate signed update manifest for deployment
 python scripts/sign_release.py
 ```
-`update_verifier.py` enforces:
-1. Strict SHA-256 payload equality.
+
+`helm.core.update_verifier` enforces:
+1. Pinned publisher public key hash assertion (`PINNED_PUBLISHER_KEY_SHA256`).
 2. Canonical JSON encoding.
-3. Monotonic `version_epoch` rollback prevention.
-4. Expiration timestamp (`expires_at`) validation.
+3. Strict SHA-256 digest validation of all payload files.
+4. Monotonic `version_epoch` rollback protection.
 
 ---
 
-## 7. Verification Checklist for Releases
+## 4. Pre-Release Verification Checklist
 
-- [ ] All UI templates (`ui/chat.html`, `ui/omnibar.html`, `ui/canvas.html`) render properly in bundled Webview2.
-- [ ] Application icon (`ui/AppIcon.ico`) displays correctly in taskbar, system tray, and Start Menu.
-- [ ] Silent installer (`Helm-Setup-1.0.0.exe /VERYSILENT`) completes with exit code 0.
-- [ ] Custom URI scheme `helm://` activates the application.
-- [ ] Uninstaller removes binary and cleans registry entries without leaving zombie processes.
+- [ ] All 10 suites in the regression battery pass 100%:
+  ```powershell
+  python -m pytest tests/test_performance_benchmarks.py tests/test_deterministic_uia.py tests/test_caret_dictation.py tests/test_msix_packaging.py tests/test_zero_config_fallback.py tests/test_telemetry.py tests/test_sync_engine.py tests/test_live_voice.py tests/test_plugin_ecosystem.py tests/test_os_hal.py -q
+  ```
+- [ ] Active UI templates (`ui/chat.html`, `ui/canvas.html`, `ui/omnibar.html`) load cleanly without JavaScript errors.
+- [ ] Application icons (`ui/AppIcon.ico`, `ui/AppIcon.png`) display correctly in taskbar and system tray.
+- [ ] Installer SHA-256 matches the WinGet manifest.

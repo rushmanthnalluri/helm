@@ -1,19 +1,16 @@
 # 🤝 Contributing to Helm
 
-Thank you for your interest in contributing to **Helm** — an open-source Windows desktop AI assistant built with Python. Whether you're squashing bugs, dreaming up features, or just improving a typo in the docs, every contribution makes Helm smarter, safer, and more useful for everyone. We're glad you're here! 🎉
+Thank you for your interest in contributing to **Helm** — an open-source Windows desktop AI assistant built with Python. Whether you're squashing bugs, dreaming up features, or improving docs, every contribution makes Helm faster, safer, and more useful for everyone. We're glad you're here! 🎉
 
 ---
 
 ## 🌟 Ways to Contribute
 
-There are many ways to get involved — no contribution is too small:
-
-- 🐛 **Bug Reports** — Found something broken? Open an issue with clear reproduction steps, your OS version, and any relevant logs.
+- 🐛 **Bug Reports** — Found something broken? Open an issue with clear reproduction steps, your OS version, and relevant logs.
 - 💡 **Feature Requests** — Have an idea that would make Helm better? Open a discussion or issue describing the problem you're solving and your proposed approach.
 - 🔌 **Plugins** — Extend Helm's capabilities by writing a new plugin. See [Adding a Plugin](#-adding-a-plugin) below.
-- 📝 **Documentation** — Improve README files, add docstrings, write guides, or fix typos. Great docs are a superpower.
-- 🌐 **Translations** — Help make Helm accessible to more users by contributing locale strings.
-- 🔬 **Tests** — Add test coverage for untested paths, edge cases, or new features.
+- 📝 **Documentation** — Improve README files, add docstrings, write guides, or fix typos.
+- 🔬 **Tests** — Add test coverage for untested paths, edge cases, or performance benchmarks.
 
 ---
 
@@ -21,8 +18,8 @@ There are many ways to get involved — no contribution is too small:
 
 ### Prerequisites
 
-- **Windows 10 or Windows 11** (required — Helm uses Windows-native APIs)
-- **Python 3.10 or later** (Python 3.14 recommended to match CI)
+- **Windows 10 or Windows 11** (required — Helm uses Windows-native APIs: UIA, DWM, Win32)
+- **Python 3.10 or later** (Python 3.11 – 3.14 fully supported)
 - **Git**
 
 ### Getting Started
@@ -36,42 +33,48 @@ cd helm
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 
-# 3. Install dependencies
+# 3. Install production & testing dependencies
 pip install -r requirements.txt
 
-# 4. Run the desktop GUI
-python app.py
+# 4. Launch the desktop GUI
+python -m helm.gui.app
 
 # 5. Or run the CLI brain
-python helm.py
+python -m helm.core.helm
 
 # 6. Or launch the terminal chat interface
-python chat_cli.py
+python -m helm.engine.chat_cli
 ```
 
 > [!NOTE]
-> Configuration lives at `%USERPROFILE%\.config\helm\settings.json`. You can also override most settings via environment variables. See the README for details.
+> Configuration lives at `%USERPROFILE%\.config\helm\settings.yaml`. You can also override settings via environment variables (`GEMINI_API_KEY`, `GROQ_API_KEY`, `NVIDIA_API_KEY`).
 
 ---
 
 ## 🧪 Running Tests
 
-Helm has a comprehensive test suite with **350+ tests across 90+ test files**.
+Helm is verified by **800+ automated tests across 90+ test files**.
 
-### Run the Full Suite
+### Run the Core Production Battery
 
 ```powershell
-python -m pytest -q
+python -m pytest tests/test_performance_benchmarks.py tests/test_deterministic_uia.py tests/test_caret_dictation.py tests/test_msix_packaging.py tests/test_zero_config_fallback.py tests/test_telemetry.py tests/test_sync_engine.py tests/test_live_voice.py tests/test_plugin_ecosystem.py tests/test_os_hal.py -q
+```
+
+### Run the Complete Test Suite
+
+```powershell
+python -m pytest tests/ -q
 ```
 
 ### Run a Focused Subset
 
 ```powershell
 # Run a specific test file
-python -m pytest tests/test_voice_pipeline.py -q
+python -m pytest tests/test_caret_dictation.py -q
 
 # Run tests matching a keyword
-python -m pytest -k "webauthn" -q
+python -m pytest -k "windows_hello" -q
 
 # Run with verbose output
 python -m pytest -v
@@ -81,205 +84,69 @@ python -m pytest -v
 
 | Area | Description |
 |---|---|
-| Fast commands | Core command dispatch and response logic |
-| Security mutations | Mutation tests for security-critical modules |
-| WebAuthn | Passkey / FIDO2 authentication flows |
-| Voice pipeline | STT/TTS pipeline integration |
-| Injection harness | Prompt injection resistance |
-| Omnibar | Universal input and routing |
-| Skill compiler | Plugin/skill compilation and loading |
-| Semantic memory | Embedding-based memory retrieval |
-| Mail & Calendar | Email and calendar integrations |
-| Browser automation | Headless browser control |
-| Red-team | Adversarial robustness tests |
-
-> [!TIP]
-> Run `python -m pytest --co -q` to list all collected tests without executing them — useful for getting your bearings in the suite.
-
----
-
-## 🎨 Code Style
-
-We recommend the following formatters and linters (they're fast, and your editor probably supports them):
-
-- **[black](https://black.readthedocs.io/)** — opinionated, deterministic Python formatter
-- **[ruff](https://docs.astral.sh/ruff/)** — extremely fast linter that covers flake8, isort, and more
-
-```powershell
-pip install black ruff
-
-# Format
-black .
-
-# Lint
-ruff check .
-```
-
-**General guidelines:**
-- Match the style of the surrounding code when in doubt.
-- Keep functions and methods focused; prefer small, testable units.
-- Add docstrings to public functions, classes, and modules.
-- Avoid clever one-liners that sacrifice readability.
+| **Performance Benchmarks** | Sub-10ms Mica Alt compositing, HWND pre-warm latency, <80MB RAM daemon footprint |
+| **Deterministic UIA** | 100% PyAutoGUI purge check (AST visitor), Microsoft UIA COM patterns, window confinement |
+| **Caret Dictation** | Native `SendInput(KEYEVENTF_UNICODE)` streaming, filler word removal, sub-300ms latency |
+| **Biometrics & Security** | Windows Hello face/fingerprint authentication, HMAC-SHA256 audit ledger, taint tracking |
+| **Zero-Config Fallback** | Automated offline guidance and local Ollama detection |
+| **Voice Pipeline** | Streaming VAD, faster-whisper STT, neural TTS barge-in |
+| **Plugin Ecosystem** | Plugin discovery, manifest validation, SDK lifecycle |
+| **MSIX Packaging** | AppxManifest compliance, asset enumeration, authentic WinGet SHA-256 digest |
 
 ---
 
 ## 🔒 Security-Critical Modules
 
-The following modules implement core trust and safety mechanisms. **Any pull request that touches these files must include mutation tests** to demonstrate that the security invariants hold even when code is subtly altered:
+The following modules implement core trust and safety mechanisms. Any pull request touching these files must ensure all security invariants remain intact:
 
 | Module | Purpose |
 |---|---|
-| `webauthn_verifier.py` | FIDO2/WebAuthn credential verification |
-| `helm_confinement.py` | Main process sandboxing and confinement |
-| `worker_confinement.py` | AppContainer worker sandboxing |
-| `rails_*.py` | Safety rails and output filtering |
-| `taint_tracker.py` | Taint propagation for untrusted input |
-| `step_up_gate.py` | Elevated-privilege step-up authentication |
-| `agent_audit_ledger.py` | Tamper-evident action audit log |
-| `crypto_vault.py` | Secret storage and key management |
-| `policy_envelope.py` | Signed policy enforcement |
-| `update_verifier.py` | Signed update verification |
-
-> [!CAUTION]
-> Do **not** bypass the supervisor ↔ AppContainer worker trust boundary under any circumstances. Changes to the security architecture should be discussed in an issue before any code is written.
-
-Please also review `THREAT_MODEL.md` for a full description of the trust model, attack surface, and security assumptions before making changes to any of these modules.
-
-**Running mutation tests:**
-
-```powershell
-# Example using mutmut (adjust to your mutation testing setup)
-python -m pytest tests/test_security_mutations.py -q
-```
+| `helm/core/windows_hello.py` | On-device Windows Hello biometric verification gate |
+| `helm/core/helm_confinement.py` | Main process sandboxing and confinement boundaries |
+| `helm/core/helm_supervisor.py` | Out-of-process supervisor daemon & job confinement |
+| `helm/core/taint_tracker.py` | Session taint tracking & step-up approval routing |
+| `helm/core/agent_audit_ledger.py` | Tamper-evident HMAC-SHA256 action audit log |
+| `helm/core/crypto_vault.py` | AES-256-GCM secret storage and key management |
+| `helm/core/update_verifier.py` | Monotonic Ed25519 signed update verification |
 
 ---
 
 ## 🔌 Adding a Plugin
 
-Helm's plugin system lives in `helm_plugins.py` and the `plugins/` directory. The best reference implementation is the **Spotify plugin**:
+Helm's plugin system lives in `plugins/` and is managed by `helm.engine.helm_plugin_sdk`:
 
 ```
 plugins/
 └── spotify/
     ├── manifest.json   ← plugin metadata and capability declarations
-    └── plugin.py       ← plugin implementation
+    └── plugin.py       ← plugin implementation subclassing HelmPlugin
 ```
 
-### `manifest.json`
-
-Declares the plugin's identity, version, required permissions, and the intents it handles:
-
-```json
-{
-  "name": "spotify",
-  "version": "1.0.0",
-  "description": "Control Spotify playback via Helm.",
-  "permissions": ["network"],
-  "intents": ["play_music", "pause_music", "skip_track"]
-}
-```
-
-### `plugin.py`
-
-Implements the intent handlers that Helm dispatches to:
-
-```python
-class SpotifyPlugin:
-    def play_music(self, context):
-        ...
-```
-
-> [!IMPORTANT]
-> Plugins run outside the security-critical core. Do not access `crypto_vault.py`, `agent_audit_ledger.py`, or any confinement module from plugin code. Declare all required permissions in `manifest.json`.
-
-Open an issue to discuss your plugin idea before building something large — we can give early design feedback and help it land faster.
-
----
-
-## 📬 Pull Request Guidelines
-
-- **Keep PRs small and focused.** One feature or fix per PR makes review faster and merging safer.
-- **Describe what and why**, not just how. A good PR description explains the problem being solved.
-- **Link related issues** using `Closes #123` or `Fixes #123` in the PR description.
-- **Add or update tests** for any behaviour you change or introduce.
-- **Update documentation** (README, docstrings, comments) when you change the user-visible behaviour.
-- **Never commit secrets.** See [Secrets to Never Commit](#secrets-to-never-commit) below.
-- Keep CI green — all checks must pass before a PR can be merged.
-
-### Secrets to Never Commit
-
-The following files and patterns must **never** appear in a commit:
-
-- `.helm_vault.key`
-- `.helm_session.token`
-- `.helm_ledger_hmac.key`
-- `.env`
-- API keys, tokens, or passwords of any kind
-
-If you accidentally commit a secret, treat it as compromised and rotate it immediately. Use `git filter-repo` or contact the maintainers for help cleaning the history.
+Declare all permissions and intent triggers in `manifest.json`.
 
 ---
 
 ## 💬 Commit Message Style
 
-We follow **[Conventional Commits](https://www.conventionalcommits.org/)** to keep the history readable and changelog generation automatic:
+We follow **[Conventional Commits](https://www.conventionalcommits.org/)**:
 
 ```
-<type>(<optional scope>): <short summary>
+<type>(<scope>): <summary>
 
 [optional body]
-
-[optional footer(s)]
 ```
 
-### Common Types
-
-| Type | When to use |
-|---|---|
-| `feat:` | A new feature |
-| `fix:` | A bug fix |
-| `docs:` | Documentation only changes |
-| `test:` | Adding or updating tests |
-| `security:` | A security fix or hardening change |
-| `refactor:` | Code change that is neither a fix nor a feature |
-| `chore:` | Build process, dependency updates, tooling |
-| `perf:` | A performance improvement |
+**Common Types:** `feat:`, `fix:`, `docs:`, `test:`, `security:`, `refactor:`, `chore:`, `perf:`.
 
 **Examples:**
-
 ```
-feat(plugins): add Spotify plugin with playback control
-fix(webauthn): reject credentials with expired timestamps
-docs(contributing): add mutation test instructions
-security(crypto_vault): rotate key derivation to Argon2id
+feat(dictation): add filler-word filter for streaming whisper
+fix(biometrics): verify Windows Hello availability before challenge
+docs(readme): update package structure to helm.core, helm.gui, helm.engine
 ```
-
----
-
-## 🚨 Reporting Security Vulnerabilities
-
-**Please do not report security vulnerabilities as public GitHub issues.**
-
-If you discover a security vulnerability in Helm:
-
-1. **GitHub Security Advisories (preferred):** Open a [private security advisory](https://github.com/your-org/helm/security/advisories/new) on the repository. This keeps the report confidential until a fix is ready.
-2. **Email:** Send details to the maintainers via the security contact listed in `SECURITY.md`.
-
-Please include:
-- A description of the vulnerability and its potential impact
-- Reproduction steps or a minimal proof-of-concept
-- Affected versions or modules
-
-We aim to acknowledge reports within **48 hours** and to coordinate disclosure with you. Thank you for helping keep Helm and its users safe. 🛡️
 
 ---
 
 ## 📄 License
 
-Helm is released under the **MIT License**. By contributing, you agree that your contributions will be licensed under the same MIT License that covers the project.
-
-See [`LICENSE`](./LICENSE) for the full license text.
-
----
-
-*Happy hacking! If you have any questions, feel free to open a discussion or reach out in the community chat. We're excited to build Helm with you.* 🏠✨
+Helm is released under the **MIT License**.

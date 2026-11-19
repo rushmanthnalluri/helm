@@ -74,22 +74,19 @@ Owner-only DACLs (kernel-level deny entries) are applied to:
 
 These denials are enforced by the kernel even if the supervisor process closes its own handles — a compromised supervisor cannot grant access.
 
-### Layer 3 — Authentication Gates
+### Layer 3 — Authentication & Elevation Gates
 
-#### Gate 1 — WebAuthn Physical Phone Gate
+#### Gate 1 — Windows Hello Biometric Hardware Gate (`helm.core.windows_hello`)
 
 | Property | Value |
 |----------|-------|
-| Algorithms | ES256 (P-256) and Ed25519 |
-| Challenge binding | SHA-256 of canonical approval payload |
-| Device binding | Device-bound credentials only; `BE=1` (synced/passkey) assertions are **rejected** |
-| Required flags | `UP` (user presence) + `UV` (user verification) both required |
-| Replay protection | Monotonic sign counter; rollback triggers rejection |
-| Scope | Required for: mail send, calendar invites, browser form submit |
+| Biometric Modalities | Facial recognition (IR camera) and Fingerprint sensor |
+| Windows Platform API | `Windows.Security.Credentials.UI.UserConsentVerifier` |
+| Verification Scope | Privileged system actions, credential access, external tool execution |
+| Fallback | OS PIN elevation / Secure Desktop prompt |
+| Replay Protection | Nonce-bound one-time consent tokens; zero static credential transmission |
 
-WebAuthn assertions are additionally protected by an **anti-TOCTOU DOM mutation check**: the page state is re-validated after the assertion is received to detect content that changed between user approval and execution.
-
-#### Gate 2 — Injection Baseline Harness
+#### Gate 2 — Injection Baseline Harness (`helm.engine.injection_baseline_harness`)
 
 | Property | Value |
 |----------|-------|
@@ -144,14 +141,10 @@ WebAuthn assertions are additionally protected by an **anti-TOCTOU DOM mutation 
 
 | Primitive | Usage |
 |-----------|-------|
-| **Ed25519** | WebAuthn assertions (Gate 1), update manifest signatures |
-| **ES256 (ECDSA P-256 + SHA-256)** | WebAuthn assertions (Gate 1), alternative to Ed25519 |
-| **SHA-256** | WebAuthn challenge binding (hash of canonical approval), audit ledger hash chain |
-| **HMAC-SHA-256** | Audit ledger per-entry message authentication (keyed with `.helm_ledger_hmac.key`) |
-| **AES (vault)** | Symmetric encryption of secrets at rest via `crypto_vault.py` |
-
-> [!NOTE]
-> WebAuthn credentials must be **device-bound** (`BE=0`). Synced passkeys (`BE=1`) are explicitly rejected to prevent credential theft via account compromise on a secondary device.
+| **Ed25519** | Pinned publisher update manifest signatures (`helm.core.update_verifier`) |
+| **AES-256-GCM** | Symmetric authenticated encryption of secrets and credentials at rest (`helm.core.crypto_vault`) |
+| **SHA-256** | File integrity hashing, update payload validation, and audit ledger hash chaining |
+| **HMAC-SHA-256** | Tamper-evident audit ledger per-entry message authentication (`.helm_ledger_hmac.key`) |
 
 ---
 
@@ -162,10 +155,10 @@ WebAuthn assertions are additionally protected by an **anti-TOCTOU DOM mutation 
 ### In Scope (Defended)
 
 - Prompt injection and indirect injection across 7 modalities (0.00% policy-level ASR)
-- Unauthorized tool invocations (audit ledger, rails, WebAuthn gates)
+- Unauthorized tool invocations (audit ledger, rails, Windows Hello biometric gates)
 - Network exfiltration from the worker process (AppContainer zero-network)
-- Replay attacks on IPC and WebAuthn (monotonic counters, sign-counter rollback protection)
-- Synthetic keystroke injection (WH_KEYBOARD_LL filter)
+- Replay attacks on IPC (monotonic counters and nonce stores)
+- Synthetic keystroke injection (WH_KEYBOARD_LL low-level physical filter)
 - Malicious software updates (Ed25519 signed manifests + rollback protection)
 - Lateral movement via SSRF (helm_ssrf.py + AppContainer)
 - Secrets exposure (owner-only DACLs, encrypted vault, gitignore)

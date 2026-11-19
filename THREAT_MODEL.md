@@ -24,12 +24,12 @@ The Helm architecture partitions execution into strictly separated trust zones:
 |  +--------------------+                                                 |
 +-------------------------------------------------------------------------+
              ^
-             | Signed WebAuthn Challenge (HTTPS / Out-of-Band Phone Gateway)
+             | Hardware Biometric Assertion (UserConsentVerifier / Windows Hello)
              v
 +-------------------------------------------------------------------------+
-|                           MOBILE PHONE GATEWAY                          |
-|  Hardware Authenticator (Secure Enclave / Platform Keystore)            |
-|  Private Key isolated from PC; Single-Use Monotonic Sequence Counter    |
+|                     WINDOWS HELLO ON-DEVICE HARDWARE GATE               |
+|  Biometric Sensor (Face IR Camera / Touch Fingerprint / TPM Enclave)    |
+|  Platform-attested verification directly on workstation hardware        |
 +-------------------------------------------------------------------------+
 ```
 
@@ -86,12 +86,10 @@ Helm provides empirically verified, kernel-enforced guarantees on Windows 10/11:
 ### D. Workstation Process Boundaries & Out-of-Process Supervisor Split (Batch 41 Deployed)
 - **Same-User Host Environment Realities**: On a standard single-user Windows workstation operating without a dedicated privileged Windows Service running as `NT AUTHORITY\SYSTEM`, all processes running under the same interactive standard user account share the same filesystem access rights. Unsandboxed, pre-existing same-user host malware can arbitrarily inspect or modify files owned by that user.
 - **Out-of-Process Supervisor Daemon & Pipe Client Split**: In Batch 41, the Policy Supervisor was decoupled into a dedicated out-of-process daemon (`helm_supervisor_daemon.py`) communicating over Windows Named Pipe `\\.\pipe\helm_supervisor` with kernel-attested client validation (`GetNamedPipeClientProcessId`). The daemon holds exclusive custody of the cryptographic INTENT V2 HMAC signing keys, HMAC-SHA256 audit ledger, and physical actuators. The UI/broker process (`action_broker.py`) operates as a pipe client holding no signing keys, and fails closed immediately across all channels if the supervisor process is unreachable or terminated.
-- **Mandatory Mobile Cryptographic Proof & Zero-Trust Doctrine**: In `rails_confirmation.py` and `helm_supervisor.py`, when a mobile device is enrolled in `device_registry`, `confirm()` strictly requires a cryptographically verified signed approval blob from the enrolled hardware device. Local callers cannot bypass phone authentication. Furthermore, under zero-trust doctrine (Round 48+), if no mobile device is enrolled in `device_registry`, all consequential confirmation requests are strictly and unconditionally DENIED (`DENIED: No mobile device enrolled. All consequential tools strictly require approval from an enrolled phone.`). Fragile local presence-gesture fallbacks have been completely eliminated.
+- **On-Device Hardware Elevation & Windows Hello**: In `rails_confirmation.py` and `helm_supervisor.py`, consequential actions (filesystem writes, external executions, credential extraction) require verified on-device human confirmation via Windows Hello biometric authentication (`helm.core.windows_hello`). Local unauthenticated callers cannot bypass biometric gating.
 - **Hardware Grounding & Anti-DoS ACLs**: Recovery token file DACL explicitly denies `DELETE` permission to standard `Users` SID (`S-1-5-32-545`), preventing unprivileged denial-of-service deletion. Script self-elevation via `ShellExecuteW(runas)` has been removed, eliminating user-space hijacking of user-writable scripts.
-- **Evidence-Based Security (Store Evidence, Not a Verdict)**: To ensure integrity against untrusted local worker injection or malicious database writes, the Policy Supervisor never treats row presence or unsigned SQLite boolean flags as an authorization verdict. Every approval requires a full **Signed Approval Blob** containing `{device_id, caller_id, tool_name, args_hash, nonce, expiry, taint_epoch, challenge_seq, signature}`.
-- **Asymmetric Signature Verification Against Pinned Authenticator Keys**: When `consume_approved_action` executes, the supervisor independently verifies the Ed25519 or NIST P-256 asymmetric signature against enrolled public keys in `.helm_device_keys.json`. Private signing keys reside exclusively on the user's mobile hardware device (or platform hardware keystore / WebCrypto enclave) and never touch the PC. An attacker manipulating the SQLite database cannot forge valid approvals.
-- **Persistent Nonce Single-Use & Anti-Burn DoS**: The supervisor records and checks nonces at consumption time against a persistent nonce store. Candidate matching rows in SQLite are iterated so malicious unauthenticated junk rows cannot burn legitimate approvals (Anti-Burn DoS protection).
-- **WebCrypto Browser Keys vs Hardware Platform Keystores**: Phone approval portal web sessions use non-extractable WebCrypto keypairs bound to browser storage. For maximum defense-in-depth, hardware-backed authenticators (FIDO2 WebAuthn / Secure Enclave) bind keys directly to device platform hardware (TPM / Apple Secure Enclave / Android StrongBox), barring key exfiltration even from browser processes.
+- **Evidence-Based Security (Store Evidence, Not a Verdict)**: To ensure integrity against untrusted local worker injection or malicious database writes, the Policy Supervisor never treats row presence or unsigned SQLite boolean flags as an authorization verdict. Every approval requires an explicit, tamper-evident challenge token.
+- **Persistent Nonce Single-Use & Anti-Burn DoS**: The supervisor records and checks nonces at consumption time against a persistent nonce store. Candidate matching entries are iterated so malicious unauthenticated junk requests cannot burn legitimate approvals (Anti-Burn DoS protection).
 
 ### E. Kernel DACL Process Boundary Protection (UI-to-Daemon Process Memory Isolation & OWNER RIGHTS ACE)
 - **Mechanism**: The supervisor daemon calls helm_confinement.harden_current_process() upon initialization. This applies an explicit Windows NT DACL to the process token using PROTECTED_DACL_SECURITY_INFORMATION. It grants the current user's SID (_my_sid()) strictly SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE, while omitting PROCESS_VM_READ (0x0010), PROCESS_VM_WRITE (0x0020), PROCESS_VM_OPERATION (0x0008), and PROCESS_DUP_HANDLE (0x0040).
