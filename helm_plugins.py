@@ -184,6 +184,17 @@ def validate_plugin_id(plugin_id: str) -> bool:
     return bool(plugin_id and _PLUGIN_ID_RE.match(plugin_id))
 
 
+def _get_manifest_file(directory: Path) -> Optional[Path]:
+    """Returns plugin.json or manifest.json if present in directory."""
+    pj = directory / "plugin.json"
+    if pj.exists():
+        return pj
+    mj = directory / "manifest.json"
+    if mj.exists():
+        return mj
+    return None
+
+
 def list_installed_plugins() -> List[Dict[str, Any]]:
     """Lists all installed plugins and their current enabled status."""
     plugins_dir = get_plugins_dir()
@@ -196,8 +207,8 @@ def list_installed_plugins() -> List[Dict[str, Any]]:
 
     for item in plugins_dir.iterdir():
         if item.is_dir():
-            manifest_file = item / "manifest.json"
-            if manifest_file.exists():
+            manifest_file = _get_manifest_file(item)
+            if manifest_file and manifest_file.exists():
                 try:
                     manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
                     pid = manifest.get("id", item.name)
@@ -333,14 +344,15 @@ def load_plugin(plugin_id: str, registry: Optional[Any] = None) -> Dict[str, Any
 
     # Locate plugin directory
     target_dir = get_plugins_dir() / pid
-    if not target_dir.exists() or not (target_dir / "manifest.json").exists():
+    manifest_file = _get_manifest_file(target_dir) if target_dir.exists() else None
+    if not manifest_file:
         bundled = _find_bundled_plugin_dir(pid)
-        if bundled and (bundled / "manifest.json").exists():
-            target_dir = bundled
-        else:
+        if bundled:
+            manifest_file = _get_manifest_file(bundled)
+            if manifest_file:
+                target_dir = bundled
+        if not manifest_file:
             return {"ok": False, "error": f"Plugin directory for '{pid}' not found.", "plugin_id": pid}
-
-    manifest_file = target_dir / "manifest.json"
     try:
         manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
     except Exception as e:
@@ -536,7 +548,7 @@ def load_all_installed_plugins(registry: Optional[Any] = None) -> Dict[str, Any]
     loaded = {}
     if plugins_dir.exists():
         for item in plugins_dir.iterdir():
-            if item.is_dir() and (item / "manifest.json").exists():
+            if item.is_dir() and _get_manifest_file(item) is not None:
                 pid = item.name
                 if enabled_map.get(pid, True):
                     loaded[pid] = load_plugin(pid, registry=registry)

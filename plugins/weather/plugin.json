@@ -1,0 +1,85 @@
+{
+  "id": "weather",
+  "name": "Weather & Forecast Lookup",
+  "version": "1.0.0",
+  "author": "Helm Team",
+  "description": "Instant current weather and multi-day forecast lookup via wttr.in and open-meteo (no API key required).",
+  "category": "Weather",
+  "icon": "cloud-sun",
+  "permissions": ["network"],
+  "commands": [
+    {
+      "id": "current_weather",
+      "title": "Current Weather",
+      "description": "Look up real-time temperature, humidity, and conditions for any city",
+      "shortcut": "Ctrl+Shift+W",
+      "handler": "weather_get_current"
+    },
+    {
+      "id": "weather_forecast",
+      "title": "Weather Forecast",
+      "description": "Look up multi-day weather forecast",
+      "handler": "weather_get_forecast"
+    },
+    {
+      "id": "quick_summary",
+      "title": "Quick Weather Line",
+      "description": "Get an instant one-line weather summary for quick glance",
+      "handler": "weather_quick_summary"
+    }
+  ],
+  "tools": [
+    {
+      "name": "weather_get_current",
+      "description": "Fetch current weather conditions, temperature, humidity, and wind for a city or coordinates.",
+      "python_callable": "plugin:weather_get_current",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "City name, zip code, or latitude,longitude (e.g. 'Tokyo', 'London', 'San Francisco')"
+          }
+        },
+        "required": ["location"]
+      },
+      "required_permissions": ["network"]
+    },
+    {
+      "name": "weather_get_forecast",
+      "description": "Fetch multi-day weather forecast with daily highs, lows, and conditions.",
+      "python_callable": "plugin:weather_get_forecast",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "City or location name"
+          },
+          "days": {
+            "type": "integer",
+            "description": "Number of forecast days (1 to 3, default: 3)"
+          }
+        },
+        "required": ["location"]
+      },
+      "required_permissions": ["network"]
+    },
+    {
+      "name": "weather_quick_summary",
+      "description": "Get a compact, one-line human readable weather summary for a location.",
+      "python_callable": "plugin:weather_quick_summary",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "City name or location"
+          }
+        },
+        "required": ["location"]
+      },
+      "required_permissions": ["network"]
+    }
+  ]
+}

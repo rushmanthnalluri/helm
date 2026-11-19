@@ -1,0 +1,113 @@
+{
+  "id": "notion",
+  "name": "Notion Quick Capture & Search",
+  "version": "1.0.0",
+  "author": "Helm Team",
+  "description": "Quick capture notes and search pages across Notion workspaces.",
+  "category": "Productivity",
+  "icon": "book-open",
+  "permissions": ["network", "clipboard"],
+  "commands": [
+    {
+      "id": "capture_note",
+      "title": "Quick Capture Note",
+      "description": "Quickly capture an idea, task, or note to Notion",
+      "shortcut": "Ctrl+Shift+N",
+      "handler": "notion_quick_capture"
+    },
+    {
+      "id": "search_pages",
+      "title": "Search Pages",
+      "description": "Search across Notion pages and databases",
+      "shortcut": "Ctrl+Shift+O",
+      "handler": "notion_search_pages"
+    }
+  ],
+  "tools": [
+    {
+      "name": "notion_quick_capture",
+      "description": "Quickly capture a note, idea, or task to Notion inbox.",
+      "python_callable": "plugin:notion_quick_capture",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The note or body text to capture"
+          },
+          "title": {
+            "type": "string",
+            "description": "Optional title for the note"
+          },
+          "tags": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Optional category tags"
+          }
+        },
+        "required": ["text"]
+      },
+      "required_permissions": ["network"]
+    },
+    {
+      "name": "notion_search_pages",
+      "description": "Search Notion workspace pages and databases by title or query.",
+      "python_callable": "plugin:notion_search_pages",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Search keywords or title substring"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum results to return (default: 5)"
+          }
+        },
+        "required": ["query"]
+      },
+      "required_permissions": ["network"]
+    },
+    {
+      "name": "notion_create_page",
+      "description": "Create a new structured Notion page with title and content.",
+      "python_callable": "plugin:notion_create_page",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Page title"
+          },
+          "content": {
+            "type": "string",
+            "description": "Page body markdown or text"
+          },
+          "parent_id": {
+            "type": "string",
+            "description": "Optional parent page or database ID"
+          }
+        },
+        "required": ["title", "content"]
+      },
+      "required_permissions": ["network"]
+    },
+    {
+      "name": "notion_get_page",
+      "description": "Retrieve page metadata and content by Notion page ID.",
+      "python_callable": "plugin:notion_get_page",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "page_id": {
+            "type": "string",
+            "description": "The unique Notion page ID"
+          }
+        },
+        "required": ["page_id"]
+      },
+      "required_permissions": ["network"]
+    }
+  ]
+}

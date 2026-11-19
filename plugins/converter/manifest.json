@@ -1,0 +1,65 @@
+{
+  "id": "converter",
+  "name": "Multi-Unit & Currency Converter",
+  "version": "1.0.0",
+  "author": "Helm Team",
+  "description": "Currency conversion, safe mathematical expression evaluator, timezone converter, and unit conversion.",
+  "category": "Utilities",
+  "capabilities": ["system:calc"],
+  "tools": [
+    {
+      "name": "evaluate_math",
+      "description": "Safely evaluate a mathematical expression.",
+      "python_callable": "plugin:evaluate_math",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "expression": {"type": "string"}
+        },
+        "required": ["expression"]
+      }
+    },
+    {
+      "name": "convert_currency",
+      "description": "Convert money between currencies.",
+      "python_callable": "plugin:convert_currency",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "amount": {"type": "number"},
+          "from_currency": {"type": "string"},
+          "to_currency": {"type": "string"}
+        },
+        "required": ["amount", "from_currency", "to_currency"]
+      }
+    },
+    {
+      "name": "convert_timezone",
+      "description": "Convert time from one timezone to another.",
+      "python_callable": "plugin:convert_timezone",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "time_str": {"type": "string"},
+          "from_tz": {"type": "string"},
+          "to_tz": {"type": "string"}
+        },
+        "required": ["from_tz", "to_tz"]
+      }
+    },
+    {
+      "name": "convert_units",
+      "description": "Convert physical values across units.",
+      "python_callable": "plugin:convert_units",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "value": {"type": "number"},
+          "from_unit": {"type": "string"},
+          "to_unit": {"type": "string"}
+        },
+        "required": ["value", "from_unit", "to_unit"]
+      }
+    }
+  ]
+}
