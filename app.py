@@ -140,6 +140,7 @@ class HelmApp:
         self._physical_alt_down = False
         self.tray = None
         self.telegram = None
+        self.omnibar = None
 
     @property
     def agent_core(self):
@@ -243,6 +244,16 @@ class HelmApp:
         ui_path = os.path.join(BASE_DIR, 'ui', 'chat.html')
         with open(ui_path, 'r', encoding='utf-8') as f:
             return f.read()
+
+    def _toggle_omnibar(self):
+        """Toggles the floating Spotlight/Raycast-class Omnibar."""
+        if not hasattr(self, 'omnibar') or self.omnibar is None:
+            import helm_omnibar
+            self.omnibar = helm_omnibar.HelmOmnibar(
+                on_submit=lambda q: self.submit_user_turn('omnibar_ask', self.handle_user_ask, q, caller_id='desktop_user')
+            )
+        if self.omnibar:
+            self.omnibar.toggle()
 
     def start_listening(self):
         """Initiates voice recording on hotkey press."""
@@ -539,6 +550,11 @@ class HelmApp:
                         was_holding = False
                         self.stop_listening()
 
+                    # Omnibar trigger: Alt + Space (without Ctrl)
+                    if alt and space and not ctrl and not was_holding:
+                        self._toggle_omnibar()
+                        time.sleep(0.3)
+
                     # Quick Note trigger: Ctrl + Alt + N
                     if ctrl and alt and is_down(0x4E): # VK_N
                         import quick_notes
@@ -651,6 +667,9 @@ def __getattr__(name: str):
         return getattr(agent_tools, name)
     if name == 'load_mission':
         return getattr(chat_cli, name)
+    if name == 'HelmOmnibar':
+        import helm_omnibar
+        return helm_omnibar.HelmOmnibar
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 def main():

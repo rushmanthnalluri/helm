@@ -111,6 +111,10 @@ class StreamingVoicePipeline:
         self._SILENCE_THRESHOLD = 15  # ~300ms at 16kHz/20ms chunks
         self._lock = threading.Lock()
         self._transcript_queue = queue.Queue()
+        self._duplex_running = False
+        self._duplex_stream = None
+        self._duplex_thread = None
+        self._barge_in_count = 0
 
     def _detect_device(self):
         """Detect best available compute device for whisper."""
@@ -274,10 +278,22 @@ class StreamingVoicePipeline:
         """
         Feed a raw PCM chunk (16-bit mono) into the pipeline.
         Automatically detects end-of-speech using Silero VAD and triggers transcription.
+        Also triggers immediate barge-in: halts active TTS playback upon user speech.
         """
         with self._lock:
             has_voice = self.detect_voice(pcm_bytes, sample_rate=sample_rate)
             if has_voice:
+                # Barge-in: immediately halt active TTS playback when user begins speaking
+                try:
+                    from helm_tts import NeuralTTS
+                    tts = NeuralTTS.instance()
+                    if tts.is_speaking():
+                        tts.stop()
+                        self._barge_in_count += 1
+                        logger.info(f"[VoicePipeline] Barge-in triggered (count={self._barge_in_count}) - halted TTS")
+                except Exception as e:
+                    logger.debug(f"[VoicePipeline] Barge-in check error: {e}")
+
                 self._vad_active = True
                 self._silence_frames = 0
                 self._audio_buffer.append(pcm_bytes)
@@ -347,6 +363,61 @@ class StreamingVoicePipeline:
         """Stop any active speech playback."""
         from helm_tts import NeuralTTS
         NeuralTTS.instance().stop()
+
+    @property
+    def is_duplex_active(self) -> bool:
+        """Returns True if continuous full-duplex audio stream is currently active."""
+        return self._duplex_running
+
+    def start_duplex_stream(self, sample_rate: int = 16000, block_size: int = 512, device: Optional[int] = None) -> bool:
+        """
+        Starts a continuous full-duplex microphone stream that feeds audio chunks into the pipeline.
+        Handles microphone errors and device disconnects gracefully without crashing.
+        """
+        if self._duplex_running:
+            return True
+
+        self._duplex_running = True
+
+        def _stream_worker():
+            try:
+                import sounddevice as sd
+                def audio_callback(indata, frames, time_info, status):
+                    if status:
+                        logger.warning(f"[VoicePipeline] Audio stream status: {status}")
+                    if not self._duplex_running:
+                        raise sd.CallbackStop()
+                    import numpy as np
+                    if indata.dtype == np.float32:
+                        pcm = (indata * 32767.0).astype(np.int16).tobytes()
+                    else:
+                        pcm = indata.tobytes()
+                    self.push_audio_chunk(pcm, sample_rate=sample_rate)
+
+                with sd.RawInputStream(
+                    samplerate=sample_rate,
+                    blocksize=block_size,
+                    device=device,
+                    dtype='int16',
+                    channels=1,
+                    callback=audio_callback
+                ):
+                    while self._duplex_running:
+                        time.sleep(0.05)
+            except Exception as e:
+                logger.warning(f"[VoicePipeline] Duplex audio stream note/error: {e}")
+                self._duplex_running = False
+
+        self._duplex_thread = threading.Thread(target=_stream_worker, daemon=True, name="VoiceDuplexStream")
+        self._duplex_thread.start()
+        return True
+
+    def stop_duplex_stream(self) -> None:
+        """Stops the continuous full-duplex audio stream."""
+        self._duplex_running = False
+        if self._duplex_thread and self._duplex_thread.is_alive():
+            self._duplex_thread.join(timeout=1.0)
+        self._duplex_thread = None
 
 
 def speak_text(text: str, blocking: bool = False) -> None:

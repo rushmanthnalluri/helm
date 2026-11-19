@@ -130,11 +130,22 @@ def init_screen_memory_db():
                 proc_name TEXT NOT NULL,
                 window_title TEXT NOT NULL,
                 text_content TEXT,
-                summary TEXT
+                summary TEXT,
+                perceptual_hash TEXT,
+                is_sensitive INTEGER DEFAULT 0
             );
         """)
+        try:
+            conn.execute("ALTER TABLE screen_timeline ADD COLUMN perceptual_hash TEXT;")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE screen_timeline ADD COLUMN is_sensitive INTEGER DEFAULT 0;")
+        except Exception:
+            pass
         conn.execute("CREATE INDEX IF NOT EXISTS idx_screen_ts ON screen_timeline(timestamp);")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_screen_proc ON screen_timeline(proc_name);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_screen_phash ON screen_timeline(perceptual_hash);")
 
         # 1. Create SQLite FTS5 Virtual Table for full-text search
         try:
@@ -254,32 +265,111 @@ def _decrypt_row_text(stored_text: Optional[str]) -> str:
         return stored_text
 
 
+def compute_perceptual_hash(image_or_bytes: Any) -> str:
+    """Computes a 64-bit difference perceptual hash (dHash) for an image.
+    Accepts PIL Image, bytes, file path, or falls back to a deterministic content hash.
+    Returns 16-hex-character string.
+    """
+    if image_or_bytes is None:
+        return "0000000000000000"
+    if isinstance(image_or_bytes, str) and len(image_or_bytes) == 16 and all(c in "0123456789abcdefABCDEF" for c in image_or_bytes):
+        return image_or_bytes.lower()
+
+    try:
+        from PIL import Image
+        import io
+        img = None
+        if isinstance(image_or_bytes, str) and os.path.isfile(image_or_bytes):
+            img = Image.open(image_or_bytes)
+        elif isinstance(image_or_bytes, (bytes, bytearray)):
+            img = Image.open(io.BytesIO(image_or_bytes))
+        elif hasattr(image_or_bytes, 'resize'):
+            img = image_or_bytes
+
+        if img is not None:
+            # dHash algorithm: resize to 9x8 grayscale
+            resample_filter = getattr(getattr(Image, 'Resampling', Image), 'LANCZOS', getattr(Image, 'ANTIALIAS', 1))
+            resized = img.convert("L").resize((9, 8), resample_filter)
+            pixels = list(resized.getdata())
+            diff = []
+            for row in range(8):
+                for col in range(8):
+                    pixel_left = pixels[row * 9 + col]
+                    pixel_right = pixels[row * 9 + col + 1]
+                    diff.append(1 if pixel_left > pixel_right else 0)
+
+            val = 0
+            for bit in diff:
+                val = (val << 1) | bit
+            return f"{val:016x}"
+    except Exception as e:
+        logger.debug("PIL dHash calculation failed (%s); fallback to content hash", e)
+
+    import hashlib
+    raw = str(image_or_bytes).encode('utf-8')
+    return f"d{hashlib.sha256(raw).hexdigest()[:15]}"
+
+
+def hamming_distance(hash1: str, hash2: str) -> int:
+    """Computes Hamming distance (bit difference) between two 64-bit hex hashes."""
+    try:
+        val1 = int(str(hash1), 16)
+        val2 = int(str(hash2), 16)
+        xor_val = val1 ^ val2
+        return bin(xor_val).count('1')
+    except Exception:
+        return sum(c1 != c2 for c1, c2 in zip(str(hash1), str(hash2)))
+
+
 def record_screen_event(
     proc_name: str,
     window_title: str,
     text_content: Optional[str] = None,
     summary: Optional[str] = None,
-    encrypt_at_rest: bool = True
+    encrypt_at_rest: bool = True,
+    image_or_hash: Optional[Any] = None,
+    dedup_threshold: int = 4,
+    drop_sensitive: bool = False
 ) -> bool:
     """Records a window event into screen_timeline and indexes in screen_memory_fts.
 
-    Sensitive windows (banking, passwords, incognito) are automatically dropped.
+    Sensitive windows (banking, passwords, incognito) have text redacted to safeguard privacy
+    while preserving privacy-hashed perceptual metadata.
     Plaintext is encrypted at rest in screen_timeline, and indexed in FTS5 for instant search.
     """
-    if is_sensitive(window_title, proc_name, text_content or ""):
-        logger.debug("Skipping sensitive window: %s (%s)", window_title, proc_name)
+    is_sens = is_sensitive(window_title, proc_name, text_content or "")
+    if is_sens and drop_sensitive:
+        logger.debug("Dropping sensitive window per policy: %s (%s)", window_title, proc_name)
         return False
 
-    raw_text = text_content or ""
+    if is_sens:
+        raw_text = "[REDACTED_SENSITIVE_CONTENT]"
+        summary = summary or "Sensitive window activity"
+    else:
+        raw_text = text_content or ""
+
     stored_text = crypto_vault.encrypt(raw_text) if encrypt_at_rest and raw_text else raw_text
+    p_hash = compute_perceptual_hash(image_or_hash or f"{proc_name}:{window_title}")
 
     with _get_db() as conn:
         cursor = conn.cursor()
         now_ts = time.time()
+
+        # Deduplication check: if latest frame has same process and similar perceptual hash, update timestamp
+        if dedup_threshold > 0:
+            cursor.execute("SELECT id, perceptual_hash FROM screen_timeline WHERE proc_name = ? ORDER BY timestamp DESC LIMIT 1", (proc_name or "unknown",))
+            last_row = cursor.fetchone()
+            if last_row and last_row[1]:
+                dist = hamming_distance(last_row[1], p_hash)
+                if dist <= dedup_threshold:
+                    cursor.execute("UPDATE screen_timeline SET timestamp = ? WHERE id = ?", (now_ts, last_row[0]))
+                    conn.commit()
+                    return True
+
         cursor.execute("""
-            INSERT INTO screen_timeline (timestamp, proc_name, window_title, text_content, summary)
-            VALUES (?, ?, ?, ?, ?)
-        """, (now_ts, proc_name or "unknown", window_title or "", stored_text, summary or ""))
+            INSERT INTO screen_timeline (timestamp, proc_name, window_title, text_content, summary, perceptual_hash, is_sensitive)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (now_ts, proc_name or "unknown", window_title or "", stored_text, summary or "", p_hash, 1 if is_sens else 0))
         timeline_id = cursor.lastrowid
 
         # Manual sync to FTS5 virtual table
@@ -307,6 +397,79 @@ def record_screen_event(
 
         conn.commit()
     return True
+
+
+def query_visual_history(
+    query: str = "",
+    limit: int = 10,
+    include_sensitive: bool = False,
+    min_ts: Optional[float] = None,
+    max_ts: Optional[float] = None
+) -> List[Dict[str, Any]]:
+    """Natural language and keyword query over visual screen history.
+    Retrieves matching timeline frames, decrypts text, and filters out sensitive entries
+    unless include_sensitive is True.
+    """
+    clean_query = (query or "").strip()
+    results = []
+
+    with _get_db() as conn:
+        cursor = conn.cursor()
+        where_clauses = []
+        params = []
+
+        if not include_sensitive:
+            where_clauses.append("is_sensitive = 0")
+        if min_ts is not None:
+            where_clauses.append("timestamp >= ?")
+            params.append(min_ts)
+        if max_ts is not None:
+            where_clauses.append("timestamp <= ?")
+            params.append(max_ts)
+
+        if clean_query:
+            matched_ids = []
+            try:
+                search_results = search(clean_query, limit=limit * 2)
+                matched_ids = [r["id"] for r in search_results if "id" in r]
+            except Exception:
+                matched_ids = []
+
+            if matched_ids:
+                placeholders = ",".join("?" for _ in matched_ids)
+                where_clauses.append(f"id IN ({placeholders})")
+                params.extend(matched_ids)
+            else:
+                where_clauses.append("(proc_name LIKE ? OR window_title LIKE ? OR summary LIKE ?)")
+                q_wild = f"%{clean_query}%"
+                params.extend([q_wild, q_wild, q_wild])
+
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        sql = f"""
+            SELECT id, timestamp, proc_name, window_title, text_content, summary, perceptual_hash, is_sensitive
+            FROM screen_timeline
+            {where_sql}
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """
+        params.append(limit)
+
+        cursor.execute(sql, params)
+        for row in cursor.fetchall():
+            r_id, ts, proc, title, enc_text, summary, phash, sens = row
+            plain_text = _decrypt_row_text(enc_text) if not sens else "[REDACTED_SENSITIVE_CONTENT]"
+            results.append({
+                "id": r_id,
+                "timestamp": ts,
+                "proc_name": proc,
+                "window_title": title,
+                "text_content": plain_text,
+                "summary": summary,
+                "perceptual_hash": phash,
+                "is_sensitive": bool(sens)
+            })
+
+    return results
 
 
 def store(
