@@ -1,6 +1,6 @@
 $desktop = [Environment]::GetFolderPath('Desktop')
 $wsh = New-Object -ComObject WScript.Shell
-$shortcutPath = Join-Path $desktop "Homie.lnk"
+$shortcutPath = Join-Path $desktop "Helm.lnk"
 $shortcut = $wsh.CreateShortcut($shortcutPath)
 
 # Locate pythonw.exe or python.exe
@@ -14,7 +14,7 @@ if ($null -ne $pythonCmd) {
 $shortcut.TargetPath = $pythonExe
 $shortcut.Arguments = "app.py"
 $shortcut.WorkingDirectory = "D:\homie"
-$shortcut.Description = "Launch Homie AI Workstation Assistant"
+$shortcut.Description = "Launch Helm AI Workstation Assistant"
 
 $iconPath = "D:\homie\ui\AppIcon.ico"
 if (Test-Path $iconPath) {

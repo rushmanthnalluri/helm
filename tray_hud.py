@@ -1,4 +1,4 @@
-"""System Tray Quick Menu and Unified Desktop HUD for Homie.
+"""System Tray Quick Menu and Unified Desktop HUD for Helm.
 Exposes a responsive Windows system tray menu with instant access to Workspaces,
 Pinned Notes, Meeting Loopback recording, and Productivity Focus summaries.
 """
@@ -71,14 +71,14 @@ def build_tray_menu(app=None):
             else:
                 ok, _ = windows_tools.set_clipboard_text(command)
                 message = (
-                    "Pairing command copied. Paste it into Homie's private Telegram chat within 15 minutes."
+                    "Pairing command copied. Paste it into Helm's private Telegram chat within 15 minutes."
                     if ok else "Could not copy the pairing command to the clipboard."
                 )
 
         try:
-            icon.notify(message, "Homie Telegram pairing")
+            icon.notify(message, "Helm Telegram pairing")
         except Exception:
-            print(f"[Homie] {message}", flush=True)
+            print(f"[Helm] {message}", flush=True)
 
     def on_meeting_start(icon, item):
         sess = meeting_notes.get_meeting_session()
@@ -99,7 +99,7 @@ def build_tray_menu(app=None):
         url = f"http://{ip}:5055/call"
         windows_tools.set_clipboard_text(url)
         try:
-            icon.notify(f"Copied: {url}\nOpen on your phone to call your PC!", "Homie Phone Call")
+            icon.notify(f"Copied: {url}\nOpen on your phone to call your PC!", "Helm Phone Call")
         except Exception:
             pass
 
@@ -118,7 +118,7 @@ def build_tray_menu(app=None):
     is_meeting = meeting_sess.is_active if meeting_sess else False
 
     menu = pystray.Menu(
-        pystray.MenuItem("🎙 Homie Voice Assistant", lambda icon, item: None, enabled=False),
+        pystray.MenuItem("🎙 Helm Voice Assistant", lambda icon, item: None, enabled=False),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("🖥 Workspaces", pystray.Menu(lambda: get_workspace_menu_items())),
         pystray.MenuItem("📌 Pinned Notes", pystray.Menu(lambda: get_pinned_notes_menu_items())),
@@ -131,7 +131,7 @@ def build_tray_menu(app=None):
         ),
         pystray.MenuItem("📊 Copy Focus Report (24h)", on_focus_report),
         pystray.Menu.SEPARATOR,
-        pystray.MenuItem("❌ Exit Homie", on_exit)
+        pystray.MenuItem("❌ Exit Helm", on_exit)
     )
     return menu
 
@@ -148,9 +148,9 @@ def create_tray_hud(app=None, icon_path=None):
         image = create_default_icon_image()
 
     icon = pystray.Icon(
-        name="Homie",
+        name="Helm",
         icon=image,
-        title="Homie - Windows AI Assistant",
+        title="Helm - Windows AI Assistant",
         menu=build_tray_menu(app=app)
     )
     return icon

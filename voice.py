@@ -1,4 +1,4 @@
-"""Voice recording and Speech-to-Text engine for Homie.
+"""Voice recording and Speech-to-Text engine for Helm.
 Supports hold-to-talk recording, live audio level streaming for UI waveforms,
 and fast on-device Whisper transcription (or lightweight fallback).
 """
@@ -11,7 +11,7 @@ import numpy as np
 import sounddevice as sd
 
 # Directory for caching whisper models
-CONFIG_DIR = os.environ.get('HOMIE_DIR') or os.path.join(os.path.expanduser('~'), '.config', 'homie')
+CONFIG_DIR = os.environ.get('HELM_DIR') or os.path.join(os.path.expanduser('~'), '.config', 'helm')
 WHISPER_DIR = os.path.join(CONFIG_DIR, 'whisper')
 
 class VoiceEngine:

@@ -6,14 +6,14 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
 
-import homie_plugins
+import helm_plugins
 import agent_tools
 
 
 class TestPluginRuntime:
     def test_spotify_manifest_schema(self):
         """Verify the Spotify manifest schema declares all required tool fields."""
-        manifest_path = Path(homie_plugins.BASE_DIR) / "plugins" / "spotify" / "manifest.json"
+        manifest_path = Path(helm_plugins.BASE_DIR) / "plugins" / "spotify" / "manifest.json"
         assert manifest_path.exists()
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
@@ -37,14 +37,14 @@ class TestPluginRuntime:
     def test_install_and_load_plugin_registers_tools(self, tmp_path, monkeypatch):
         """Verify install_from_community_catalog wires load_plugin automatically."""
         plugins_dir = tmp_path / "plugins"
-        monkeypatch.setenv("HOMIE_PLUGINS_DIR", str(plugins_dir))
+        monkeypatch.setenv("HELM_PLUGINS_DIR", str(plugins_dir))
 
         # Clear any prior registered plugin tools
         agent_tools.unregister_plugin_tools("spotify")
         agent_tools.unregister_plugin_tools("spotify-controller")
 
         # Install Spotify from community catalog
-        res = homie_plugins.install_from_community_catalog("spotify")
+        res = helm_plugins.install_from_community_catalog("spotify")
         assert res["ok"] is True
         assert res["id"] == "spotify"
         assert "spotify_play" in res.get("tools_loaded", [])
@@ -63,21 +63,21 @@ class TestPluginRuntime:
         assert "spotify_now_playing" in schema_names
 
         # Disable plugin -> tools should unregister
-        homie_plugins.set_plugin_enabled("spotify", False)
+        helm_plugins.set_plugin_enabled("spotify", False)
         assert "spotify_play" not in agent_tools.PLUGIN_TOOL_REGISTRY
 
         # Enable plugin -> tools should reload
-        homie_plugins.set_plugin_enabled("spotify", True)
+        helm_plugins.set_plugin_enabled("spotify", True)
         assert "spotify_play" in agent_tools.PLUGIN_TOOL_REGISTRY
 
         # Uninstall plugin -> tools should unregister
-        homie_plugins.uninstall_plugin("spotify")
+        helm_plugins.uninstall_plugin("spotify")
         assert "spotify_play" not in agent_tools.PLUGIN_TOOL_REGISTRY
 
     def test_execute_plugin_tool_safely(self, tmp_path, monkeypatch):
         """Test safe execution of plugin tools with try/except and timeout handling."""
         plugins_dir = tmp_path / "plugins"
-        monkeypatch.setenv("HOMIE_PLUGINS_DIR", str(plugins_dir))
+        monkeypatch.setenv("HELM_PLUGINS_DIR", str(plugins_dir))
 
         dummy_plugin_dir = plugins_dir / "custom-math"
         dummy_plugin_dir.mkdir(parents=True, exist_ok=True)
@@ -123,12 +123,12 @@ class TestPluginRuntime:
         (dummy_plugin_dir / "plugin.py").write_text(plugin_code, encoding="utf-8")
 
         # Load plugin
-        load_res = homie_plugins.load_plugin("custom-math")
+        load_res = helm_plugins.load_plugin("custom-math")
         assert load_res["ok"] is True
         assert "math_add" in load_res["tools_loaded"]
 
         # 1. Successful execution
-        res = homie_plugins.execute_plugin_tool("custom-math", "math_add", a=5, b=7)
+        res = helm_plugins.execute_plugin_tool("custom-math", "math_add", a=5, b=7)
         assert res["ok"] is True
         assert res["sum"] == 12
 
@@ -139,17 +139,17 @@ class TestPluginRuntime:
         assert reg_res["sum"] == 42
 
         # 2. Timeout handling
-        timeout_res = homie_plugins.execute_plugin_tool("custom-math", "math_slow", timeout_seconds=0.05)
+        timeout_res = helm_plugins.execute_plugin_tool("custom-math", "math_slow", timeout_seconds=0.05)
         assert timeout_res["ok"] is False
         assert "timed out" in timeout_res["error"]
 
         # 3. Exception handling
-        fail_res = homie_plugins.execute_plugin_tool("custom-math", "math_failing")
+        fail_res = helm_plugins.execute_plugin_tool("custom-math", "math_failing")
         assert fail_res["ok"] is False
         assert "Simulated crash" in fail_res["error"]
 
         # 4. Unknown tool
-        unknown_res = homie_plugins.execute_plugin_tool("custom-math", "math_nonexistent")
+        unknown_res = helm_plugins.execute_plugin_tool("custom-math", "math_nonexistent")
         assert unknown_res["ok"] is False
 
 
@@ -157,7 +157,7 @@ class TestSpotifyPlugin:
     def test_spotify_play_with_mock_client(self):
         """Test spotify_play with search query and resume playback."""
         import sys
-        spotify_path = str(Path(homie_plugins.BASE_DIR) / "plugins" / "spotify")
+        spotify_path = str(Path(helm_plugins.BASE_DIR) / "plugins" / "spotify")
         if spotify_path not in sys.path:
             sys.path.insert(0, spotify_path)
         import plugin as spotify_plugin
@@ -193,7 +193,7 @@ class TestSpotifyPlugin:
     def test_spotify_pause_with_mock_client(self):
         """Test spotify_pause."""
         import sys
-        spotify_path = str(Path(homie_plugins.BASE_DIR) / "plugins" / "spotify")
+        spotify_path = str(Path(helm_plugins.BASE_DIR) / "plugins" / "spotify")
         if spotify_path not in sys.path:
             sys.path.insert(0, spotify_path)
         import plugin as spotify_plugin
@@ -208,7 +208,7 @@ class TestSpotifyPlugin:
     def test_spotify_now_playing_with_mock_client(self):
         """Test spotify_now_playing returns track info or idle status."""
         import sys
-        spotify_path = str(Path(homie_plugins.BASE_DIR) / "plugins" / "spotify")
+        spotify_path = str(Path(helm_plugins.BASE_DIR) / "plugins" / "spotify")
         if spotify_path not in sys.path:
             sys.path.insert(0, spotify_path)
         import plugin as spotify_plugin

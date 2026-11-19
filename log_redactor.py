@@ -1,4 +1,4 @@
-"""log_redactor.py - Privacy Redaction and PII Sanitization for Homie.
+"""log_redactor.py - Privacy Redaction and PII Sanitization for Helm.
 
 Sanitizes audit ledgers, logs, crash dumps, and telemetry traces:
 - Masks API keys (OpenAI, Gemini, Anthropic, NVIDIA, Groq).
@@ -15,7 +15,7 @@ REDACTION_PATTERNS = [
     (re.compile(r'(?i)(?:api_key|apikey|secret|password|passwd|token)\s*[:=]\s*["\']?([a-zA-Z0-9_\-\.]{8,})["\']?'), r'***REDACTED_SECRET***'),
     # Bearer / Authorization headers
     (re.compile(r'(?i)bearer\s+[a-zA-Z0-9_\-\.]{16,}'), r'Bearer ***REDACTED_TOKEN***'),
-    # Homie Cryptographic Intent & Lease Tokens
+    # Helm Cryptographic Intent & Lease Tokens
     (re.compile(r'INTENT_V\d:[a-zA-Z0-9_\-:]+'), r'***REDACTED_INTENT_TOKEN***'),
     (re.compile(r'LEASE:[a-zA-Z0-9_\-]+'), r'***REDACTED_LEASE_TOKEN***'),
     # Credit Cards (13-16 digits formatted)

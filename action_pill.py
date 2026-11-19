@@ -1,4 +1,4 @@
-"""Floating Action Pill and Contextual Action Resolver for Homie.
+"""Floating Action Pill and Contextual Action Resolver for Helm.
 Maps classified clipboard entities into high-leverage desktop actions
 and provides quick keyboard/button handlers.
 """

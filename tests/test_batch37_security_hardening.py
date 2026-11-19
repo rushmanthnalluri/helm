@@ -3,10 +3,10 @@
 Directives Covered:
 1. Signed Approval Blobs (Store Evidence, Not a Verdict):
    - approved_actions SQLite table and supervisor cache store and verify the Signed Approval Blob.
-   - consume_approved_action independently verifies Ed25519 signature against enrolled public keys in .homie_device_keys.json.
+   - consume_approved_action independently verifies Ed25519 signature against enrolled public keys in .helm_device_keys.json.
    - Unverified rows, missing signatures, forged signatures, or tampered args_hash fail closed.
 2. Recovery CLI Hardening via Windows UAC Secure Desktop:
-   - homie.py checks ctypes.windll.shell32.IsUserAnAdmin().
+   - helm.py checks ctypes.windll.shell32.IsUserAnAdmin().
    - If not elevated, requests Windows UAC Secure Desktop elevation via ShellExecuteW(runas).
    - If elevation is cancelled or unavailable, fails closed without modifying recovery tokens.
 3. Hardened UIA Domain Resolution:
@@ -35,7 +35,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-import homie_supervisor
+import helm_supervisor
 import phone_approval_portal
 import windows_tools
 import policy_envelope
@@ -62,7 +62,7 @@ class TestBatch37SecurityHardening(unittest.TestCase):
         """Directive 1: Supervisor stores and verifies cryptographic evidence blobs; unverified rows fail closed."""
         priv_pem, pub_pem = enroll_test_device("primary_phone")
         caller_id = "worker_b37"
-        tool_name = "homie_set_clipboard"
+        tool_name = "helm_set_clipboard"
         args = {"text": "classified_content"}
         clean_args = json.dumps(args, sort_keys=True, separators=(',', ':'))
         args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
@@ -76,7 +76,7 @@ class TestBatch37SecurityHardening(unittest.TestCase):
         signed_blob["tool_name"] = tool_name
         signed_blob["args_hash"] = args_hash
 
-        sup = homie_supervisor.PolicySupervisor()
+        sup = helm_supervisor.PolicySupervisor()
         sup.record_approved_action(caller_id, tool_name, args_hash, epoch, ttl=60.0, signed_blob=signed_blob)
 
         # Verified evidence: consumption succeeds
@@ -89,7 +89,7 @@ class TestBatch37SecurityHardening(unittest.TestCase):
 
         # Step 2: Unsigned row inserted directly into SQLite table by same-user process (attack simulation)
         with db_utils.get_db() as conn:
-            homie_supervisor._init_approved_actions_table(conn)
+            helm_supervisor._init_approved_actions_table(conn)
             conn.execute("""
                 INSERT INTO approved_actions (caller_id, tool, args_hash, taint_epoch, expiry, consumed, signature_blob)
                 VALUES (?, ?, ?, ?, ?, 0, ?)
@@ -109,14 +109,14 @@ class TestBatch37SecurityHardening(unittest.TestCase):
 
     def test_2_recovery_cli_requires_uac_secure_desktop_elevation(self):
         """Directive 2: Recovery CLI requires administrative elevation and refuses unhardened script elevation."""
-        import homie
+        import helm
 
         # Non-elevated invocation fails closed immediately to prevent privilege escalation via user-writable scripts
-        with patch.object(sys, "argv", ["homie.py", "--pairing-unlock"]):
+        with patch.object(sys, "argv", ["helm.py", "--pairing-unlock"]):
             with patch.object(sys.stdin, "isatty", return_value=True):
                 with patch("ctypes.windll.shell32.IsUserAnAdmin", return_value=0):
                     with patch("builtins.print") as mock_print:
-                        homie.main()
+                        helm.main()
                         output = " ".join(str(c[0][0]) for c in mock_print.call_args_list if c[0])
                         self.assertIn("Administrative elevation required", output)
                         self.assertIn("automatic script elevation is barred", output)
@@ -156,18 +156,18 @@ class TestBatch37SecurityHardening(unittest.TestCase):
 
     def test_4_actuator_toctou_defense_blocks_foreground_window_switching(self):
         """Directive 4: SupervisorActuator re-resolves foreground window at execution time, blocking TOCTOU."""
-        sup = homie_supervisor.PolicySupervisor()
-        sup.state = homie_supervisor.STATE_ARMED
-        actuator = homie_supervisor.SupervisorActuator(sup)
+        sup = helm_supervisor.PolicySupervisor()
+        sup.state = helm_supervisor.STATE_ARMED
+        actuator = helm_supervisor.SupervisorActuator(sup)
 
         # Mint intent token for a valid proposal in notepad.exe
-        intent_token = sup.mint_intent_token("homie_agent_type", {"text": "hello"}, "worker", 1)
+        intent_token = sup.mint_intent_token("helm_agent_type", {"text": "hello"}, "worker", 1)
 
         # Active envelope strictly allows notepad.exe
         env = policy_envelope.PolicyEnvelope(
             envelope_id="env_test_toctou",
             allowed_process_images=["notepad.exe"],
-            allowed_action_types=["homie_agent_type"],
+            allowed_action_types=["helm_agent_type"],
             step_budget=10,
             keystroke_cap=500,
             expiry=time.time() + 60.0,
@@ -178,9 +178,9 @@ class TestBatch37SecurityHardening(unittest.TestCase):
 
         # TOCTOU attack: Between proposal and actuator execution, foreground window switches to powershell.exe
         with patch.object(windows_tools, "get_foreground_window", return_value={"proc_name": "powershell.exe", "hwnd": 555}):
-            with self.assertRaises(homie_supervisor.CompleteMediationBreachError) as ctx:
+            with self.assertRaises(helm_supervisor.CompleteMediationBreachError) as ctx:
                 actuator.execute_actuator(
-                    "homie_agent_type", {"text": "hello"}, caller_id="worker", intent_token=intent_token, seq=1
+                    "helm_agent_type", {"text": "hello"}, caller_id="worker", intent_token=intent_token, seq=1
                 )
             self.assertIn("TOCTOU detected", str(ctx.exception))
 
@@ -212,31 +212,31 @@ class TestBatch37SecurityHardening(unittest.TestCase):
         env = policy_envelope.PolicyEnvelope(
             envelope_id="env_test_chords",
             allowed_process_images=["notepad.exe"],
-            allowed_action_types=["homie_agent_type"],
+            allowed_action_types=["helm_agent_type"],
             step_budget=10,
             keystroke_cap=500,
             expiry=time.time() + 60.0,
             taint_epoch=0
         )
         env.is_active = True
-        ok, msg, _ = env.check_boundary("homie_agent_type", {"hotkey": "win+r"}, "notepad.exe", 0)
+        ok, msg, _ = env.check_boundary("helm_agent_type", {"hotkey": "win+r"}, "notepad.exe", 0)
         self.assertFalse(ok)
         self.assertIn("dangerous system hotkey chord 'Win+R'", msg)
 
         # 4. SupervisorActuator strictly blocks dangerous system chords
-        sup = homie_supervisor.PolicySupervisor()
-        sup.state = homie_supervisor.STATE_ARMED
-        actuator = homie_supervisor.SupervisorActuator(sup)
-        token = sup.mint_intent_token("homie_agent_type", {"hotkey": "win+r"}, "worker", 1)
+        sup = helm_supervisor.PolicySupervisor()
+        sup.state = helm_supervisor.STATE_ARMED
+        actuator = helm_supervisor.SupervisorActuator(sup)
+        token = sup.mint_intent_token("helm_agent_type", {"hotkey": "win+r"}, "worker", 1)
         with patch.object(windows_tools, "get_foreground_window", return_value={"proc_name": "notepad.exe", "hwnd": 111}):
-            with self.assertRaises(homie_supervisor.CompleteMediationBreachError) as ctx:
-                actuator.execute_actuator("homie_agent_type", {"hotkey": "win+r"}, caller_id="worker", intent_token=token, seq=1)
+            with self.assertRaises(helm_supervisor.CompleteMediationBreachError) as ctx:
+                actuator.execute_actuator("helm_agent_type", {"hotkey": "win+r"}, caller_id="worker", intent_token=token, seq=1)
             self.assertIn("Synthetic injection of dangerous system hotkey chord 'Win+R' is strictly prohibited", str(ctx.exception))
 
     def test_6_app_resets_physical_modifiers_on_wm_killfocus(self):
         """Directive 6: app.py resets tracked physical modifier keys on WM_KILLFOCUS (0x0008)."""
-        from app import HomieApp
-        app = HomieApp()
+        from app import HelmApp
+        app = HelmApp()
         app._physical_ctrl_down = True
         app._physical_alt_down = True
 

@@ -6,8 +6,8 @@ import unittest
 import time
 import secrets
 
-import homie_context_search
-from homie_context_search import (
+import helm_context_search
+from helm_context_search import (
     LocalContextIndex,
     format_enveloped_results,
     search_context_tool,
@@ -126,9 +126,9 @@ class TestContextSearch(unittest.TestCase):
         self.assertEqual(len(self.index.search("entry")), 1)
 
     def test_5_tool_registry_and_mcp_execution(self):
-        """Validates homie_search_context execution via agent_tools registry as SENSITIVE_READ."""
+        """Validates helm_search_context execution via agent_tools registry as SENSITIVE_READ."""
         registry = agent_tools.build_default_registry()
-        spec = registry._tools.get("homie_search_context")
+        spec = registry._tools.get("helm_search_context")
         self.assertIsNotNone(spec)
         self.assertEqual(spec.tier, "SENSITIVE_READ")
         self.assertTrue(spec.returns_untrusted)
@@ -137,7 +137,7 @@ class TestContextSearch(unittest.TestCase):
         self.assertEqual(spec.egress, "none")
 
         # Execute through registry
-        result = registry.execute("homie_search_context", {"query": "system", "limit": 3})
+        result = registry.execute("helm_search_context", {"query": "system", "limit": 3})
         self.assertTrue(result.get("ok"))
         data = result.get("data", {})
         self.assertIn("results", data)

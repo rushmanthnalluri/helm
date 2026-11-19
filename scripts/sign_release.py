@@ -1,4 +1,4 @@
-"""scripts/sign_release.py - Offline Publisher Signing Tool for Homie Updates.
+"""scripts/sign_release.py - Offline Publisher Signing Tool for Helm Updates.
 
 This script resides strictly in release tooling and NEVER ships on user workstations.
 Uses the publisher's offline private Ed25519 key to generate signed update manifests.

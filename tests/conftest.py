@@ -1,4 +1,4 @@
-"""tests/conftest.py - PyTest Harness Isolation Fixture for Homie Test Suites.
+"""tests/conftest.py - PyTest Harness Isolation Fixture for Helm Test Suites.
 
 Ensures every test executes with a clean slate:
 - Purges lingering dirty-flag and crash-history markers.
@@ -20,14 +20,14 @@ if BASE_DIR not in sys.path:
 # enrollment and daemon tests must not touch the user's registry, recovery
 # token, PID, session token, settings, or SQLite database.
 _TEST_STATE = tempfile.TemporaryDirectory(
-    prefix="homie-pytest-", ignore_cleanup_errors=True
+    prefix="helm-pytest-", ignore_cleanup_errors=True
 )
 _TEST_STATE_DIR = _TEST_STATE.name
-os.environ["HOMIE_TEST_STATE_DIR"] = _TEST_STATE_DIR
-os.environ["HOMIE_DIR"] = os.path.join(_TEST_STATE_DIR, "config")
-os.makedirs(os.environ["HOMIE_DIR"], exist_ok=True)
+os.environ["HELM_TEST_STATE_DIR"] = _TEST_STATE_DIR
+os.environ["HELM_DIR"] = os.path.join(_TEST_STATE_DIR, "config")
+os.makedirs(os.environ["HELM_DIR"], exist_ok=True)
 
-import homie_supervisor
+import helm_supervisor
 import device_registry
 import phone_approval_portal
 import kill_switch
@@ -53,10 +53,10 @@ def _init_test_database():
 
 
 @pytest.fixture(autouse=True)
-def clean_homie_test_isolation():
+def clean_helm_test_isolation():
     """Autouse fixture providing test isolation for supervisor and kill switch states."""
-    prior_test_env = os.environ.get("HOMIE_TEST_ENV")
-    for p in [homie_supervisor.DIRTY_FLAG_PATH, homie_supervisor.CRASH_HISTORY_PATH]:
+    prior_test_env = os.environ.get("HELM_TEST_ENV")
+    for p in [helm_supervisor.DIRTY_FLAG_PATH, helm_supervisor.CRASH_HISTORY_PATH]:
         if os.path.exists(p):
             try:
                 os.remove(p)
@@ -75,7 +75,7 @@ def clean_homie_test_isolation():
 
     yield
 
-    for p in [homie_supervisor.DIRTY_FLAG_PATH, homie_supervisor.CRASH_HISTORY_PATH]:
+    for p in [helm_supervisor.DIRTY_FLAG_PATH, helm_supervisor.CRASH_HISTORY_PATH]:
         if os.path.exists(p):
             try:
                 os.remove(p)
@@ -91,9 +91,9 @@ def clean_homie_test_isolation():
     phone_approval_portal._LOCAL_ENROLLMENT_SESSIONS.clear()
     action_broker._GLOBAL_BROKER = None
     if prior_test_env is None:
-        os.environ.pop("HOMIE_TEST_ENV", None)
+        os.environ.pop("HELM_TEST_ENV", None)
     else:
-        os.environ["HOMIE_TEST_ENV"] = prior_test_env
+        os.environ["HELM_TEST_ENV"] = prior_test_env
 
 
 def pytest_sessionfinish(session, exitstatus):

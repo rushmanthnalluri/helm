@@ -206,7 +206,7 @@ import win32file
 import win32pipe
 import pywintypes
 
-import homie_confinement as conf
+import helm_confinement as conf
 
 
 class TestBatch20VerifiedConfinement(unittest.TestCase):
@@ -215,9 +215,9 @@ class TestBatch20VerifiedConfinement(unittest.TestCase):
         """Runs real out-of-process worker and asserts all 14 attacks fail with expected error codes."""
         tmp_path = Path(tempfile.mkdtemp())
         secret = tmp_path / "ledger_key.bin"
-        flag = tmp_path / "homie_supervisor_dirty.flag"
-        reg = tmp_path / "homie_mcp_registry.json"
-        ledger = tmp_path / "homie_audit_ledger.jsonl"
+        flag = tmp_path / "helm_supervisor_dirty.flag"
+        reg = tmp_path / "helm_mcp_registry.json"
+        ledger = tmp_path / "helm_audit_ledger.jsonl"
 
         secret.write_bytes(b"k" * 32)
         flag.write_bytes(b"1")
@@ -239,7 +239,7 @@ class TestBatch20VerifiedConfinement(unittest.TestCase):
 
         # Dedicated IDLE protected pipe to test named connection (idle and unconsumed)
         import secrets
-        idle_pipe_name = rf"\\.\pipe\homie_idle_{secrets.token_hex(8)}"
+        idle_pipe_name = rf"\\.\pipe\helm_idle_{secrets.token_hex(8)}"
         dacl_idle = conf._owner_only_dacl(win32file.GENERIC_READ | win32file.GENERIC_WRITE)
         sd_idle = pywintypes.SECURITY_DESCRIPTOR()
         sd_idle.SetSecurityDescriptorDacl(1, dacl_idle, 0)
@@ -315,7 +315,7 @@ class TestBatch20VerifiedConfinement(unittest.TestCase):
         """Batch 21 Directive: Verifies idle named pipe with owner DACL explicitly returns WinError 5 to untrusted tokens."""
         import secrets
         import win32security
-        pname = rf"\\.\pipe\homie_dacl_idle_{secrets.token_hex(8)}"
+        pname = rf"\\.\pipe\helm_dacl_idle_{secrets.token_hex(8)}"
         dacl = conf._owner_only_dacl(win32file.GENERIC_READ | win32file.GENERIC_WRITE)
         sd = pywintypes.SECURITY_DESCRIPTOR()
         sd.SetSecurityDescriptorDacl(1, dacl, 0)

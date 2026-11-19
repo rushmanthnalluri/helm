@@ -7,16 +7,16 @@
   IgnorableNamespaces="uap rescap desktop">
 
   <Identity
-    Name="Homie.DesktopAI"
-    Publisher="CN=Homie, O=Homie, L=San Francisco, S=CA, C=US"
+    Name="Helm.DesktopAI"
+    Publisher="CN=Helm, O=Helm, L=San Francisco, S=CA, C=US"
     Version="1.0.0.0"
     ProcessorArchitecture="x64" />
 
   <Properties>
-    <DisplayName>Homie Desktop AI</DisplayName>
-    <PublisherDisplayName>Homie</PublisherDisplayName>
+    <DisplayName>Helm Desktop AI</DisplayName>
+    <PublisherDisplayName>Helm</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
-    <Description>Homie - Autonomous AI Desktop Companion for Windows</Description>
+    <Description>Helm - Autonomous AI Desktop Companion for Windows</Description>
   </Properties>
 
   <Resources>
@@ -32,10 +32,10 @@
   </Capabilities>
 
   <Applications>
-    <Application Id="Homie" Executable="Homie.exe" EntryPoint="Windows.FullTrustApplication">
+    <Application Id="Helm" Executable="Helm.exe" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
-        DisplayName="Homie Desktop AI"
-        Description="Homie - Autonomous AI Desktop Companion"
+        DisplayName="Helm Desktop AI"
+        Description="Helm - Autonomous AI Desktop Companion"
         BackgroundColor="#1E1E2E"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png">
@@ -52,11 +52,11 @@
       </uap:VisualElements>
       <Extensions>
         <uap:Extension Category="windows.fileTypeAssociation">
-          <uap:FileTypeAssociation Name="homiefile">
-            <uap:DisplayName>Homie Workflow File</uap:DisplayName>
+          <uap:FileTypeAssociation Name="helmfile">
+            <uap:DisplayName>Helm Workflow File</uap:DisplayName>
             <uap:Logo>Assets\Square44x44Logo.png</uap:Logo>
             <uap:SupportedFileTypes>
-              <uap:FileType>.homie</uap:FileType>
+              <uap:FileType>.helm</uap:FileType>
               <uap:FileType>.hnote</uap:FileType>
             </uap:SupportedFileTypes>
           </uap:FileTypeAssociation>

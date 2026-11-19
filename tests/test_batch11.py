@@ -3,7 +3,7 @@
 - Out-of-band step-up approval gate for tainted sessions
 - Desktop grounding engine with safety limits, step budgets, and dry-run (desktop_agent.py)
 - Workflow compiler & deterministic macro orchestration (workflow_compiler.py)
-- Fast command routing in homie.py
+- Fast command routing in helm.py
 """
 
 import os
@@ -17,8 +17,8 @@ if BASE_DIR not in sys.path:
 import taint_tracker
 import desktop_agent
 import workflow_compiler
-import homie_mcp
-import homie
+import helm_mcp
+import helm
 
 class TestBatch11Features(unittest.TestCase):
     def setUp(self):
@@ -38,14 +38,14 @@ class TestBatch11Features(unittest.TestCase):
         semantic_screen_memory.record_screen_event("chrome.exe", "Invoice #1042 - Google Chrome", "Pay to account 12345")
 
         # Step 1: Attacker agent reads untrusted screen memory containing prompt injection
-        out1 = homie_mcp.execute_mcp_tool("homie_read_screen_memory", {"query": "Invoice"}, caller_id=session_id)
+        out1 = helm_mcp.execute_mcp_tool("helm_read_screen_memory", {"query": "Invoice"}, caller_id=session_id)
         self.assertIn("[UNTRUSTED_DATA_NONCE_", out1)
 
         # Step 2: Verify session is now marked TAINTED
         self.assertTrue(taint_tracker.is_session_tainted(session_id))
 
         # Step 3: Attacker attempts to execute a WRITE_EXEC action (e.g. set clipboard or launch app)
-        out2 = homie_mcp.execute_mcp_tool("homie_set_clipboard", {"text": "exfiltrated_data"}, caller_id=session_id)
+        out2 = helm_mcp.execute_mcp_tool("helm_set_clipboard", {"text": "exfiltrated_data"}, caller_id=session_id)
         
         # Step 4: Verify WRITE action was INTERCEPTED and blocked for step-up approval
         self.assertIn("Security Gate", out2)
@@ -60,7 +60,7 @@ class TestBatch11Features(unittest.TestCase):
 
         ok_approve, item, msg = taint_tracker.approve_step_up(step_up_id)
         self.assertTrue(ok_approve)
-        self.assertEqual(item["tool_name"], "homie_set_clipboard")
+        self.assertEqual(item["tool_name"], "helm_set_clipboard")
 
     def test_desktop_grounding_safety_and_dry_run(self):
         """Tests desktop agent dry run mode, step budget, and emergency abort."""
@@ -105,11 +105,11 @@ class TestBatch11Features(unittest.TestCase):
 
     def test_fast_commands_batch11(self):
         """Verifies fast command routing for taint status and emergency stop."""
-        handled, msg = homie.try_fast_command("taint status")
+        handled, msg = helm.try_fast_command("taint status")
         self.assertTrue(handled)
         self.assertIn("Taint Security Gate", msg)
 
-        handled2, msg2 = homie.try_fast_command("emergency stop")
+        handled2, msg2 = helm.try_fast_command("emergency stop")
         self.assertTrue(handled2)
         self.assertIn("emergency abort", msg2.lower())
 

@@ -1,4 +1,4 @@
-"""Homie Desktop Grounding & Autonomous Agent Engine.
+"""Helm Desktop Grounding & Autonomous Agent Engine.
 Executes desktop tasks with strict hierarchical grounding, safety boundaries, and eval metrics:
 - Grounding Order:
   1. UIAutomation (UIA) accessibility tree (semantic name, control type, automation ID)
@@ -7,7 +7,7 @@ Executes desktop tasks with strict hierarchical grounding, safety boundaries, an
 - Action Gating & Safety:
   - Scoped strictly to target application HWND
   - Password field detection (IsPassword attribute blocked from automated typing)
-  - "Homie is driving" HUD banner state
+  - "Helm is driving" HUD banner state
   - Step budget limit (default max 10 steps)
   - Global emergency abort flag
   - Dry-run simulation mode
@@ -26,7 +26,7 @@ if BASE_DIR not in sys.path:
 import windows_tools
 import pyautogui
 
-logger = logging.getLogger("homie.desktop_agent")
+logger = logging.getLogger("helm.desktop_agent")
 pyautogui.FAILSAFE = True  # Move mouse to corner for instant emergency abort
 
 _driving_state = False
@@ -125,9 +125,9 @@ class DesktopGroundingEngine:
                 return True, f"[DRY-RUN] Would {action_desc}"
 
             # Route click through hardened MCP dispatcher (enforces taint tracking & audit ledger)
-            import homie_mcp
-            res = homie_mcp.execute_mcp_tool(
-                "homie_agent_click",
+            import helm_mcp
+            res = helm_mcp.execute_mcp_tool(
+                "helm_agent_click",
                 {"x": cx, "y": cy, "element_name": elem["name"]},
                 caller_id=self.session_id
             )
@@ -164,9 +164,9 @@ class DesktopGroundingEngine:
                 return True, f"[DRY-RUN] Would {action_desc}"
 
             # Route typing through hardened MCP dispatcher (enforces taint tracking & audit ledger)
-            import homie_mcp
-            res = homie_mcp.execute_mcp_tool(
-                "homie_agent_type",
+            import helm_mcp
+            res = helm_mcp.execute_mcp_tool(
+                "helm_agent_type",
                 {"text": text_to_type, "element_name": elem["name"]},
                 caller_id=self.session_id
             )

@@ -19,12 +19,12 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-import homie_confinement
+import helm_confinement
 
-logger = logging.getLogger("homie.device_registry")
+logger = logging.getLogger("helm.device_registry")
 
-DEVICE_REGISTRY_PATH = os.path.join(BASE_DIR, ".homie_device_keys.json")
-CONSUMED_NONCES_PATH = os.path.join(BASE_DIR, ".homie_consumed_nonces.json")
+DEVICE_REGISTRY_PATH = os.path.join(BASE_DIR, ".helm_device_keys.json")
+CONSUMED_NONCES_PATH = os.path.join(BASE_DIR, ".helm_consumed_nonces.json")
 
 _REGISTRY_LOCK = threading.RLock()
 _NONCE_LOCK = threading.RLock()
@@ -107,7 +107,7 @@ def _save_device_registry(registry: Dict[str, Any]):
         with open(DEVICE_REGISTRY_PATH, "w", encoding="utf-8") as f:
             json.dump(registry, f, indent=2)
         try:
-            homie_confinement.harden_path(DEVICE_REGISTRY_PATH)
+            helm_confinement.harden_path(DEVICE_REGISTRY_PATH)
         except Exception:
             pass
     except Exception as e:
@@ -152,7 +152,7 @@ def _save_consumed_nonces(nonces: Dict[str, int]):
         with open(CONSUMED_NONCES_PATH, "w", encoding="utf-8") as f:
             json.dump(nonces, f, indent=2)
         try:
-            homie_confinement.harden_path(CONSUMED_NONCES_PATH)
+            helm_confinement.harden_path(CONSUMED_NONCES_PATH)
         except Exception:
             pass
     except Exception as e:

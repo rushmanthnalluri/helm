@@ -1,4 +1,4 @@
-"""WASAPI Loopback Meeting Intelligence and Notes Recorder for Homie.
+"""WASAPI Loopback Meeting Intelligence and Notes Recorder for Helm.
 Captures system audio (Zoom, Teams, Meet, Discord, YouTube) via WASAPI loopback,
 transcribes speech asynchronously with Faster-Whisper, and generates structured meeting briefs.
 """
@@ -280,8 +280,8 @@ class MeetingSession:
 
         try:
             import ai_engine
-            import homie
-            prefs = homie.get_prefs()
+            import helm
+            prefs = helm.get_prefs()
             res = ai_engine.run_query(prompt, prefs)
             if res and not res.startswith("Error"):
                 return f"📝 **Meeting Brief: {title}** ({mins} min)\n\n{res}"
@@ -294,7 +294,7 @@ class MeetingSession:
         return (
             f"📝 **Meeting Summary: {title}** ({mins} min, {words} words):\n\n"
             f"📌 **Transcript Excerpt**:\n\"{preview}\"\n\n"
-            f"✅ Saved full meeting recording to Homie history."
+            f"✅ Saved full meeting recording to Helm history."
         )
 
 # Global active session singleton

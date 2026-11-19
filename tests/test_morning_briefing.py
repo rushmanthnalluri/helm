@@ -4,10 +4,10 @@ import unittest
 from unittest.mock import patch, MagicMock
 import time
 
-import homie_quarantine_reader
-from homie_quarantine_reader import QuarantinedReader, OpaqueHandleStore
-import homie_briefing
-from homie_briefing import (
+import helm_quarantine_reader
+from helm_quarantine_reader import QuarantinedReader, OpaqueHandleStore
+import helm_briefing
+from helm_briefing import (
     MorningBriefingEngine,
     BriefingSource,
     CalendarTaskCollector,
@@ -183,7 +183,7 @@ class TestMorningBriefingAndQuarantine(unittest.TestCase):
         registry = agent_tools.build_default_registry()
         specs = registry._tools
 
-        self.assertIn("homie_generate_briefing", specs)
+        self.assertIn("helm_generate_briefing", specs)
 
         for name, spec in specs.items():
             # 1. name
@@ -202,7 +202,7 @@ class TestMorningBriefingAndQuarantine(unittest.TestCase):
             self.assertGreater(spec.max_output_chars, 0)
 
         # Test execution of briefing tool via registry
-        result = registry.execute("homie_generate_briefing", {"user_name": "Tester"})
+        result = registry.execute("helm_generate_briefing", {"user_name": "Tester"})
         self.assertTrue(result.get("ok"))
         data = result.get("data", {})
         self.assertIn("audio_text", data)
@@ -216,7 +216,7 @@ class TestMorningBriefingAndQuarantine(unittest.TestCase):
             mock_record.assert_called_once()
             call_kwargs = mock_record.call_args[1]
             self.assertEqual(call_kwargs.get("caller_id"), "briefing_engine")
-            self.assertEqual(call_kwargs.get("tool_name"), "homie_generate_briefing")
+            self.assertEqual(call_kwargs.get("tool_name"), "helm_generate_briefing")
             self.assertEqual(call_kwargs.get("tier"), "READ_ONLY")
             self.assertEqual(call_kwargs.get("arguments", {}).get("user"), "AuditedUser")
 

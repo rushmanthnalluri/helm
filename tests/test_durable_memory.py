@@ -5,7 +5,7 @@ Verifies:
 2. Human-editable legible JSON format (hand edits in facts.json respected immediately).
 3. Memory bounds: validation on key format, fact length, and store capacity cap.
 4. Security guardrail: facts treated strictly as background data, never instructions.
-5. End-to-end tool calling: homie_remember_fact, homie_forget_fact, homie_list_facts.
+5. End-to-end tool calling: helm_remember_fact, helm_forget_fact, helm_list_facts.
 6. Dynamic in-session prompt refresh when facts are updated mid-conversation.
 """
 
@@ -30,8 +30,8 @@ from chat_core import AgentCore, ModelTurn, ToolCall, build_system_prompt
 class TestDurableMemory(unittest.TestCase):
 
     def setUp(self):
-        import homie_supervisor
-        for p in [homie_supervisor.DIRTY_FLAG_PATH, homie_supervisor.CRASH_HISTORY_PATH]:
+        import helm_supervisor
+        for p in [helm_supervisor.DIRTY_FLAG_PATH, helm_supervisor.CRASH_HISTORY_PATH]:
             if os.path.exists(p):
                 try: os.remove(p)
                 except Exception: pass
@@ -50,8 +50,8 @@ class TestDurableMemory(unittest.TestCase):
 
     def tearDown(self):
         durable_memory.set_default_memory_store(None)
-        import homie_supervisor
-        for p in [homie_supervisor.DIRTY_FLAG_PATH, homie_supervisor.CRASH_HISTORY_PATH]:
+        import helm_supervisor
+        for p in [helm_supervisor.DIRTY_FLAG_PATH, helm_supervisor.CRASH_HISTORY_PATH]:
             if os.path.exists(p):
                 try: os.remove(p)
                 except Exception: pass
@@ -142,7 +142,7 @@ class TestDurableMemory(unittest.TestCase):
         self.assertIn("Untrusted Data", sys_prompt)
 
     def test_5_agent_core_tool_roundtrip_remembers_and_forgets(self):
-        """Agent can execute homie_remember_fact, homie_forget_fact, and homie_list_facts."""
+        """Agent can execute helm_remember_fact, helm_forget_fact, and helm_list_facts."""
         import rails_confirmation
         import device_registry
         import hashlib
@@ -153,8 +153,8 @@ class TestDurableMemory(unittest.TestCase):
 
         priv_pem, pub_pem = enroll_test_device("test_memory_phone")
         try:
-            # Step 1: Execute homie_remember_fact (consequential tool requiring confirmation)
-            res1 = registry.execute("homie_remember_fact", {"key": "pet_name", "fact": "The user has a golden retriever named Max."})
+            # Step 1: Execute helm_remember_fact (consequential tool requiring confirmation)
+            res1 = registry.execute("helm_remember_fact", {"key": "pet_name", "fact": "The user has a golden retriever named Max."})
             if res1.get("needs_confirmation"):
                 req_id = res1["request_id"]
                 req_obj = gate.get_request(req_id)
@@ -168,18 +168,18 @@ class TestDurableMemory(unittest.TestCase):
                 )
                 ok, msg, token = gate.confirm(req_id, signed_evidence=sig_blob)
                 self.assertTrue(ok, msg)
-                res1 = registry.execute("homie_remember_fact", {"key": "pet_name", "fact": "The user has a golden retriever named Max."}, approval_token=token)
+                res1 = registry.execute("helm_remember_fact", {"key": "pet_name", "fact": "The user has a golden retriever named Max."}, approval_token=token)
             self.assertTrue(res1["ok"])
             self.assertEqual(self.store.get_fact("pet_name"), "The user has a golden retriever named Max.")
 
-            # Step 2: Execute homie_list_facts (read-only)
-            res2 = registry.execute("homie_list_facts", {})
+            # Step 2: Execute helm_list_facts (read-only)
+            res2 = registry.execute("helm_list_facts", {})
             self.assertTrue(res2["ok"])
             listed = json.loads(res2["data"])
             self.assertEqual(listed.get("pet_name"), "The user has a golden retriever named Max.")
 
-            # Step 3: Execute homie_forget_fact (consequential tool requiring confirmation)
-            res3 = registry.execute("homie_forget_fact", {"key": "pet_name"})
+            # Step 3: Execute helm_forget_fact (consequential tool requiring confirmation)
+            res3 = registry.execute("helm_forget_fact", {"key": "pet_name"})
             if res3.get("needs_confirmation"):
                 req_id = res3["request_id"]
                 req_obj = gate.get_request(req_id)
@@ -193,7 +193,7 @@ class TestDurableMemory(unittest.TestCase):
                 )
                 ok, msg, token = gate.confirm(req_id, signed_evidence=sig_blob)
                 self.assertTrue(ok, msg)
-                res3 = registry.execute("homie_forget_fact", {"key": "pet_name"}, approval_token=token)
+                res3 = registry.execute("helm_forget_fact", {"key": "pet_name"}, approval_token=token)
             self.assertTrue(res3["ok"])
             self.assertIsNone(self.store.get_fact("pet_name"))
         finally:
@@ -231,7 +231,7 @@ class TestDurableMemory(unittest.TestCase):
             registry.execute = auto_confirm_execute
 
             initial_facts = self.store.list_facts()
-            initial_prompt = build_system_prompt("Homie", "Assist user", facts=initial_facts)
+            initial_prompt = build_system_prompt("Helm", "Assist user", facts=initial_facts)
             self.assertNotIn("preferred_drink", initial_prompt)
 
             # Provider emits a tool call to remember a fact
@@ -242,7 +242,7 @@ class TestDurableMemory(unittest.TestCase):
                 if call_count == 1:
                     return ModelTurn(
                         text="Let me remember that.",
-                        tool_calls=[ToolCall("call_1", "homie_remember_fact", '{"key": "preferred_drink", "fact": "The user prefers sparkling water with lime."}')]
+                        tool_calls=[ToolCall("call_1", "helm_remember_fact", '{"key": "preferred_drink", "fact": "The user prefers sparkling water with lime."}')]
                     )
                 # Second round: assistant responds having saved it
                 self.assertIn("preferred_drink", system_prompt)

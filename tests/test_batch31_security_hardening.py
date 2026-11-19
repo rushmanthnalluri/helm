@@ -32,7 +32,7 @@ if BASE_DIR not in sys.path:
 
 import phone_approval_portal
 import phone_gateway
-import homie_supervisor
+import helm_supervisor
 import policy_envelope
 import taint_tracker
 import agent_audit_ledger
@@ -49,7 +49,7 @@ from tests.phone_testing_keys import (
 class TestBatch31SecurityHardening(unittest.TestCase):
 
     def setUp(self):
-        for p in [homie_supervisor.DIRTY_FLAG_PATH, homie_supervisor.CRASH_HISTORY_PATH]:
+        for p in [helm_supervisor.DIRTY_FLAG_PATH, helm_supervisor.CRASH_HISTORY_PATH]:
             if os.path.exists(p):
                 try: os.remove(p)
                 except Exception: pass
@@ -73,7 +73,7 @@ class TestBatch31SecurityHardening(unittest.TestCase):
                 pass
 
     def tearDown(self):
-        for p in [homie_supervisor.DIRTY_FLAG_PATH, homie_supervisor.CRASH_HISTORY_PATH]:
+        for p in [helm_supervisor.DIRTY_FLAG_PATH, helm_supervisor.CRASH_HISTORY_PATH]:
             if os.path.exists(p):
                 try: os.remove(p)
                 except Exception: pass
@@ -97,7 +97,7 @@ class TestBatch31SecurityHardening(unittest.TestCase):
         env = policy_envelope.PolicyEnvelope(
             envelope_id="env_test_domain",
             allowed_process_images=["chrome.exe"],
-            allowed_action_types=["homie_agent_click"],
+            allowed_action_types=["helm_agent_click"],
             step_budget=10,
             keystroke_cap=100,
             expiry=time.time() + 60,
@@ -107,20 +107,20 @@ class TestBatch31SecurityHardening(unittest.TestCase):
         env.is_active = True
 
         # Exact match -> ALLOW
-        ok, msg = env.check_and_consume("homie_agent_click", {}, "chrome.exe", env.taint_epoch, current_domain="bank.com")
+        ok, msg = env.check_and_consume("helm_agent_click", {}, "chrome.exe", env.taint_epoch, current_domain="bank.com")
         self.assertTrue(ok, f"Exact domain match should succeed: {msg}")
 
         # Subdomain with dot-boundary -> ALLOW
-        ok, msg = env.check_and_consume("homie_agent_click", {}, "chrome.exe", env.taint_epoch, current_domain="sub.bank.com")
+        ok, msg = env.check_and_consume("helm_agent_click", {}, "chrome.exe", env.taint_epoch, current_domain="sub.bank.com")
         self.assertTrue(ok, f"Dot-boundary subdomain match should succeed: {msg}")
 
         # Substring / spoofed domain -> STRICT DENY
-        ok, msg = env.check_and_consume("homie_agent_click", {}, "chrome.exe", env.taint_epoch, current_domain="fakebank.com")
+        ok, msg = env.check_and_consume("helm_agent_click", {}, "chrome.exe", env.taint_epoch, current_domain="fakebank.com")
         self.assertFalse(ok, "fakebank.com must NOT match bank.com")
         self.assertIn("outside envelope domain scope", msg)
 
         # Another deceptive suffix -> STRICT DENY
-        ok, msg = env.check_and_consume("homie_agent_click", {}, "chrome.exe", env.taint_epoch, current_domain="mybank.com")
+        ok, msg = env.check_and_consume("helm_agent_click", {}, "chrome.exe", env.taint_epoch, current_domain="mybank.com")
         self.assertFalse(ok, "mybank.com must NOT match bank.com")
 
     def test_2_policy_envelope_two_phase_budget_consumption(self):
@@ -128,7 +128,7 @@ class TestBatch31SecurityHardening(unittest.TestCase):
         env = policy_envelope.PolicyEnvelope(
             envelope_id="env_test_budget",
             allowed_process_images=["notepad.exe"],
-            allowed_action_types=["homie_agent_click"],
+            allowed_action_types=["helm_agent_click"],
             step_budget=2,
             keystroke_cap=50,
             expiry=time.time() + 60,
@@ -137,7 +137,7 @@ class TestBatch31SecurityHardening(unittest.TestCase):
         env.is_active = True
 
         # Check boundary passes
-        valid, msg, ks = env.check_boundary("homie_agent_click", {}, "notepad.exe", env.taint_epoch)
+        valid, msg, ks = env.check_boundary("helm_agent_click", {}, "notepad.exe", env.taint_epoch)
         self.assertTrue(valid)
         self.assertEqual(env.steps_consumed, 0, "check_boundary must NOT consume steps before commit")
 
@@ -308,8 +308,8 @@ class TestBatch31SecurityHardening(unittest.TestCase):
         """Directive 13: Exception during tool execution records UNKNOWN outcome,
         and failure to write to the audit ledger locks the supervisor."""
         import heartbeat_lease
-        supervisor = homie_supervisor.PolicySupervisor()
-        supervisor.state = homie_supervisor.STATE_ARMED
+        supervisor = helm_supervisor.PolicySupervisor()
+        supervisor.state = helm_supervisor.STATE_ARMED
         supervisor.lease_token, _ = heartbeat_lease.acquire_lease("supervisor_worker", duration=5.0)
 
         # Mock actuator to raise unexpected exception
@@ -320,11 +320,11 @@ class TestBatch31SecurityHardening(unittest.TestCase):
         # Execute proposal
         payload = {
             "req_id": "req_crash_1",
-            "tool": "homie_set_clipboard",
+            "tool": "helm_set_clipboard",
             "args": {"text": "crash_test"}
         }
         res_bytes = supervisor._handle_propose(payload, seq=1)
-        _, _, _, resp, _ = homie_supervisor.BinaryFrameCodec.decode_frame(res_bytes)
+        _, _, _, resp, _ = helm_supervisor.BinaryFrameCodec.decode_frame(res_bytes)
         self.assertEqual(resp["status"], "DENY")
 
         # Verify audit ledger recorded OUTCOME:req_crash_1:UNKNOWN
@@ -336,8 +336,8 @@ class TestBatch31SecurityHardening(unittest.TestCase):
         """Directive 14: Supervisor verifies approved action via internal state lookup
         without requiring worker to carry a bearer step-up token."""
         import heartbeat_lease
-        supervisor = homie_supervisor.PolicySupervisor()
-        supervisor.state = homie_supervisor.STATE_ARMED
+        supervisor = helm_supervisor.PolicySupervisor()
+        supervisor.state = helm_supervisor.STATE_ARMED
         supervisor.lease_token, _ = heartbeat_lease.acquire_lease("supervisor_worker", duration=5.0)
 
         args = {"text": "secret_data"}
@@ -349,16 +349,16 @@ class TestBatch31SecurityHardening(unittest.TestCase):
         # Register direct approval in supervisor internal table with cryptographic evidence
         from tests.phone_testing_keys import enroll_test_device, mint_test_action_approval
         priv_k, pub_k = enroll_test_device("primary_phone")
-        signed_blob = mint_test_action_approval(priv_k, "homie_set_clipboard", args_hash, "primary_phone", taint_epoch=epoch)
+        signed_blob = mint_test_action_approval(priv_k, "helm_set_clipboard", args_hash, "primary_phone", taint_epoch=epoch)
         signed_blob["caller_id"] = "worker"
-        signed_blob["tool_name"] = "homie_set_clipboard"
+        signed_blob["tool_name"] = "helm_set_clipboard"
         signed_blob["args_hash"] = args_hash
-        supervisor.record_approved_action("worker", "homie_set_clipboard", args_hash, epoch, signed_blob=signed_blob)
+        supervisor.record_approved_action("worker", "helm_set_clipboard", args_hash, epoch, signed_blob=signed_blob)
 
         # Worker proposes action with NO step_up_token
         payload = {
             "req_id": "req_direct_1",
-            "tool": "homie_set_clipboard",
+            "tool": "helm_set_clipboard",
             "args": args
             # Notice: NO step_up_token provided by worker!
         }
@@ -366,13 +366,13 @@ class TestBatch31SecurityHardening(unittest.TestCase):
         with patch.object(taint_tracker, "check_action_privilege", return_value=(False, True, "Action requires step-up")):
             with patch.object(supervisor.actuator, "execute_actuator", return_value="Executed"):
                 res_bytes = supervisor._handle_propose(payload, seq=1)
-                _, _, _, resp, _ = homie_supervisor.BinaryFrameCodec.decode_frame(res_bytes)
+                _, _, _, resp, _ = helm_supervisor.BinaryFrameCodec.decode_frame(res_bytes)
                 self.assertEqual(resp["status"], "ALLOW", "Supervisor must authorize action via internal approved action table")
 
         # Second proposal with same args should be DENIED because internal approval was consumed (single-use)
         with patch.object(taint_tracker, "check_action_privilege", return_value=(False, True, "Action requires step-up")):
             res_bytes2 = supervisor._handle_propose(payload, seq=2)
-            _, _, _, resp2, _ = homie_supervisor.BinaryFrameCodec.decode_frame(res_bytes2)
+            _, _, _, resp2, _ = helm_supervisor.BinaryFrameCodec.decode_frame(res_bytes2)
             self.assertEqual(resp2["status"], "NEEDS_HUMAN", "Internal approval must be single-use")
 
 

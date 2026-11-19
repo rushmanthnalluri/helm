@@ -20,31 +20,31 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-import homie_watchdog
-from homie_watchdog import (
+import helm_watchdog
+from helm_watchdog import (
     IndependentWatchdog, MutualHeartbeat, LOCKED_FLAG_FILE,
     LLKHF_INJECTED, VK_ESCAPE, VK_PAUSE, WM_KEYDOWN
 )
-import homie_confinement
+import helm_confinement
 
 
 class TestBatch19Watchdog(unittest.TestCase):
 
     def setUp(self):
-        import homie_supervisor
+        import helm_supervisor
         if os.path.exists(LOCKED_FLAG_FILE):
             try:
                 os.remove(LOCKED_FLAG_FILE)
             except Exception:
                 pass
-        if os.path.exists(homie_supervisor.DIRTY_FLAG_PATH):
+        if os.path.exists(helm_supervisor.DIRTY_FLAG_PATH):
             try:
-                os.remove(homie_supervisor.DIRTY_FLAG_PATH)
+                os.remove(helm_supervisor.DIRTY_FLAG_PATH)
             except Exception:
                 pass
 
     def tearDown(self):
-        import homie_supervisor
+        import helm_supervisor
         import kill_switch
         import desktop_agent
         import taint_tracker
@@ -58,9 +58,9 @@ class TestBatch19Watchdog(unittest.TestCase):
                 os.remove(LOCKED_FLAG_FILE)
             except Exception:
                 pass
-        if os.path.exists(homie_supervisor.DIRTY_FLAG_PATH):
+        if os.path.exists(helm_supervisor.DIRTY_FLAG_PATH):
             try:
-                os.remove(homie_supervisor.DIRTY_FLAG_PATH)
+                os.remove(helm_supervisor.DIRTY_FLAG_PATH)
             except Exception:
                 pass
 
@@ -101,7 +101,7 @@ class TestBatch19Watchdog(unittest.TestCase):
 
         # Create a mock synthetic KBDLLHOOKSTRUCT with LLKHF_INJECTED
         import ctypes
-        kb_struct = homie_watchdog.KBDLLHOOKSTRUCT()
+        kb_struct = helm_watchdog.KBDLLHOOKSTRUCT()
         kb_struct.vkCode = VK_PAUSE
         kb_struct.flags = LLKHF_INJECTED  # Synthesized / injected flag!
         kb_struct.time = 0
@@ -116,7 +116,7 @@ class TestBatch19Watchdog(unittest.TestCase):
         self.assertFalse(watchdog.locked)
 
         # Now test with physical keystroke (flags = 0)
-        kb_struct_physical = homie_watchdog.KBDLLHOOKSTRUCT()
+        kb_struct_physical = helm_watchdog.KBDLLHOOKSTRUCT()
         kb_struct_physical.vkCode = VK_PAUSE
         kb_struct_physical.flags = 0  # Real physical hardware key!
 
@@ -133,7 +133,7 @@ class TestBatch19Watchdog(unittest.TestCase):
         import win32con
 
         # Create a real Job Object
-        job = homie_confinement.build_job()
+        job = helm_confinement.build_job()
 
         # Spawn a dummy worker process in the job
         import subprocess
@@ -170,7 +170,7 @@ class TestBatch19Watchdog(unittest.TestCase):
         import win32job
         import win32api
         import win32con
-        job = homie_confinement.build_job()
+        job = helm_confinement.build_job()
         proc = subprocess.Popen([sys._base_executable, "-c", "import time; time.sleep(30)"])
         hproc = win32api.OpenProcess(win32con.PROCESS_SET_QUOTA | win32con.PROCESS_TERMINATE | win32con.SYNCHRONIZE, False, proc.pid)
         win32job.AssignProcessToJobObject(job, hproc)
@@ -195,21 +195,21 @@ class TestBatch19Watchdog(unittest.TestCase):
 
     def test_supervisor_locks_on_watchdog_failure(self):
         """Verifies supervisor detects watchdog failure and engages locked state."""
-        import homie_supervisor
-        supervisor = homie_supervisor.PolicySupervisor()
-        supervisor.state = homie_supervisor.STATE_ARMED
+        import helm_supervisor
+        supervisor = helm_supervisor.PolicySupervisor()
+        supervisor.state = helm_supervisor.STATE_ARMED
         secret = b"watchdog_secret_death"
         watchdog = IndependentWatchdog(secret, heartbeat_timeout=0.2)
         supervisor.attach_watchdog(watchdog)
 
         # Initially alive
         self.assertTrue(supervisor.check_watchdog_liveness())
-        self.assertEqual(supervisor.state, homie_supervisor.STATE_ARMED)
+        self.assertEqual(supervisor.state, helm_supervisor.STATE_ARMED)
 
         # Simulate watchdog death / timeout
         time.sleep(0.3)
         self.assertFalse(supervisor.check_watchdog_liveness())
-        self.assertEqual(supervisor.state, homie_supervisor.STATE_LOCKED)
+        self.assertEqual(supervisor.state, helm_supervisor.STATE_LOCKED)
         self.assertIn("WATCHDOG_DEAD", supervisor.lock_reason)
         supervisor.clean_shutdown()
 

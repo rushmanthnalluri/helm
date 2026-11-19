@@ -1,4 +1,4 @@
-"""Lightweight Local File Search Indexer for Homie.
+"""Lightweight Local File Search Indexer for Helm.
 Indexes filenames and metadata across Desktop, Documents, and Downloads
 allowing instant fuzzy file location and remote retrieval via Telegram.
 """

@@ -33,8 +33,8 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
     def setUp(self):
         self.test_registry_file = os.path.join(BASE_DIR, "test_temp_macros.json")
         self.registry = skill_compiler.MacroRegistry(storage_path=self.test_registry_file)
-        import homie_supervisor, kill_switch, taint_tracker, action_broker
-        for p in [homie_supervisor.DIRTY_FLAG_PATH, homie_supervisor.CRASH_HISTORY_PATH]:
+        import helm_supervisor, kill_switch, taint_tracker, action_broker
+        for p in [helm_supervisor.DIRTY_FLAG_PATH, helm_supervisor.CRASH_HISTORY_PATH]:
             if os.path.exists(p):
                 try: os.remove(p)
                 except Exception: pass
@@ -52,8 +52,8 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
                 os.remove(self.test_registry_file)
             except Exception:
                 pass
-        import homie_supervisor, kill_switch, taint_tracker, action_broker
-        for p in [homie_supervisor.DIRTY_FLAG_PATH, homie_supervisor.CRASH_HISTORY_PATH]:
+        import helm_supervisor, kill_switch, taint_tracker, action_broker
+        for p in [helm_supervisor.DIRTY_FLAG_PATH, helm_supervisor.CRASH_HISTORY_PATH]:
             if os.path.exists(p):
                 try: os.remove(p)
                 except Exception: pass
@@ -67,13 +67,13 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
 
     def _mint_macro_approval(self, name, steps, description=""):
         m_hash = skill_compiler.compute_macro_canonical_hash(name, steps, description=description)
-        return self.mint_test_action_approval(self.phone_priv, "homie_compile_macro", m_hash)
+        return self.mint_test_action_approval(self.phone_priv, "helm_compile_macro", m_hash)
 
     def test_macro_compilation_signing_and_execution(self):
         """Verifies macro compilation, cryptographic signing, and multi-step execution under bound approval."""
         steps = [
-            {"tool": "homie_place_window", "arguments": {"app_name": "notepad", "position": "left"}},
-            {"tool": "homie_control_media", "arguments": {"action": "play_pause"}}
+            {"tool": "helm_place_window", "arguments": {"app_name": "notepad", "position": "left"}},
+            {"tool": "helm_control_media", "arguments": {"action": "play_pause"}}
         ]
         approval = self._mint_macro_approval("dev_morning_setup", steps, description="Places notepad on the left and toggles music")
 
@@ -99,14 +99,14 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
 
     def test_tampered_macro_signature_rejected(self):
         """Verifies that tampering with a macro step causes signature validation failure."""
-        steps = [{"tool": "homie_control_media", "arguments": {"action": "volup"}}]
+        steps = [{"tool": "helm_control_media", "arguments": {"action": "volup"}}]
         approval = self._mint_macro_approval("custom_volume_step", steps, description="Volume step")
         ok, msg, macro = self.registry.register_macro("custom_volume_step", "Volume step", steps, approval=approval)
         self.assertTrue(ok)
 
         # Tamper with the macro in registry (insert malicious third-party step)
         tampered_macro = self.registry.get_macro("custom_volume_step")
-        tampered_macro["steps"].append({"tool": "homie_launch_app", "arguments": {"app_name": "cmd.exe"}})
+        tampered_macro["steps"].append({"tool": "helm_launch_app", "arguments": {"app_name": "cmd.exe"}})
         self.registry._macros["custom_volume_step"] = tampered_macro
 
         # Attempt execution of tampered macro
@@ -163,7 +163,7 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
 
     def test_macro_compilation_denied_without_approval_object(self):
         """Verifies macro registration is rejected when signed approval object is absent."""
-        steps = [{"tool": "homie_control_media", "arguments": {"action": "volup"}}]
+        steps = [{"tool": "helm_control_media", "arguments": {"action": "volup"}}]
         ok, msg, _ = self.registry.register_macro("safe_macro", "Safe macro", steps, approval=None)
         self.assertFalse(ok)
         self.assertIn("strictly requires a signed approval object", msg)
@@ -173,7 +173,7 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
         import taint_tracker
         taint_tracker.set_workstation_tainted(True)
         try:
-            steps = [{"tool": "homie_control_media", "arguments": {"action": "volup"}}]
+            steps = [{"tool": "helm_control_media", "arguments": {"action": "volup"}}]
             approval = self._mint_macro_approval("tainted_macro", steps, description="Tainted macro")
             ok, msg, _ = self.registry.register_macro("tainted_macro", "Tainted macro", steps, approval=approval)
             self.assertFalse(ok)
@@ -183,7 +183,7 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
 
     def test_macro_compilation_denied_when_shadowing_fast_command(self):
         """Verifies macros cannot shadow core deterministic fast commands (mute, pause, pc_status)."""
-        steps = [{"tool": "homie_control_media", "arguments": {"action": "volup"}}]
+        steps = [{"tool": "helm_control_media", "arguments": {"action": "volup"}}]
         for forbidden in ["mute", "pause", "pc_status", "volume_up", "clipboard"]:
             approval = self._mint_macro_approval(forbidden, steps, description="Shadowing macro")
             ok, msg, _ = self.registry.register_macro(forbidden, "Shadowing macro", steps, approval=approval)
@@ -192,7 +192,7 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
 
     def test_macro_name_regex_allowlist(self):
         """Verifies macro names must match allowlist regex ^[a-z0-9_]{1,40}$."""
-        steps = [{"tool": "homie_control_media", "arguments": {"action": "volup"}}]
+        steps = [{"tool": "helm_control_media", "arguments": {"action": "volup"}}]
         bad_name = "invalid-name$cmd"
         approval = self._mint_macro_approval(bad_name, steps, description="Bad name")
         ok, msg, _ = self.registry.register_macro(bad_name, "Bad name", steps, approval=approval)
@@ -202,7 +202,7 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
     def test_macro_parameter_schema_validation(self):
         """Verifies deeply nested parameters exceeding nesting limit are rejected."""
         deep_args = {"l1": {"l2": {"l3": {"l4": "too_deep"}}}}
-        steps = [{"tool": "homie_place_window", "arguments": deep_args}]
+        steps = [{"tool": "helm_place_window", "arguments": deep_args}]
         approval = self._mint_macro_approval("deep_param_macro", steps, description="Deep")
         ok, msg, _ = self.registry.register_macro("deep_param_macro", "Deep", steps, approval=approval)
         self.assertFalse(ok)
@@ -217,7 +217,7 @@ class TestSkillCompilerAndRecovery(unittest.TestCase):
         self.assertTrue(taint_tracker.is_workstation_tainted())
 
         try:
-            steps = [{"tool": "homie_control_media", "arguments": {"action": "volup"}}]
+            steps = [{"tool": "helm_control_media", "arguments": {"action": "volup"}}]
             approval = self._mint_macro_approval("taint_dodge_macro", steps, description="Clean desc")
             ok, msg, _ = self.registry.register_macro("taint_dodge_macro", "Clean desc", steps, approval=approval)
             self.assertFalse(ok)

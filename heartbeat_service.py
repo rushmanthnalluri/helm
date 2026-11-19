@@ -25,12 +25,12 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import kill_switch
 
-logger = logging.getLogger("homie.heartbeat")
+logger = logging.getLogger("helm.heartbeat")
 
 
 def get_heartbeat_dir() -> Path:
     """Returns directory where heartbeat configuration and state live."""
-    base = Path(os.environ.get("HOMIE_DIR") or (Path.home() / ".config" / "homie"))
+    base = Path(os.environ.get("HELM_DIR") or (Path.home() / ".config" / "helm"))
     return base.resolve()
 
 
@@ -439,7 +439,7 @@ class HeartbeatService:
                 return
             self._running = True
             self._stop_event.clear()
-            self._thread = threading.Thread(target=self._run_loop, name="homie-heartbeat", daemon=True)
+            self._thread = threading.Thread(target=self._run_loop, name="helm-heartbeat", daemon=True)
             self._thread.start()
             logger.info("Proactive heartbeat service started")
 

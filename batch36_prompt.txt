@@ -4,7 +4,7 @@ Here is the complete Batch 36 implementation, resolving every architectural crit
 
 ### 1. The `actuator_invoked` Pre-Try Initialization & Early-Exit Verification
 
-In `homie_supervisor.py`, `actuator_invoked = False` and `step_committed = False` are now initialized strictly **before** the `try:` block. Every early exit (Taint deny, NEEDS_HUMAN, bad step-up token, Shadow mode, INTENT ledger failure, TOCTOU breach) executes the outer `finally:` with `actuator_invoked` bound, guaranteeing clean reservation release to `reserved_steps == 0` without `UnboundLocalError`:
+In `helm_supervisor.py`, `actuator_invoked = False` and `step_committed = False` are now initialized strictly **before** the `try:` block. Every early exit (Taint deny, NEEDS_HUMAN, bad step-up token, Shadow mode, INTENT ledger failure, TOCTOU breach) executes the outer `finally:` with `actuator_invoked` bound, guaranteeing clean reservation release to `reserved_steps == 0` without `UnboundLocalError`:
 
 ```python
         res_token = None
@@ -70,12 +70,12 @@ POST /api/submit-approval (phone_gateway.py:905)
           |
           +-> phone_approval_portal.verify_device_approval (phone_approval_portal.py:546)
                  |
-                 |-- 1. Look up enrolled public key in .homie_device_keys.json
+                 |-- 1. Look up enrolled public key in .helm_device_keys.json
                  |-- 2. Verify asymmetric Ed25519 signature FIRST (anti-DoS)
                  |-- 3. Verify monotonic anti-replay counter
                  |-- 4. Consume challenge single-use & record in HMAC audit ledger
                  |-- 5. RELAY APPROVAL TO SUPERVISOR (Step 5, line 625):
-                 |        homie_supervisor.record_approved_action(
+                 |        helm_supervisor.record_approved_action(
                  |            caller_id=target_caller,
                  |            tool=item["tool_name"],
                  |            args_hash=item["args_hash"],
@@ -89,9 +89,9 @@ POST /api/submit-approval (phone_gateway.py:905)
 [Low-Integrity Worker Process in AppContainer]
    |
    v
-propose(tool, args, caller_id) over Named Pipe \\.\pipe\homie_supervisor
+propose(tool, args, caller_id) over Named Pipe \\.\pipe\helm_supervisor
    |
-   +-> PolicySupervisor._handle_propose (homie_supervisor.py:848)
+   +-> PolicySupervisor._handle_propose (helm_supervisor.py:848)
           |
           +-> self.consume_approved_action(caller_id, tool, args_hash, current_epoch)
                  |
@@ -104,12 +104,12 @@ Pasted Code (`phone_approval_portal.py:verify_device_approval`):
 ```python
     )
 
-    # Step 5: Relay verified device approval to homie_supervisor cache & SQLite approved_actions table
+    # Step 5: Relay verified device approval to helm_supervisor cache & SQLite approved_actions table
     try:
-        import homie_supervisor
+        import helm_supervisor
         target_caller = item.get("caller_id") or "worker"
         remaining_ttl = max(1.0, float(item.get("expiry", now + 60) - now))
-        homie_supervisor.record_approved_action(
+        helm_supervisor.record_approved_action(
             caller_id=target_caller,
             tool=item["tool_name"],
             args_hash=str(item["args_hash"]).lower(),
@@ -136,25 +136,25 @@ Pasted Code (`phone_approval_portal.py:verify_device_approval`):
         import phone_approval_portal
         # Interactive console presence required to ensure automated processes or background agents cannot invoke recovery
         if not sys.stdin.isatty():
-            print("✗ [HOMIE SECURITY] Interactive console presence required to unlock pairing.")
+            print("✗ [HELM SECURITY] Interactive console presence required to unlock pairing.")
             return
 
         confirmation = input("Type 'CONFIRM-RESET' to unlock pairing / generate recovery token: ").strip()
         if confirmation != "CONFIRM-RESET":
-            print("✗ [HOMIE SECURITY] Operation cancelled: confirmation code mismatch.")
+            print("✗ [HELM SECURITY] Operation cancelled: confirmation code mismatch.")
             return
         
         recovery_token = phone_approval_portal.generate_console_recovery_token(ttl_seconds=300.0)
         ok, msg = phone_approval_portal.reset_pairing_lockout(recovery_token=recovery_token)
-        print(f"✓ [HOMIE SECURITY] {msg}")
+        print(f"✓ [HELM SECURITY] {msg}")
         if cmd == '--recover-device':
             new_rec_token = phone_approval_portal.generate_console_recovery_token(ttl_seconds=300.0)
-            print(f"✓ [HOMIE SECURITY] Device recovery token (valid 5m): {new_rec_token}")
+            print(f"✓ [HELM SECURITY] Device recovery token (valid 5m): {new_rec_token}")
             print("  Use this recovery token during phone enrollment to restore access.")
         return
 
     if cmd == '--look':
-        ok, msg, res = action_broker.execute_action('homie_capture_screen', {}, caller_id="desktop_user")
+        ok, msg, res = action_broker.execute_action('helm_capture_screen', {}, caller_id="desktop_user")
         files = re.findall(r'([A-Za-z]:\\[^\s,]+\.png)', str(res)) if ok else []
 ```
 
@@ -355,12 +355,12 @@ Command: `python scripts/run_mutation_tests.py`
 ===========================================================================
 Total Security Mutations to Evaluate: 60
 
-[1/60] Testing Mutation: Drop File Owner-Only DACL in homie_confinement.py ... KILLED
-[2/60] Testing Mutation: Drop ActiveProcessLimit from Job Object in homie_confinement.py ... KILLED
-[3/60] Testing Mutation: Remove AppContainer Isolation in homie_confinement.py ... KILLED
-[4/60] Testing Mutation: Bypass Intent Token Verification in homie_supervisor.py ... KILLED
+[1/60] Testing Mutation: Drop File Owner-Only DACL in helm_confinement.py ... KILLED
+[2/60] Testing Mutation: Drop ActiveProcessLimit from Job Object in helm_confinement.py ... KILLED
+[3/60] Testing Mutation: Remove AppContainer Isolation in helm_confinement.py ... KILLED
+[4/60] Testing Mutation: Bypass Intent Token Verification in helm_supervisor.py ... KILLED
 [5/60] Testing Mutation: Bypass Browser Domain Scope Check in policy_envelope.py ... KILLED
-[6/60] Testing Mutation: Drop Synthetic Keystroke Filter in homie_watchdog.py ... KILLED
+[6/60] Testing Mutation: Drop Synthetic Keystroke Filter in helm_watchdog.py ... KILLED
 [7/60] Testing Mutation: Bypass Ed25519 Signature Check in phone_approval_portal.py ... KILLED
 [8/60] Testing Mutation: Bypass Ed25519 Signature Verification in update_verifier.py ... KILLED
 [9/60] Testing Mutation: Bypass Monotonic Version Epoch Rollback Check in update_verifier.py ... KILLED
@@ -408,7 +408,7 @@ Total Security Mutations to Evaluate: 60
 [51/60] Testing Mutation: Bypass Step Budget Consumption on Actuator Invocation / UNKNOWN Outcomes in _handle_propose ... KILLED
 [52/60] Testing Mutation: Bypass Phone Approval Relay to Supervisor Cache in verify_action_approval ... KILLED
 [53/60] Testing Mutation: Bypass Publisher Public Key SPKI DER SHA-256 Fingerprint Check in update_verifier.py ... KILLED
-[54/60] Testing Mutation: Bypass Console Presence Verification in homie.py --pairing-unlock ... KILLED
+[54/60] Testing Mutation: Bypass Console Presence Verification in helm.py --pairing-unlock ... KILLED
 [55/60] Testing Mutation: Bypass ActionBroker Complete Mediation in Telegram Bridge Callback ... KILLED
 [56/60] Testing Mutation: Bypass Pre-Try actuator_invoked Initialization in PolicySupervisor._handle_propose ... KILLED
 [57/60] Testing Mutation: Bypass Phone Device Approval Relay to Supervisor Cache in verify_device_approval ... KILLED

@@ -71,7 +71,7 @@ class TestBatch18PhonePortal(unittest.TestCase):
         """Verifies valid Ed25519 phone signature approves the exact bound challenge."""
         challenge = generate_approval_challenge(
             step_up_id="step_test_001",
-            tool_name="homie_snap_window",
+            tool_name="helm_snap_window",
             arguments={"app_name": "notepad"},
             session_id="tainted_session_1",
             taint_epoch=taint_tracker.get_taint_epoch(),
@@ -82,14 +82,14 @@ class TestBatch18PhonePortal(unittest.TestCase):
         sig = sign_test_challenge(self.phone_priv, challenge["challenge_hash"])
         ok, msg, item = verify_device_approval("step_test_001", sig, device_id="primary_phone", counter=1)
         self.assertTrue(ok, f"Verification failed: {msg}")
-        self.assertEqual(item["tool_name"], "homie_snap_window")
+        self.assertEqual(item["tool_name"], "helm_snap_window")
         self.assertIn("notepad", str(item["arguments"]))
 
     def test_tampered_signature_rejection(self):
         """Verifies signature forgery fails verification without destroying challenge on first attempt."""
         challenge = generate_approval_challenge(
             step_up_id="step_test_002",
-            tool_name="homie_snap_window",
+            tool_name="helm_snap_window",
             arguments={"app_name": "notepad"},
             session_id="tainted_session_1",
             taint_epoch=taint_tracker.get_taint_epoch(),
@@ -105,7 +105,7 @@ class TestBatch18PhonePortal(unittest.TestCase):
         """Verifies an approved challenge is immediately consumed and cannot be replayed."""
         challenge = generate_approval_challenge(
             step_up_id="step_test_003",
-            tool_name="homie_set_clipboard",
+            tool_name="helm_set_clipboard",
             arguments={"text": "sensitive_data"},
             session_id="session_replayer",
             taint_epoch=taint_tracker.get_taint_epoch(),
@@ -125,7 +125,7 @@ class TestBatch18PhonePortal(unittest.TestCase):
         """Verifies challenge past TTL fails verification."""
         challenge = generate_approval_challenge(
             step_up_id="step_test_004",
-            tool_name="homie_get_clipboard",
+            tool_name="helm_get_clipboard",
             arguments={},
             session_id="session_expired",
             taint_epoch=taint_tracker.get_taint_epoch(),
@@ -142,7 +142,7 @@ class TestBatch18PhonePortal(unittest.TestCase):
         """Verifies the prompt text is strictly supervisor-authored from validated arguments."""
         challenge = generate_approval_challenge(
             step_up_id="step_test_005",
-            tool_name="homie_launch_app",
+            tool_name="helm_launch_app",
             arguments={"app_name": "calc.exe"},
             session_id="agent_123",
             taint_epoch=taint_tracker.get_taint_epoch(),
@@ -150,7 +150,7 @@ class TestBatch18PhonePortal(unittest.TestCase):
         )
         prompt = challenge["canonical_prompt"]
         self.assertIn("Security Authorization Required", prompt)
-        self.assertIn("homie_launch_app", prompt)
+        self.assertIn("helm_launch_app", prompt)
         self.assertIn("calc.exe", prompt)
 
     def test_physical_presence_pairing_and_revocation(self):
@@ -172,7 +172,7 @@ class TestBatch18PhonePortal(unittest.TestCase):
         # 3. Use signature with monotonic counter
         ch = generate_approval_challenge(
             step_up_id="step_test_006",
-            tool_name="homie_move_cursor",
+            tool_name="helm_move_cursor",
             arguments={"x": 100, "y": 200},
             session_id="enrolled_sess",
             taint_epoch=taint_tracker.get_taint_epoch(),
@@ -185,7 +185,7 @@ class TestBatch18PhonePortal(unittest.TestCase):
         # 4. Anti-replay counter rejection: same or lower counter fails
         ch2 = generate_approval_challenge(
             step_up_id="step_test_007",
-            tool_name="homie_click_coords",
+            tool_name="helm_click_coords",
             arguments={"button": "left"},
             session_id="enrolled_sess",
             taint_epoch=taint_tracker.get_taint_epoch(),
@@ -201,7 +201,7 @@ class TestBatch18PhonePortal(unittest.TestCase):
         self.assertTrue(revoked)
         ch3 = generate_approval_challenge(
             step_up_id="step_test_008",
-            tool_name="homie_click_coords",
+            tool_name="helm_click_coords",
             arguments={"button": "left"},
             session_id="enrolled_sess",
             taint_epoch=taint_tracker.get_taint_epoch(),
@@ -252,12 +252,12 @@ class TestBatch18PhonePortal(unittest.TestCase):
         imported = ECC.import_key(pc_held_pub_pem)
         self.assertFalse(imported.has_private(), "PC state must NEVER hold private signing keys!")
 
-        # Attacker tries to forge an approval for homie_apply_update using PC state
+        # Attacker tries to forge an approval for helm_apply_update using PC state
         payload_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         forged_approval = {
             "version": 1,
             "device_id": "primary_phone",
-            "action_name": "homie_apply_update",
+            "action_name": "helm_apply_update",
             "payload_hash": payload_hash,
             "nonce": "0123456789abcdef0123456789abcdef",
             "expiry": int(time.time() + 60),
@@ -265,23 +265,23 @@ class TestBatch18PhonePortal(unittest.TestCase):
             "signature": "deadbeef" * 16  # Forged 64-byte signature
         }
 
-        ok, msg = verify_action_approval(forged_approval, "homie_apply_update", payload_hash)
+        ok, msg = verify_action_approval(forged_approval, "helm_apply_update", payload_hash)
         self.assertFalse(ok, "Attacker possessing all PC state MUST NOT be able to forge an approval!")
         self.assertIn("signature failed verification", msg.lower())
 
         # Legitimate phone signs with its private key held only on the phone
         valid_approval = mint_test_action_approval(
-            self.phone_priv, "homie_apply_update", payload_hash, device_id="primary_phone"
+            self.phone_priv, "helm_apply_update", payload_hash, device_id="primary_phone"
         )
-        ok_valid, msg_valid = verify_action_approval(valid_approval, "homie_apply_update", payload_hash)
+        ok_valid, msg_valid = verify_action_approval(valid_approval, "helm_apply_update", payload_hash)
         self.assertTrue(ok_valid, f"Legitimate phone signature must be accepted: {msg_valid}")
 
         # Stale taint epoch rejection
         stale_approval = mint_test_action_approval(
-            self.phone_priv, "homie_apply_update", payload_hash, device_id="primary_phone",
+            self.phone_priv, "helm_apply_update", payload_hash, device_id="primary_phone",
             taint_epoch=taint_tracker.get_taint_epoch() - 1
         )
-        ok_stale, msg_stale = verify_action_approval(stale_approval, "homie_apply_update", payload_hash)
+        ok_stale, msg_stale = verify_action_approval(stale_approval, "helm_apply_update", payload_hash)
         self.assertFalse(ok_stale, "Approval with stale taint epoch must be rejected!")
         self.assertIn("TAINT_EPOCH_MISMATCH", msg_stale)
 
@@ -290,7 +290,7 @@ class TestBatch18PhonePortal(unittest.TestCase):
         other_priv, other_pub = enroll_test_device("rogue_phone_02")
         challenge = generate_approval_challenge(
             step_up_id="step_test_cross_dev",
-            tool_name="homie_snap_window",
+            tool_name="helm_snap_window",
             arguments={"app_name": "cmd.exe"},
             session_id="session_cross",
             taint_epoch=taint_tracker.get_taint_epoch(),
@@ -317,7 +317,7 @@ class TestBatch18PhonePortal(unittest.TestCase):
         """Batch 28 Security Invariant: Monotonic counter is strictly mandatory in verify_device_approval."""
         challenge = generate_approval_challenge(
             step_up_id="step_test_no_counter",
-            tool_name="homie_snap_window",
+            tool_name="helm_snap_window",
             arguments={"app_name": "calc.exe"},
             session_id="session_no_counter",
             taint_epoch=taint_tracker.get_taint_epoch(),
@@ -333,10 +333,10 @@ class TestBatch18PhonePortal(unittest.TestCase):
         payload_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         # Mint approval with 600s TTL (> 300s)
         excessive_approval = mint_test_action_approval(
-            self.phone_priv, "homie_apply_update", payload_hash, device_id="primary_phone",
+            self.phone_priv, "helm_apply_update", payload_hash, device_id="primary_phone",
             ttl_seconds=600.0
         )
-        ok, msg = verify_action_approval(excessive_approval, "homie_apply_update", payload_hash)
+        ok, msg = verify_action_approval(excessive_approval, "helm_apply_update", payload_hash)
         self.assertFalse(ok, "Action approval with excessive TTL must be rejected!")
         self.assertIn("EXPIRY_EXCEEDS_CAP", msg)
 

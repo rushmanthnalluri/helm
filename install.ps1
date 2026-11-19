@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-    Installs Homie desktop assistant and creates Windows shortcuts.
+    Installs Helm desktop assistant and creates Windows shortcuts.
 #>
 
 $ErrorActionPreference = "Stop"
 Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host "         Installing Homie for Windows    " -ForegroundColor Cyan
+Write-Host "         Installing Helm for Windows    " -ForegroundColor Cyan
 Write-Host "==========================================" -ForegroundColor Cyan
 
 # 1. Check Python
@@ -28,8 +28,8 @@ if ($claudePath) {
 }
 
 # 3. Install requirements
-$homieDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
-Set-Location $homieDir
+$helmDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+Set-Location $helmDir
 
 Write-Host "`n[*] Installing required Python packages..." -ForegroundColor Cyan
 python -m pip install -r requirements.txt
@@ -39,12 +39,12 @@ Write-Host "`n[*] Creating Desktop and Start Menu shortcuts..." -ForegroundColor
 try {
     $WshShell = New-Object -ComObject WScript.Shell
     $desktopPath = [System.Environment]::GetFolderPath('Desktop')
-    $shortcutPath = Join-Path $desktopPath "Homie.lnk"
+    $shortcutPath = Join-Path $desktopPath "Helm.lnk"
     $shortcut = $WshShell.CreateShortcut($shortcutPath)
-    $shortcut.TargetPath = Join-Path $homieDir "run.bat"
-    $shortcut.WorkingDirectory = $homieDir
-    $shortcut.IconLocation = Join-Path $homieDir "ui\AppIcon.ico"
-    $shortcut.Description = "Homie - Voice AI Assistant for Windows"
+    $shortcut.TargetPath = Join-Path $helmDir "run.bat"
+    $shortcut.WorkingDirectory = $helmDir
+    $shortcut.IconLocation = Join-Path $helmDir "ui\AppIcon.ico"
+    $shortcut.Description = "Helm - Voice AI Assistant for Windows"
     $shortcut.Save()
     Write-Host "[✓] Created Desktop Shortcut: $shortcutPath" -ForegroundColor Green
 } catch {
@@ -52,7 +52,7 @@ try {
 }
 
 Write-Host "`n==========================================" -ForegroundColor Green
-Write-Host "   Homie is ready to roll!" -ForegroundColor Green
+Write-Host "   Helm is ready to roll!" -ForegroundColor Green
 Write-Host "   Launch with: .\run.bat or the Desktop shortcut" -ForegroundColor Green
 Write-Host "   Shortcut: Hold Ctrl+Alt+Space, talk, let go" -ForegroundColor Green
 Write-Host "==========================================" -ForegroundColor Green

@@ -1,4 +1,4 @@
-"""Unit tests for Homie Windows automation tools."""
+"""Unit tests for Helm Windows automation tools."""
 import unittest
 import sys
 import os
@@ -47,16 +47,16 @@ class TestWindowsTools(unittest.TestCase):
         windows_tools.ensure_desktop_attached()
 
     def test_clipboard_operations(self):
-        ok, msg = windows_tools.set_clipboard_text("HomieTestClipboardValue")
+        ok, msg = windows_tools.set_clipboard_text("HelmTestClipboardValue")
         self.assertTrue(ok)
         val = windows_tools.get_clipboard_text()
-        self.assertEqual(val, "HomieTestClipboardValue")
+        self.assertEqual(val, "HelmTestClipboardValue")
 
     def test_safe_command_execution(self):
         # Safe command should succeed
-        ok, out = windows_tools.execute_safe_command("echo HomieOnline")
+        ok, out = windows_tools.execute_safe_command("echo HelmOnline")
         self.assertTrue(ok)
-        self.assertIn("HomieOnline", out)
+        self.assertIn("HelmOnline", out)
 
         # Destructive command should be blocked by guardrails
         ok_blocked, out_blocked = windows_tools.execute_safe_command("rmdir /s /q C:\\Windows")

@@ -3,7 +3,7 @@
 import unittest
 import os
 import shutil
-from homie_browser_broker import (
+from helm_browser_broker import (
     BrowserBroker,
     is_dot_boundary_domain_match,
     is_ip_literal,
@@ -134,7 +134,7 @@ class TestBrowserBroker(unittest.TestCase):
         from cryptography.hazmat.primitives.asymmetric import ec
         from cryptography.hazmat.primitives import hashes
         import webauthn_verifier as wv
-        from homie_browser_broker import DOMMovedTOCTOUError
+        from helm_browser_broker import DOMMovedTOCTOUError
 
         session = self.broker.open_session("task_bank_transfer", allowed_domains=("bank.corp",))
         page = self.broker.navigate(session, "https://bank.corp/transfer")
@@ -149,7 +149,7 @@ class TestBrowserBroker(unittest.TestCase):
             parsed_total="$100.00"
         )
 
-        rp = wv.RelyingParty(rp_id="approval.homie.internal", origins=frozenset({"https://approval.homie.internal"}))
+        rp = wv.RelyingParty(rp_id="approval.helm.internal", origins=frozenset({"https://approval.helm.internal"}))
         store = wv.ChallengeStore()
         device_id = "phone_pixel_9"
 
@@ -172,9 +172,9 @@ class TestBrowserBroker(unittest.TestCase):
         store.register(challenge_bytes, device_id)
 
         # Phone signs valid assertion
-        cd_bytes = json.dumps({"type": "webauthn.get", "challenge": wv.b64u_encode(challenge_bytes), "origin": "https://approval.homie.internal"}).encode("utf-8")
+        cd_bytes = json.dumps({"type": "webauthn.get", "challenge": wv.b64u_encode(challenge_bytes), "origin": "https://approval.helm.internal"}).encode("utf-8")
         flags = wv.FLAG_UP | wv.FLAG_UV
-        auth_data = hashlib.sha256(b"approval.homie.internal").digest() + bytes([flags]) + struct.pack(">I", 2)
+        auth_data = hashlib.sha256(b"approval.helm.internal").digest() + bytes([flags]) + struct.pack(">I", 2)
         sig = priv.sign(auth_data + hashlib.sha256(cd_bytes).digest(), ec.ECDSA(hashes.SHA256()))
         resp = {"clientDataJSON": wv.b64u_encode(cd_bytes), "authenticatorData": wv.b64u_encode(auth_data), "signature": wv.b64u_encode(sig)}
 
@@ -185,7 +185,7 @@ class TestBrowserBroker(unittest.TestCase):
         # 2. TOCTOU mutation -> even with signed hash, mutated DOM is blocked
         store.register(challenge_bytes, device_id)
         # Sign again for new attempt
-        auth_data2 = hashlib.sha256(b"approval.homie.internal").digest() + bytes([flags]) + struct.pack(">I", 3)
+        auth_data2 = hashlib.sha256(b"approval.helm.internal").digest() + bytes([flags]) + struct.pack(">I", 3)
         sig2 = priv.sign(auth_data2 + hashlib.sha256(cd_bytes).digest(), ec.ECDSA(hashes.SHA256()))
         resp2 = {"clientDataJSON": wv.b64u_encode(cd_bytes), "authenticatorData": wv.b64u_encode(auth_data2), "signature": wv.b64u_encode(sig2)}
         cred.sign_count = 2

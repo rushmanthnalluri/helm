@@ -1,4 +1,4 @@
-"""Fuzzing and security integration test harness for Homie.
+"""Fuzzing and security integration test harness for Helm.
 Tests robustness and security guardrails against:
 - Malicious shell metacharacter injections (&, |, ;, $(), ``, etc.)
 - Buffer overflows / ultra-long input fuzzing (10,000+ chars)
@@ -17,8 +17,8 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 import windows_tools
-import homie
-import homie_mcp
+import helm
+import helm_mcp
 import pipeline_telemetry
 import phone_gateway
 import voice
@@ -58,33 +58,33 @@ class TestFuzzAndGuardrails(unittest.TestCase):
     def test_fast_command_fuzzing_massive_strings(self):
         """Tests that fast command parser never crashes on 10,000+ character gibberish."""
         massive_string = "open " + ("a" * 15000)
-        handled, msg = homie.try_fast_command(massive_string)
+        handled, msg = helm.try_fast_command(massive_string)
         # Should gracefully return without crashing
         self.assertIsInstance(handled, bool)
 
         random_unicode = "⚡✨🔥🎉 " * 500 + "\x00\x01\x02\x03\t\r\n"
-        handled2, msg2 = homie.try_fast_command(random_unicode)
+        handled2, msg2 = helm.try_fast_command(random_unicode)
         self.assertIsInstance(handled2, bool)
 
     def test_mcp_jsonrpc_fuzzing(self):
-        """Fuzzes Homie MCP server with malformed JSON-RPC requests."""
+        """Fuzzes Helm MCP server with malformed JSON-RPC requests."""
         # 1. Unknown method
-        res1 = homie_mcp.handle_jsonrpc_request({"jsonrpc": "2.0", "id": 1, "method": "non_existent_method"})
+        res1 = helm_mcp.handle_jsonrpc_request({"jsonrpc": "2.0", "id": 1, "method": "non_existent_method"})
         self.assertIn("error", res1)
         self.assertEqual(res1["error"]["code"], -32601)
 
         # 2. Tools call with missing parameters
-        res2 = homie_mcp.handle_jsonrpc_request({
+        res2 = helm_mcp.handle_jsonrpc_request({
             "jsonrpc": "2.0",
             "id": 2,
             "method": "tools/call",
-            "params": {"name": "homie_snap_window", "arguments": {}}
+            "params": {"name": "helm_snap_window", "arguments": {}}
         })
         self.assertIn("result", res2)
         self.assertIn("content", res2["result"])
 
         # 3. Unknown tool name
-        res3 = homie_mcp.handle_jsonrpc_request({
+        res3 = helm_mcp.handle_jsonrpc_request({
             "jsonrpc": "2.0",
             "id": 3,
             "method": "tools/call",
@@ -104,7 +104,7 @@ class TestFuzzAndGuardrails(unittest.TestCase):
         res = voice.stop_speaking()
         self.assertIsInstance(res, bool)
 
-        handled, msg = homie.try_fast_command("shut up")
+        handled, msg = helm.try_fast_command("shut up")
         self.assertTrue(handled)
         self.assertEqual(msg, "Silenced.")
 

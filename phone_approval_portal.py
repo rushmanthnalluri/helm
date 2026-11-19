@@ -1,4 +1,4 @@
-"""Homie Phone-Signed Cryptographic Step-Up Gateway (Batch 27 Hardened).
+"""Helm Phone-Signed Cryptographic Step-Up Gateway (Batch 27 Hardened).
 
 Eliminates the "Telegram-on-same-PC" trust compromise:
 - Asymmetric Key Architecture (RFC 8032 Ed25519):
@@ -35,7 +35,7 @@ if BASE_DIR not in sys.path:
 
 import taint_tracker
 import agent_audit_ledger
-import homie_confinement
+import helm_confinement
 import device_registry
 from device_registry import (
     verify_asymmetric_signature,
@@ -54,11 +54,11 @@ from device_registry import (
     CONSUMED_NONCES_PATH
 )
 
-logger = logging.getLogger("homie.phone_portal")
+logger = logging.getLogger("helm.phone_portal")
 
-ADMIN_RECOVERY_DIR = os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "Homie")
+ADMIN_RECOVERY_DIR = os.path.join(os.environ.get("ProgramData", r"C:\ProgramData"), "Helm")
 ADMIN_RECOVERY_TOKEN_PATH = os.path.join(ADMIN_RECOVERY_DIR, "console_recovery.token")
-ENROLLMENT_LOCKOUT_PATH = os.path.join(BASE_DIR, ".homie_enrollment_lockout.json")
+ENROLLMENT_LOCKOUT_PATH = os.path.join(BASE_DIR, ".helm_enrollment_lockout.json")
 
 _ENROLLMENT_LOCK = threading.RLock()
 
@@ -118,7 +118,7 @@ def write_admin_recovery_token(token: str, ttl_seconds: float = 300.0) -> bool:
         return False
 
 def consume_admin_recovery_token(recovery_token: Optional[str]) -> bool:
-    """Consumes single-use admin recovery token from C:\\ProgramData\\Homie\\console_recovery.token.
+    """Consumes single-use admin recovery token from C:\\ProgramData\\Helm\\console_recovery.token.
     Enforces atomic single-use via SQLite table console_recovery_tokens when file unlinking is barred by read-only DACL.
     """
     if not recovery_token or not isinstance(recovery_token, str):
@@ -365,7 +365,7 @@ def _save_consumed_nonces(nonces: Dict[str, int]):
         with open(CONSUMED_NONCES_PATH, "w", encoding="utf-8") as f:
             json.dump(nonces, f, indent=2)
         try:
-            homie_confinement.harden_path(CONSUMED_NONCES_PATH)
+            helm_confinement.harden_path(CONSUMED_NONCES_PATH)
         except Exception:
             pass
     except Exception as e:
@@ -421,7 +421,7 @@ def _save_device_registry(registry: Dict[str, Any]):
         with open(DEVICE_REGISTRY_PATH, "w", encoding="utf-8") as f:
             json.dump(registry, f, indent=2)
         try:
-            homie_confinement.harden_path(DEVICE_REGISTRY_PATH)
+            helm_confinement.harden_path(DEVICE_REGISTRY_PATH)
         except Exception:
             pass
     except Exception as e:
@@ -453,10 +453,10 @@ def display_secure_pairing_code(code: str) -> bool:
     if _DISPLAY_DRIVER is not None:
         return _DISPLAY_DRIVER(code)
     try:
-        import homie_hud
-        hud = homie_hud.HomieHardwareHUD()
+        import helm_hud
+        hud = helm_hud.HelmHardwareHUD()
         hud.create_overlay()
-        hud.set_target_box(100, 100, 400, 150, f"HOMIE PAIRING CODE: {code}")
+        hud.set_target_box(100, 100, 400, 150, f"HELM PAIRING CODE: {code}")
         hud.show()
         hud.destroy()
         return True
@@ -829,9 +829,9 @@ def verify_device_approval(
         decision=f"DEVICE_APPROVED:{step_up_id}"
     )
 
-    # Step 5: Relay verified device approval to homie_supervisor cache & SQLite approved_actions table
+    # Step 5: Relay verified device approval to helm_supervisor cache & SQLite approved_actions table
     try:
-        import homie_supervisor
+        import helm_supervisor
         target_caller = item.get("caller_id") or "worker"
         remaining_ttl = max(1.0, float(item.get("expiry", now + 60) - now))
         signed_approval_blob = {
@@ -848,7 +848,7 @@ def verify_device_approval(
             "signature": signature,
             "counter": counter
         }
-        homie_supervisor.record_approved_action(
+        helm_supervisor.record_approved_action(
             caller_id=target_caller,
             tool=item["tool_name"],
             args_hash=str(item["args_hash"]).lower(),
@@ -958,7 +958,7 @@ def verify_action_approval(
     target_caller = approval.get("caller_id") or "worker"
     remaining_ttl = max(1.0, float(expiry - now))
     try:
-        import homie_supervisor
+        import helm_supervisor
         signed_approval_blob = {
             "version": approval.get("version", "ACTION_APPROVAL_V1"),
             "device_id": approval.get("device_id", "primary_phone"),
@@ -971,7 +971,7 @@ def verify_action_approval(
             "signature": approval.get("signature"),
             "caller_id": target_caller
         }
-        homie_supervisor.record_approved_action(
+        helm_supervisor.record_approved_action(
             caller_id=target_caller,
             tool=expected_action,
             args_hash=str(expected_payload_hash).lower(),

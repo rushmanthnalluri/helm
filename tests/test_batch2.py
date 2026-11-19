@@ -116,9 +116,9 @@ ValueError: Invalid configuration"""
         self.assertGreaterEqual(idle, 0.0)
 
     def test_voice_tts_synthesis(self):
-        tmp_wav = os.path.join(tempfile.gettempdir(), f"homie_test_tts_{os.getpid()}.wav")
+        tmp_wav = os.path.join(tempfile.gettempdir(), f"helm_test_tts_{os.getpid()}.wav")
         try:
-            out_path = voice.synthesize_speech_to_wav("Testing Homie offline speech synthesis.", tmp_wav)
+            out_path = voice.synthesize_speech_to_wav("Testing Helm offline speech synthesis.", tmp_wav)
             self.assertEqual(out_path, tmp_wav)
             self.assertTrue(os.path.exists(tmp_wav))
             size = os.path.getsize(tmp_wav)

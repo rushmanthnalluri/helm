@@ -57,8 +57,8 @@ if BASE_DIR not in sys.path:
 MUTATIONS = [
     {
         "id": "MUTATION_1_CONFINEMENT_FILE_DACL",
-        "name": "Drop File Owner-Only DACL in homie_confinement.py",
-        "file": os.path.join(BASE_DIR, "homie_confinement.py"),
+        "name": "Drop File Owner-Only DACL in helm_confinement.py",
+        "file": os.path.join(BASE_DIR, "helm_confinement.py"),
         "target": "dacl = _owner_only_dacl(nsc.FILE_ALL_ACCESS)",
         "replacement": (
             "dacl = win32security.ACL()\n"
@@ -69,24 +69,24 @@ MUTATIONS = [
     },
     {
         "id": "MUTATION_2_CONFINEMENT_JOB_LIMIT",
-        "name": "Drop ActiveProcessLimit from Job Object in homie_confinement.py",
-        "file": os.path.join(BASE_DIR, "homie_confinement.py"),
+        "name": "Drop ActiveProcessLimit from Job Object in helm_confinement.py",
+        "file": os.path.join(BASE_DIR, "helm_confinement.py"),
         "target": 'basic["ActiveProcessLimit"] = 1',
         "replacement": 'basic["ActiveProcessLimit"] = 0; basic["LimitFlags"] &= ~win32job.JOB_OBJECT_LIMIT_ACTIVE_PROCESS',
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_confinement_attacks.py::TestBatch20VerifiedConfinement::test_confined_worker_attacks_with_specific_error_codes"]
     },
     {
         "id": "MUTATION_3_APPCONTAINER_NETWORK_ISOLATION",
-        "name": "Remove AppContainer Isolation in homie_confinement.py",
-        "file": os.path.join(BASE_DIR, "homie_confinement.py"),
+        "name": "Remove AppContainer Isolation in helm_confinement.py",
+        "file": os.path.join(BASE_DIR, "helm_confinement.py"),
         "target": "flags = EXTENDED_STARTUPINFO_PRESENT | win32con.CREATE_SUSPENDED | win32con.CREATE_NO_WINDOW",
         "replacement": "flags = win32con.CREATE_SUSPENDED | win32con.CREATE_NO_WINDOW; siex.lpAttributeList = None",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_confinement_attacks.py::TestBatch20VerifiedConfinement::test_confined_worker_attacks_with_specific_error_codes"]
     },
     {
         "id": "MUTATION_4_SUPERVISOR_COMPLETE_MEDIATION",
-        "name": "Bypass Intent Token Verification in homie_supervisor.py",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "name": "Bypass Intent Token Verification in helm_supervisor.py",
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": "        if tier != \"READ_ONLY\":\n            if not self.supervisor.verify_and_consume_intent_token(\n                intent_token, tool, args, caller_id, req_seq\n            ):\n                raise CompleteMediationBreachError(",
         "replacement": "        if False and tier != \"READ_ONLY\": # MUTATION BYPASS: Complete mediation disabled\n            if not self.supervisor.verify_and_consume_intent_token(\n                intent_token, tool, args, caller_id, req_seq\n            ):\n                raise CompleteMediationBreachError(",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch20_complete_mediation.py::TestBatch20CompleteMediationAndRedTeam::test_supervisor_actuator_requires_cryptographic_intent_token"]
@@ -101,8 +101,8 @@ MUTATIONS = [
     },
     {
         "id": "MUTATION_6_WATCHDOG_SYNTHETIC_INJECTION",
-        "name": "Drop Synthetic Keystroke Filter in homie_watchdog.py",
-        "file": os.path.join(BASE_DIR, "homie_watchdog.py"),
+        "name": "Drop Synthetic Keystroke Filter in helm_watchdog.py",
+        "file": os.path.join(BASE_DIR, "helm_watchdog.py"),
         "target": "is_injected = bool(kb.flags & (LLKHF_INJECTED | LLKHF_LOWER_IL_INJECTED))",
         "replacement": "is_injected = False # MUTATION BYPASS: synthetic input allowed",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch19_watchdog.py::TestBatch19WatchdogHardwareHook::test_synthetic_keystroke_hook_kills_worker"]
@@ -158,7 +158,7 @@ MUTATIONS = [
     {
         "id": "MUTATION_13_INTENT_TOKEN_SEQ_BINDING_BYPASS",
         "name": "Bypass Sequence Binding in verify_and_consume_intent_token",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": "if token_seq != seq:  # Strictly bind sequence number!",
         "replacement": "if False: # MUTATION BYPASS: seq check disabled",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch20_complete_mediation.py::TestBatch20CompleteMediationAndRedTeam::test_intent_token_sequence_binding_enforcement"]
@@ -166,7 +166,7 @@ MUTATIONS = [
     {
         "id": "MUTATION_14_INTENT_TOKEN_ARGS_HASH_BYPASS",
         "name": "Bypass Arguments Hash Verification in verify_and_consume_intent_token",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": "if not hmac.compare_digest(tok_args_hash, expected_args_hash):",
         "replacement": "if False: # MUTATION BYPASS: args hash check disabled",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch20_complete_mediation.py::TestBatch20CompleteMediationAndRedTeam::test_intent_token_args_hash_binding_enforcement"]
@@ -174,7 +174,7 @@ MUTATIONS = [
     {
         "id": "MUTATION_15_SUPERVISOR_TIER_ALLOWLIST_BYPASS",
         "name": "Drop Tier Allowlist Check in SupervisorActuator.execute_actuator",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": 'if tier != "READ_ONLY":',
         "replacement": "if False: # MUTATION BYPASS: tier allowlist bypassed",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch20_complete_mediation.py::TestBatch20CompleteMediationAndRedTeam::test_supervisor_actuator_requires_cryptographic_intent_token"]
@@ -230,7 +230,7 @@ MUTATIONS = [
     {
         "id": "MUTATION_22_SUPERVISOR_UNKNOWN_TOOL_ACTUATOR_BYPASS",
         "name": "Bypass Tool Registry Allowlist in SupervisorActuator.execute_actuator",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": "if tool not in allowed_tools:",
         "replacement": "if False: # MUTATION BYPASS: unknown tool check disabled",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch20_complete_mediation.py::TestBatch20CompleteMediationAndRedTeam::test_supervisor_actuator_rejects_unknown_tool"]
@@ -254,7 +254,7 @@ MUTATIONS = [
     {
         "id": "MUTATION_25_ACTUATOR_SEQ_REQUIRED_BYPASS",
         "name": "Bypass Mandatory Sequence Check in SupervisorActuator.execute_actuator",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": 'if seq is None or not isinstance(seq, int) or seq <= 0:\n            raise ValueError("Sequence number seq is strictly required and must be a positive integer!")',
         "replacement": 'if False: # MUTATION BYPASS: seq check disabled\n            pass',
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch29_security_hardening.py::TestBatch29SecurityHardening::test_8_mandatory_sequence_number_rejection_of_fallback"]
@@ -263,14 +263,14 @@ MUTATIONS = [
         "id": "MUTATION_26_PENDING_CHALLENGES_AUTH_BYPASS",
         "name": "Bypass Authentication Gate in _handle_get_pending_challenges",
         "file": os.path.join(BASE_DIR, "phone_gateway.py"),
-        "target": '    def _handle_get_pending_challenges(self, parsed):\n        import phone_approval_portal\n        # Authenticate caller device\n        headers = getattr(self, "headers", None) or {}\n        token = headers.get("X-Homie-Token", "") or headers.get("Authorization", "").replace("Bearer ", "")\n        if not is_device_token_valid(token):',
-        "replacement": '    def _handle_get_pending_challenges(self, parsed):\n        import phone_approval_portal\n        # Authenticate caller device\n        headers = getattr(self, "headers", None) or {}\n        token = headers.get("X-Homie-Token", "") or headers.get("Authorization", "").replace("Bearer ", "")\n        if False: # MUTATION BYPASS: auth check disabled',
+        "target": '    def _handle_get_pending_challenges(self, parsed):\n        import phone_approval_portal\n        # Authenticate caller device\n        headers = getattr(self, "headers", None) or {}\n        token = headers.get("X-Helm-Token", "") or headers.get("Authorization", "").replace("Bearer ", "")\n        if not is_device_token_valid(token):',
+        "replacement": '    def _handle_get_pending_challenges(self, parsed):\n        import phone_approval_portal\n        # Authenticate caller device\n        headers = getattr(self, "headers", None) or {}\n        token = headers.get("X-Helm-Token", "") or headers.get("Authorization", "").replace("Bearer ", "")\n        if False: # MUTATION BYPASS: auth check disabled',
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch29_security_hardening.py::TestBatch29SecurityHardening::test_3_unauthenticated_listing_and_challenge_cancellation_denied"]
     },
     {
         "id": "MUTATION_27_SUPERVISOR_FAIL_OPEN_BYPASS",
         "name": "Bypass Fail-Closed Gate on Non-StepUp Deny in _handle_propose",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": "            if not allowed:\n                if requires_step_up:",
         "replacement": "            if False: # MUTATION BYPASS: taint fail-closed gate disabled\n                if requires_step_up:",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch30_security_hardening.py::TestBatch30SecurityHardening::test_1_supervisor_fail_open_prevented_on_non_stepup_deny"]
@@ -278,7 +278,7 @@ MUTATIONS = [
     {
         "id": "MUTATION_28_SUPERVISOR_NON_DICT_ARGS_BYPASS",
         "name": "Bypass Strict Dict Argument Validation in _handle_propose",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": "        if not isinstance(args, dict):\n            return self._encode_reply(MSG_ERROR, {",
         "replacement": "        if False: # MUTATION BYPASS: non-dict args check disabled\n            return self._encode_reply(MSG_ERROR, {",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch30_security_hardening.py::TestBatch30SecurityHardening::test_2_supervisor_rejects_non_dict_arguments"]
@@ -286,7 +286,7 @@ MUTATIONS = [
     {
         "id": "MUTATION_29_SUPERVISOR_ENVELOPE_BYPASS",
         "name": "Bypass Policy Envelope Check in PolicySupervisor._handle_propose",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": "        ks_to_commit = 0\n        res_token = None\n        if getattr(self, \"envelope\", None) and getattr(self.envelope, \"is_active\", False):",
         "replacement": "        ks_to_commit = 0\n        res_token = None\n        if False: # MUTATION BYPASS: envelope check disabled",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch30_security_hardening.py::TestBatch30SecurityHardening::test_3_supervisor_envelope_enforcement_in_handle_propose"]
@@ -342,7 +342,7 @@ MUTATIONS = [
     {
         "id": "MUTATION_36_OUTCOME_UNKNOWN_EXCEPTION_BYPASS",
         "name": "Bypass UNKNOWN Outcome Classification on Exception in _handle_propose",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": "                if execution_success:\n                    outcome_status = \"SUCCESS\"\n                elif exception_occurred:\n                    outcome_status = \"UNKNOWN\"",
         "replacement": "                if execution_success:\n                    outcome_status = \"SUCCESS\"\n                elif exception_occurred:\n                    outcome_status = \"FAILED\" # MUTATION BYPASS: misclassify exception as FAILED",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch31_security_hardening.py::TestBatch31SecurityHardening::test_10_audit_ledger_outcome_unknown_on_exception_and_locks_on_write_failure"]
@@ -350,7 +350,7 @@ MUTATIONS = [
     {
         "id": "MUTATION_37_SUPERVISOR_DIRECT_APPROVAL_BYPASS",
         "name": "Bypass Supervisor Direct Approved Action Lookup in _handle_propose",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": "                    current_epoch = taint_tracker.get_taint_epoch()\n                    if self.consume_approved_action(caller_id, tool, args_hash, current_epoch):",
         "replacement": "                    current_epoch = taint_tracker.get_taint_epoch()\n                    if False: # MUTATION BYPASS: disable direct internal approval lookup",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch31_security_hardening.py::TestBatch31SecurityHardening::test_11_supervisor_direct_internal_approval_lookup"]
@@ -374,7 +374,7 @@ MUTATIONS = [
     {
         "id": "MUTATION_40_CLIENT_TOKEN_ENFORCEMENT_FAIL_CLOSED_BYPASS",
         "name": "Bypass Client Token Fail-Closed Requirement in _handle_propose",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": "        if client_token_auth.is_token_enforcement_active() or client_token:\n            if not client_token:\n                return self._encode_reply(MSG_DECISION, {\n                    \"req_id\": req_id,\n                    \"status\": \"DENY\",\n                    \"reason_code\": REASON_UNAUTHORIZED_TOKEN,\n                    \"reason\": \"Missing client authentication token: Token enforcement is active\"\n                })",
         "replacement": "        if False: # MUTATION BYPASS: allow missing client token when enforcement active\n            pass",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch32_security_hardening.py::TestBatch32SecurityHardening::test_8_supervisor_client_token_enforcement_fails_closed"]
@@ -390,7 +390,7 @@ MUTATIONS = [
     {
         "id": "MUTATION_42_SUPERVISOR_INTENT_LEDGER_FAILURE_LOCK_BYPASS",
         "name": "Bypass Supervisor Lock on INTENT Audit Ledger Error in _handle_propose",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": "            except Exception as intent_err:\n                logger.critical(\"Audit ledger write failure during INTENT recording: %s\", intent_err)\n                self._transition_to_locked(f\"Audit ledger failure on INTENT: {intent_err}\")",
         "replacement": "            except Exception as intent_err:\n                pass # MUTATION BYPASS: ignore audit ledger failure and do not transition to locked",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch32_security_hardening.py::TestBatch32SecurityHardening::test_9_supervisor_locks_if_intent_ledger_fails"]
@@ -398,7 +398,7 @@ MUTATIONS = [
     {
         "id": "MUTATION_43_APPROVAL_CACHE_CALLER_BINDING_BYPASS",
         "name": "Bypass Caller ID Binding in consume_approved_action",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": "        with self._approved_lock:\n            key = (caller_id, tool, args_hash.lower(), int(taint_epoch))\n            exp = self._approved_actions.pop(key, None)",
         "replacement": "        with self._approved_lock:\n            key = next((k for k in self._approved_actions if k[1] == tool and k[2] == args_hash.lower() and k[3] == int(taint_epoch)), None)\n            exp = self._approved_actions.pop(key, None) if key else None # MUTATION BYPASS: ignore caller_id",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch32_security_hardening.py::TestBatch32SecurityHardening::test_10_approval_cache_binds_caller_id_with_ttl"]
@@ -430,7 +430,7 @@ MUTATIONS = [
     {
         "id": "MUTATION_47_ENVELOPE_STEP_RESERVATION_RELEASE_BYPASS",
         "name": "Bypass Single-Point Step Reservation Release on Proposal Denial in _handle_propose",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": "        finally:\n            # Single-point guaranteed reservation release for all early returns, denials, and exceptions.\n            # Release reservation ONLY if the actuator was NEVER invoked!\n            if res_token and not step_committed and not actuator_invoked:",
         "replacement": "        finally:\n            # Single-point guaranteed reservation release for all early returns, denials, and exceptions.\n            # Release reservation ONLY if the actuator was NEVER invoked!\n            if False and res_token and not step_committed and not actuator_invoked:",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch36_security_hardening.py::TestBatch36SecurityHardening::test_1_envelope_early_exit_paths_guarantee_zero_reserved_steps_and_no_unbound_local"]
@@ -462,7 +462,7 @@ MUTATIONS = [
     {
         "id": "MUTATION_51_UNKNOWN_OUTCOME_STEP_CONSUMPTION_BYPASS",
         "name": "Bypass Step Budget Consumption on Actuator Invocation / UNKNOWN Outcomes in _handle_propose",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": "            if actuator_invoked:\n                if getattr(self, \"envelope\", None) and getattr(self.envelope, \"is_active\", False):\n                    self.envelope.commit_step(ks_to_commit, res_token)\n                    step_committed = True",
         "replacement": "            if False and actuator_invoked:\n                if getattr(self, \"envelope\", None) and getattr(self.envelope, \"is_active\", False):\n                    self.envelope.commit_step(ks_to_commit, res_token)\n                    step_committed = True",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch35_security_hardening.py::TestBatch35SecurityHardening::test_3_unknown_outcome_consumes_step_budget"]
@@ -471,7 +471,7 @@ MUTATIONS = [
         "id": "MUTATION_52_PRODUCTION_APPROVAL_RELAY_BYPASS",
         "name": "Bypass Phone Approval Relay to Supervisor Cache in verify_action_approval",
         "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
-        "target": "        homie_supervisor.record_approved_action(\n            caller_id=target_caller,\n            tool=expected_action,\n            args_hash=str(expected_payload_hash).lower(),\n            taint_epoch=approval_epoch,\n            ttl=min(remaining_ttl, 120.0),\n            signed_blob=signed_approval_blob\n        )",
+        "target": "        helm_supervisor.record_approved_action(\n            caller_id=target_caller,\n            tool=expected_action,\n            args_hash=str(expected_payload_hash).lower(),\n            taint_epoch=approval_epoch,\n            ttl=min(remaining_ttl, 120.0),\n            signed_blob=signed_approval_blob\n        )",
         "replacement": "        pass # MUTATION BYPASS: drop approval relay to supervisor",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch35_security_hardening.py::TestBatch35SecurityHardening::test_4_production_approval_relay_to_supervisor_cache_and_db"]
     },
@@ -485,9 +485,9 @@ MUTATIONS = [
     },
     {
         "id": "MUTATION_54_CONSOLE_RECOVERY_TOKEN_TTY_CHECK_BYPASS",
-        "name": "Bypass Console Presence Verification in homie.py --pairing-unlock",
-        "file": os.path.join(BASE_DIR, "homie.py"),
-        "target": "        if not sys.stdin.isatty():\n            print(\"✗ [HOMIE SECURITY] Interactive console presence required to unlock pairing.\")\n            return",
+        "name": "Bypass Console Presence Verification in helm.py --pairing-unlock",
+        "file": os.path.join(BASE_DIR, "helm.py"),
+        "target": "        if not sys.stdin.isatty():\n            print(\"✗ [HELM SECURITY] Interactive console presence required to unlock pairing.\")\n            return",
         "replacement": "        if False and not sys.stdin.isatty():\n            pass",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch36_security_hardening.py::TestBatch36SecurityHardening::test_3_recovery_cli_non_interactive_fails_closed_and_sqlite_cross_process"]
     },
@@ -495,14 +495,14 @@ MUTATIONS = [
         "id": "MUTATION_55_TELEGRAM_MEDIATION_BROKER_BYPASS",
         "name": "Bypass ActionBroker Complete Mediation in Telegram Bridge Callback",
         "file": os.path.join(BASE_DIR, "telegram_bridge.py"),
-        "target": "            ok, msg, _ = action_broker.execute_action('homie_control_media', {'action': 'play_pause'}, caller_id='telegram_remote')",
+        "target": "            ok, msg, _ = action_broker.execute_action('helm_control_media', {'action': 'play_pause'}, caller_id='telegram_remote')",
         "replacement": "            ok, msg = windows_tools.control_media('play_pause') # MUTATION BYPASS: bypass action_broker",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_entry_point_enumeration.py::TestEntryPointEnumeration::test_1_telegram_callback_entry_points_dispatch_via_broker"]
     },
     {
         "id": "MUTATION_56_ACTUATOR_INVOKED_PRE_TRY_INIT_BYPASS",
         "name": "Bypass Pre-Try actuator_invoked Initialization in PolicySupervisor._handle_propose",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": "        step_committed = False\n        actuator_invoked = False\n        try:",
         "replacement": "        step_committed = False\n        # MUTATION BYPASS: drop actuator_invoked pre-init causing UnboundLocalError\n        try:",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch36_security_hardening.py::TestBatch36SecurityHardening::test_1_envelope_early_exit_paths_guarantee_zero_reserved_steps_and_no_unbound_local"]
@@ -511,7 +511,7 @@ MUTATIONS = [
         "id": "MUTATION_57_DEVICE_APPROVAL_SUPERVISOR_RELAY_BYPASS",
         "name": "Bypass Phone Device Approval Relay to Supervisor Cache in verify_device_approval",
         "file": os.path.join(BASE_DIR, "phone_approval_portal.py"),
-        "target": "        homie_supervisor.record_approved_action(\n            caller_id=target_caller,\n            tool=item[\"tool_name\"],\n            args_hash=str(item[\"args_hash\"]).lower(),\n            taint_epoch=item.get(\"taint_epoch\", 0),\n            ttl=min(remaining_ttl, 120.0),\n            signed_blob=signed_approval_blob\n        )",
+        "target": "        helm_supervisor.record_approved_action(\n            caller_id=target_caller,\n            tool=item[\"tool_name\"],\n            args_hash=str(item[\"args_hash\"]).lower(),\n            taint_epoch=item.get(\"taint_epoch\", 0),\n            ttl=min(remaining_ttl, 120.0),\n            signed_blob=signed_approval_blob\n        )",
         "replacement": "        pass # MUTATION BYPASS: drop device approval relay to supervisor",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch36_security_hardening.py::TestBatch36SecurityHardening::test_2_verify_device_approval_relays_to_supervisor_cache_and_db"]
     },
@@ -534,7 +534,7 @@ MUTATIONS = [
     {
         "id": "MUTATION_60_SUPERVISOR_FIRST_FOREGROUND_RESOLUTION_BYPASS",
         "name": "Bypass Supervisor-First Foreground Process Resolution in PolicySupervisor._handle_propose",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": "        current_proc = supervisor_proc  # Fail-closed: Supervisor inspects OS foreground; NEVER accepts worker self-attested proc",
         "replacement": "        current_proc = args.get(\"target_process\") or supervisor_proc # MUTATION BYPASS: trust worker proc",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch36_security_hardening.py::TestBatch36SecurityHardening::test_5_supervisor_first_foreground_and_uia_domain_scoping"]
@@ -542,7 +542,7 @@ MUTATIONS = [
     {
         "id": "MUTATION_61_SIGNED_APPROVAL_EVIDENCE_BYPASS",
         "name": "Bypass Signed Approval Blob Cryptographic Verification in consume_approved_action",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": "                    if verify_signed_approval_evidence(sig_blob, caller_id, tool, args_hash, taint_epoch):",
         "replacement": "                    if True: # MUTATION BYPASS: accept unsigned or forged evidence",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch37_security_hardening.py::TestBatch37SecurityHardening::test_1_signed_approval_evidence_verification_and_unverified_sqlite_row_rejection"]
@@ -558,7 +558,7 @@ MUTATIONS = [
     {
         "id": "MUTATION_63_TOCTOU_ACTUATOR_FOREGROUND_PROCESS_BYPASS",
         "name": "Bypass TOCTOU Foreground Process Re-Resolution in SupervisorActuator.execute_actuator",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": "        if tool in UI_INTERACTIVE_TOOLS:",
         "replacement": "        if False and tool in UI_INTERACTIVE_TOOLS: # MUTATION BYPASS: ignore TOCTOU",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch37_security_hardening.py::TestBatch37SecurityHardening::test_4_actuator_toctou_defense_blocks_foreground_window_switching"]
@@ -573,16 +573,16 @@ MUTATIONS = [
     },
     {
         "id": "MUTATION_65_RECOVERY_CLI_UAC_ELEVATION_CHECK_BYPASS",
-        "name": "Bypass Windows UAC Administrative Elevation Check in homie.py --pairing-unlock",
-        "file": os.path.join(BASE_DIR, "homie.py"),
-        "target": "        if not is_admin:\n            print(\"✗ [HOMIE SECURITY] Administrative elevation required.\")",
-        "replacement": "        if False and not is_admin: # MUTATION BYPASS: allow standard non-elevated user\n            print(\"✗ [HOMIE SECURITY] Administrative elevation required.\")",
+        "name": "Bypass Windows UAC Administrative Elevation Check in helm.py --pairing-unlock",
+        "file": os.path.join(BASE_DIR, "helm.py"),
+        "target": "        if not is_admin:\n            print(\"✗ [HELM SECURITY] Administrative elevation required.\")",
+        "replacement": "        if False and not is_admin: # MUTATION BYPASS: allow standard non-elevated user\n            print(\"✗ [HELM SECURITY] Administrative elevation required.\")",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch37_security_hardening.py::TestBatch37SecurityHardening::test_2_recovery_cli_requires_uac_secure_desktop_elevation"]
     },
     {
         "id": "MUTATION_66_ANTI_BURN_DOS_SQLITE_LOOP_BYPASS",
         "name": "Revert SQLite Approval Consumption to Single-Row (Anti-Burn DoS Bypass)",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": "                for row in rows:\n                    sig_blob = row[\"signature_blob\"] if \"signature_blob\" in row.keys() else row[1]",
         "replacement": "                for row in rows:\n                    break # MUTATION BYPASS: burn immediately without iterating candidate rows\n                    sig_blob = row[\"signature_blob\"] if \"signature_blob\" in row.keys() else row[1]",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch38_security_hardening.py::TestBatch38SecurityHardening::test_3_anti_burn_dos_junk_row_defense"]
@@ -590,7 +590,7 @@ MUTATIONS = [
     {
         "id": "MUTATION_67_CHALLENGE_V3_RECOMPUTED_HASH_BYPASS",
         "name": "Blindly Trust Blob challenge_hash Without Recomputing from Fields",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": "        if blob.get(\"challenge_hash\") and blob.get(\"challenge_hash\") != expected_hash:\n            return False\n        data_to_verify = expected_hash.encode('utf-8')",
         "replacement": "        # MUTATION BYPASS: blindly trust blob challenge_hash\n        data_to_verify = (blob.get(\"challenge_hash\") or expected_hash).encode('utf-8')",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch38_security_hardening.py::TestBatch38SecurityHardening::test_2_tampered_challenge_fields_rejected_even_if_hash_signed"]
@@ -606,7 +606,7 @@ MUTATIONS = [
     {
         "id": "MUTATION_69_PERSISTENT_NONCE_CONSUMPTION_BYPASS",
         "name": "Bypass Persistent Nonce Check in Supervisor consume_approved_action",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": "                        if nonce and not device_registry.check_and_record_consumed_nonce(nonce, nonce_exp):\n                            logger.warning(\"SQLite approved action row %s rejected: nonce already consumed (replay)!\", row[\"id\"])",
         "replacement": "                        if False and not device_registry.check_and_record_consumed_nonce(nonce, nonce_exp): # MUTATION BYPASS: allow replay\n                            logger.warning(\"SQLite approved action row %s rejected: nonce already consumed (replay)!\", row[\"id\"])",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch38_security_hardening.py::TestBatch38SecurityHardening::test_4_sqlite_row_replay_rejected_by_persistent_nonce_store"]
@@ -621,10 +621,10 @@ MUTATIONS = [
     },
     {
         "id": "MUTATION_71_POINT_UNDER_CURSOR_BYPASS",
-        "name": "Bypass WindowFromPoint Point-Under-Cursor Self-Targeting Defense in homie_supervisor.py",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "name": "Bypass WindowFromPoint Point-Under-Cursor Self-Targeting Defense in helm_supervisor.py",
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": "            if target_x is not None and target_y is not None:",
-        "replacement": "            if False and target_x is not None and target_y is not None: # MUTATION BYPASS: allow point-under-cursor click on Homie UI\n                pass",
+        "replacement": "            if False and target_x is not None and target_y is not None: # MUTATION BYPASS: allow point-under-cursor click on Helm UI\n                pass",
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch39_security_hardening.py::TestBatch39SecurityHardening::test_1_point_under_cursor_windowfrompoint_self_targeting_defense"]
     },
     {
@@ -685,11 +685,11 @@ MUTATIONS = [
     },
     {
         "id": "MUTATION_79_BASE_DIR_PROCESS_IMAGE_BYPASS",
-        "name": "Bypass WindowFromPoint Application Image (BASE_DIR) Detection in homie_supervisor.py",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "name": "Bypass WindowFromPoint Application Image (BASE_DIR) Detection in helm_supervisor.py",
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": "                            if os.path.commonpath([cand, base]) == base:\n                                raise CompleteMediationBreachError(",
         "replacement": "                            if False and os.path.commonpath([cand, base]) == base: # MUTATION BYPASS\n                                raise CompleteMediationBreachError(",
-        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch41_security_hardening.py::TestBatch41SecurityHardening::test_6_windowfrompoint_detects_homie_by_process_path"]
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch41_security_hardening.py::TestBatch41SecurityHardening::test_6_windowfrompoint_detects_helm_by_process_path"]
     },
     {
         "id": "MUTATION_80_RECOVERY_TOKEN_DELETE_DACL_DOS_BYPASS",
@@ -701,10 +701,10 @@ MUTATIONS = [
     },
     {
         "id": "MUTATION_81_SAFETY_FLOOR_FACT_TOOLS_BYPASS",
-        "name": "Remove homie_remember_fact from COMPILED_IN_CONSEQUENTIAL_TOOLS in rails_config.py",
+        "name": "Remove helm_remember_fact from COMPILED_IN_CONSEQUENTIAL_TOOLS in rails_config.py",
         "file": os.path.join(BASE_DIR, "rails_config.py"),
-        "target": '    "homie_remember_fact",',
-        "replacement": '    # "homie_remember_fact", # MUTATION BYPASS: drop consequential protection',
+        "target": '    "helm_remember_fact",',
+        "replacement": '    # "helm_remember_fact", # MUTATION BYPASS: drop consequential protection',
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch43_security_hardening.py::TestBatch43SecurityHardening::test_1_compiled_in_consequential_tools_floor_covers_all_non_readonly"]
     },
     {
@@ -727,7 +727,7 @@ MUTATIONS = [
         "id": "MUTATION_84_OUTBOUND_SSRF_PROTECTION_BYPASS",
         "name": "Bypass Outbound SSRF Protection Gate in action_broker.py",
         "file": os.path.join(BASE_DIR, "action_broker.py"),
-        "target": '                ssrf_err = homie_ssrf.check_ssrf(cand_url)',
+        "target": '                ssrf_err = helm_ssrf.check_ssrf(cand_url)',
         "replacement": '                ssrf_err = None # MUTATION BYPASS: allow SSRF to internal/cloud metadata',
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_openjarvis_integration.py::TestOpenJarvisIntegration::test_4_action_broker_blocks_action_with_ssrf_url"]
     },
@@ -735,22 +735,22 @@ MUTATIONS = [
         "id": "MUTATION_85_CREDENTIAL_STRIPPER_REDACTION_BYPASS",
         "name": "Bypass Secret and Credential Redaction in agent_tools.py",
         "file": os.path.join(BASE_DIR, "agent_tools.py"),
-        "target": '        result = homie_credential_stripper.redact_secrets(result)',
+        "target": '        result = helm_credential_stripper.redact_secrets(result)',
         "replacement": '        pass # MUTATION BYPASS: allow credentials to leak into logs and model context',
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_openjarvis_integration.py::TestOpenJarvisIntegration::test_6_tool_registry_redacts_secrets_from_results"]
     },
     {
         "id": "MUTATION_86_CONFIRM_CLIENT_PID_ROLE_BYPASS",
         "name": "Bypass Kernel-Attested Client PID Role Check in _handle_confirm",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": '            if not self.is_ui_pid_valid(client_pid):',
         "replacement": '            if False: # MUTATION BYPASS: allow unregistered PID to confirm',
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch43_security_hardening.py::TestBatch43SecurityHardening::test_6_supervisor_named_pipe_confirm_and_taint_query"]
     },
     {
         "id": "MUTATION_87_CONFIRM_ZERO_TRUST_NO_DEVICE_BYPASS",
-        "name": "Bypass Zero-Trust No-Device Denial in homie_supervisor._handle_confirm",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "name": "Bypass Zero-Trust No-Device Denial in helm_supervisor._handle_confirm",
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": """            return self._encode_reply(MSG_DECISION, {
                 "status": "DENY",
                 "reason_code": REASON_UNAUTHORIZED_TOKEN,
@@ -762,7 +762,7 @@ MUTATIONS = [
     {
         "id": "MUTATION_88_NONCE_ANTI_REPLAY_BYPASS",
         "name": "Bypass Anti-Replay Nonce Check in verify_signed_approval_evidence",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": '        if not device_registry.check_and_record_consumed_nonce(str(nonce), expiry):',
         "replacement": '        if False: # MUTATION BYPASS: allow replayed nonces to mint unlimited tokens',
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch43_security_hardening.py::TestBatch43SecurityHardening::test_6_supervisor_named_pipe_confirm_and_taint_query"]
@@ -777,16 +777,16 @@ MUTATIONS = [
     },
     {
         "id": "MUTATION_90_SSRF_RESOLVE_AND_PIN_ALL_RECORDS_BYPASS",
-        "name": "Bypass All-Records A/AAAA Validation in homie_ssrf.resolve_and_pin_ip",
-        "file": os.path.join(BASE_DIR, "homie_ssrf.py"),
+        "name": "Bypass All-Records A/AAAA Validation in helm_ssrf.resolve_and_pin_ip",
+        "file": os.path.join(BASE_DIR, "helm_ssrf.py"),
         "target": '        if is_private_ip(ip):\n            return False, f"SSRF violation: resolved to private or reserved IP {ip}", None',
         "replacement": '        if False and is_private_ip(ip): # MUTATION BYPASS: ignore private IP in multi-homed DNS\n            pass',
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_openjarvis_integration.py::TestOpenJarvisIntegration::test_12_ssrf_resolve_and_pin_validates_all_records"]
     },
     {
         "id": "MUTATION_91_SESSION_COMPRESSION_TAINT_INHERITANCE_BYPASS",
-        "name": "Bypass Origin Metadata Taint Inheritance in homie_session_compression.py",
-        "file": os.path.join(BASE_DIR, "homie_session_compression.py"),
+        "name": "Bypass Origin Metadata Taint Inheritance in helm_session_compression.py",
+        "file": os.path.join(BASE_DIR, "helm_session_compression.py"),
         "target": '            if src in UNTRUSTED_MESSAGE_ORIGINS or m.get("role") in ("tool", "system_external"):',
         "replacement": '            if False: # MUTATION BYPASS: ignore untrusted message origin metadata',
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_openjarvis_integration.py::TestOpenJarvisIntegration::test_9_context_compression_taint_inheritance_and_nonce_wrapping"]
@@ -794,7 +794,7 @@ MUTATIONS = [
     {
         "id": "MUTATION_92_MSG_CREATE_CONFIRM_REQUEST_ROLE_BYPASS",
         "name": "Bypass Attested UI PID Check in _handle_create_confirm_request",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": '        if client_pid is not None and not self.is_ui_pid_valid(client_pid):',
         "replacement": '        if False: # MUTATION BYPASS: allow un-attested process to create authoritative requests',
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch43_security_hardening.py::TestBatch43SecurityHardening::test_9_two_process_confirmation_request_creation_and_gesture_verification"]
@@ -802,7 +802,7 @@ MUTATIONS = [
     {
         "id": "MUTATION_93_REGISTER_UI_INDEPENDENT_IDENTITY_BYPASS",
         "name": "Bypass Kernel Child and Session Token Attestation in _handle_register_ui",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": '            if not (is_authorized_child or has_valid_token):',
         "replacement": '            if False: # MUTATION BYPASS: allow arbitrary scripts without token or child status',
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch43_security_hardening.py::TestBatch43SecurityHardening::test_11_unauthorized_process_cannot_register_as_ui"]
@@ -817,48 +817,48 @@ MUTATIONS = [
     },
     {
         "id": "MUTATION_95_MCP_TOOL_HTTP_FETCH_SSRF_BYPASS",
-        "name": "Bypass SSRF Validation in homie_http_fetch Tool",
-        "file": os.path.join(BASE_DIR, "homie_mcp.py"),
-        "target": '            ok_f, code_f, body_f = homie_ssrf.pinned_fetch(u, method=m, headers=hdrs, timeout_sec=tmo)',
+        "name": "Bypass SSRF Validation in helm_http_fetch Tool",
+        "file": os.path.join(BASE_DIR, "helm_mcp.py"),
+        "target": '            ok_f, code_f, body_f = helm_ssrf.pinned_fetch(u, method=m, headers=hdrs, timeout_sec=tmo)',
         "replacement": '            ok_f, code_f, body_f = True, 200, "MUTATION_LEAK" # MUTATION BYPASS: ignore SSRF check',
-        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch43_security_hardening.py::TestBatch43SecurityHardening::test_12_homie_http_fetch_pinned_egress_and_taint"]
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch43_security_hardening.py::TestBatch43SecurityHardening::test_12_helm_http_fetch_pinned_egress_and_taint"]
     },
     {
         "id": "MUTATION_96_MEETING_NOTES_PROVENANCE_TAINT_BYPASS",
-        "name": "Omit returns_untrusted from homie_get_meeting_notes in MCP_TOOLS",
-        "file": os.path.join(BASE_DIR, "homie_mcp.py"),
-        "target": '        "name": "homie_get_meeting_notes",\n        "description": "Retrieves recent meeting audio transcripts and summaries recorded via WASAPI loopback.",\n        "capabilityTier": "READ_ONLY",\n        "returns_untrusted": True,',
-        "replacement": '        "name": "homie_get_meeting_notes",\n        "description": "Retrieves recent meeting audio transcripts and summaries recorded via WASAPI loopback.",\n        "capabilityTier": "READ_ONLY", # MUTATION BYPASS: omit returns_untrusted',
-        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch43_security_hardening.py::TestBatch43SecurityHardening::test_12_homie_http_fetch_pinned_egress_and_taint"]
+        "name": "Omit returns_untrusted from helm_get_meeting_notes in MCP_TOOLS",
+        "file": os.path.join(BASE_DIR, "helm_mcp.py"),
+        "target": '        "name": "helm_get_meeting_notes",\n        "description": "Retrieves recent meeting audio transcripts and summaries recorded via WASAPI loopback.",\n        "capabilityTier": "READ_ONLY",\n        "returns_untrusted": True,',
+        "replacement": '        "name": "helm_get_meeting_notes",\n        "description": "Retrieves recent meeting audio transcripts and summaries recorded via WASAPI loopback.",\n        "capabilityTier": "READ_ONLY", # MUTATION BYPASS: omit returns_untrusted',
+        "test_cmd": [sys.executable, "-m", "pytest", "tests/test_batch43_security_hardening.py::TestBatch43SecurityHardening::test_12_helm_http_fetch_pinned_egress_and_taint"]
     },
     {
         "id": "MUTATION_97_LOCAL_HARDWARE_RECOMMENDATION_BYPASS",
-        "name": "Bypass Local Hardware Inference Tier Recommendation in homie_hardware_profiler.py",
-        "file": os.path.join(BASE_DIR, "homie_hardware_profiler.py"),
+        "name": "Bypass Local Hardware Inference Tier Recommendation in helm_hardware_profiler.py",
+        "file": os.path.join(BASE_DIR, "helm_hardware_profiler.py"),
         "target": '        if has_ollama and vram >= 6000:',
         "replacement": '        if False and has_ollama and vram >= 6000: # MUTATION BYPASS: disable local GPU inference tier',
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_openjarvis_integration.py::TestOpenJarvisIntegration::test_14_hardware_profiler_runtime_recommendation"]
     },
     {
         "id": "MUTATION_98_RESOURCE_BUDGET_CIRCUIT_BREAKER_BYPASS",
-        "name": "Bypass Dollar Budget Circuit Breaker in homie_resource_tracker.py",
-        "file": os.path.join(BASE_DIR, "homie_resource_tracker.py"),
+        "name": "Bypass Dollar Budget Circuit Breaker in helm_resource_tracker.py",
+        "file": os.path.join(BASE_DIR, "helm_resource_tracker.py"),
         "target": '        budget_exceeded = self._daily_spend > self.daily_budget_usd',
         "replacement": '        budget_exceeded = False # MUTATION BYPASS: disable budget circuit breaker',
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_openjarvis_integration.py::TestOpenJarvisIntegration::test_16_resource_tracker_budget_circuit_breaker"]
     },
     {
         "id": "MUTATION_99_FOREGROUND_WINDOW_MISSING_PROC_FAIL_CLOSED_BYPASS",
-        "name": "Bypass Foreground Window Missing Proc/PID Fail-Closed Check in homie_supervisor.py",
-        "file": os.path.join(BASE_DIR, "homie_supervisor.py"),
+        "name": "Bypass Foreground Window Missing Proc/PID Fail-Closed Check in helm_supervisor.py",
+        "file": os.path.join(BASE_DIR, "helm_supervisor.py"),
         "target": '            if not fg_act or not fg_act.get("pid") or not fg_act.get("proc_name"):',
         "replacement": '            if False and (not fg_act or not fg_act.get("pid") or not fg_act.get("proc_name")): # MUTATION BYPASS',
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_tier_a_adversarial.py::TestTierAAdversarialSuite::test_6_actuator_denies_when_foreground_missing_proc_name_or_pid"]
     },
     {
         "id": "MUTATION_100_OWNER_RIGHTS_ACE_DROP",
-        "name": "Drop OWNER RIGHTS ACE (S-1-3-4) in homie_confinement.py",
-        "file": os.path.join(BASE_DIR, "homie_confinement.py"),
+        "name": "Drop OWNER RIGHTS ACE (S-1-3-4) in helm_confinement.py",
+        "file": os.path.join(BASE_DIR, "helm_confinement.py"),
         "target": '    dacl.AddAccessAllowedAce(win32security.ACL_REVISION, limited_mask, sid_owner_rights)',
         "replacement": '    pass # MUTATION DROP OWNER RIGHTS ACE',
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_tier_a_adversarial.py::TestTierAAdversarialSuite::test_5_windows_owner_rights_ace_denies_write_dac"]
@@ -881,32 +881,32 @@ MUTATIONS = [
     },
     {
         "id": "MUTATION_103_QUARANTINE_READER_HANDLE_LEAK",
-        "name": "Leak Raw Email Body into Planner Schema in homie_quarantine_reader.py",
-        "file": os.path.join(BASE_DIR, "homie_quarantine_reader.py"),
+        "name": "Leak Raw Email Body into Planner Schema in helm_quarantine_reader.py",
+        "file": os.path.join(BASE_DIR, "helm_quarantine_reader.py"),
         "target": '        body_handle = self.handle_store.store(body, prefix="EMAIL")',
         "replacement": '        body_handle = self.handle_store.store(body, prefix="EMAIL")\n        schema["raw_body_leak"] = body # MUTATION LEAK',
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_tier_a_adversarial.py::TestTierAAdversarialSuite::test_1_adversarial_email_injection_zero_tool_call"]
     },
     {
         "id": "MUTATION_104_STRUCTURED_APPROVAL_BIDI_BYPASS",
-        "name": "Bypass Prohibited Bidi/Zero-Width Characters Check in homie_structured_approval.py",
-        "file": os.path.join(BASE_DIR, "homie_structured_approval.py"),
+        "name": "Bypass Prohibited Bidi/Zero-Width Characters Check in helm_structured_approval.py",
+        "file": os.path.join(BASE_DIR, "helm_structured_approval.py"),
         "target": '        if cp in PROHIBITED_CODEPOINTS:',
         "replacement": '        if False: # MUTATION BYPASS PROHIBITED_CODEPOINTS',
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_structured_approval.py::TestStructuredApprovals::test_2_prohibits_bidi_override_characters"]
     },
     {
         "id": "MUTATION_105_BROWSER_BROKER_TOCTOU_BYPASS",
-        "name": "Bypass DOM Mutation Anti-TOCTOU Check in homie_browser_broker.py",
-        "file": os.path.join(BASE_DIR, "homie_browser_broker.py"),
+        "name": "Bypass DOM Mutation Anti-TOCTOU Check in helm_browser_broker.py",
+        "file": os.path.join(BASE_DIR, "helm_browser_broker.py"),
         "target": '        if current_snap.snapshot_hash != prior_snapshot.snapshot_hash:',
         "replacement": '        if False: # MUTATION BYPASS DOM TOCTOU CHECK',
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_browser_broker.py::TestBrowserBroker::test_5_form_submission_anti_toctou_defense"]
     },
     {
         "id": "MUTATION_106_PLAN_ENVELOPE_TAINT_BYPASS",
-        "name": "Bypass Plan Envelope Unexpected Taint Invalidation in homie_plan_envelopes.py",
-        "file": os.path.join(BASE_DIR, "homie_plan_envelopes.py"),
+        "name": "Bypass Plan Envelope Unexpected Taint Invalidation in helm_plan_envelopes.py",
+        "file": os.path.join(BASE_DIR, "helm_plan_envelopes.py"),
         "target": '        if unexpected_taint_detected or current_taint_epoch > self.plan.taint_epoch:',
         "replacement": '        if False: # MUTATION BYPASS UNEXPECTED TAINT CHECK',
         "test_cmd": [sys.executable, "-m", "pytest", "tests/test_plan_envelopes.py::TestPlanEnvelopes::test_4_unexpected_taint_invalidates_plan"]
@@ -946,15 +946,15 @@ MUTATIONS = [
     {
         "id": "MUTATION_111_MAIL_SEND_WEBAUTHN_BYPASS",
         "name": "Bypass WebAuthn Assertion Check in MailConnector.send",
-        "file": os.path.join(BASE_DIR, "homie_mail_calendar.py"),
+        "file": os.path.join(BASE_DIR, "helm_mail_calendar.py"),
         "target": '        webauthn_verifier.verify_assertion(rp, cred, assertion_response, challenge_bytes, challenge_store)',
         "replacement": '        pass # MUTATION_111_BYPASS_MAIL_SEND_WEBAUTHN',
         "test_cmd": [sys.executable, "-m", "unittest", "tests.test_mail_calendar.TestMailCalendarWorkflows.test_10_send_denied_with_wrong_challenge_or_forged_assertion"]
     },
     {
         "id": "MUTATION_112_BROWSER_TOCTOU_WEBAUTHN_BYPASS",
-        "name": "Bypass Gated Submit TOCTOU Check in homie_browser_broker.py",
-        "file": os.path.join(BASE_DIR, "homie_browser_broker.py"),
+        "name": "Bypass Gated Submit TOCTOU Check in helm_browser_broker.py",
+        "file": os.path.join(BASE_DIR, "helm_browser_broker.py"),
         "target": '        if current_snap.snapshot_hash != prior_snapshot.snapshot_hash:',
         "replacement": '        if False: # MUTATION_112_BYPASS_TOCTOU',
         "test_cmd": [sys.executable, "-m", "unittest", "tests.test_browser_broker.TestBrowserBroker.test_7_browser_gated_submit_with_webauthn_and_toctou"]

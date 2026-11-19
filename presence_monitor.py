@@ -1,4 +1,4 @@
-"""Presence and Idle Catch-Up Monitor for Homie.
+"""Presence and Idle Catch-Up Monitor for Helm.
 Detects when the user steps away from their PC and when they return,
 compiling a timeline of notifications, reminders, and alerts that occurred during absence.
 """

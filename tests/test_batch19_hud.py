@@ -18,9 +18,9 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-import homie_hud
-from homie_hud import (
-    HomieHardwareHUD, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
+import helm_hud
+from helm_hud import (
+    HelmHardwareHUD, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
     WS_EX_LAYERED, WS_EX_NOACTIVATE, WDA_EXCLUDEFROMCAPTURE
 )
 
@@ -31,13 +31,13 @@ class TestBatch19HardwareHUD(unittest.TestCase):
 
     def test_virtual_screen_bounds(self):
         """Verifies multi-monitor virtual screen dimensions are positive and non-zero."""
-        x, y, w, h = HomieHardwareHUD.get_virtual_screen_bounds()
+        x, y, w, h = HelmHardwareHUD.get_virtual_screen_bounds()
         self.assertGreater(w, 0, "Virtual screen width must be positive")
         self.assertGreater(h, 0, "Virtual screen height must be positive")
 
     def test_overlay_creation_and_window_styles(self):
         """Verifies window styles match click-through, topmost, layered, and no-activate requirements."""
-        hud = HomieHardwareHUD()
+        hud = HelmHardwareHUD()
         hwnd = hud.create_overlay()
         self.assertIsNotNone(hwnd, "HUD HWND must be valid")
 
@@ -60,7 +60,7 @@ class TestBatch19HardwareHUD(unittest.TestCase):
 
     def test_screen_capture_exclusion_affinity(self):
         """Verifies SetWindowDisplayAffinity sets WDA_EXCLUDEFROMCAPTURE."""
-        hud = HomieHardwareHUD()
+        hud = HelmHardwareHUD()
         hwnd = hud.create_overlay()
         try:
             ok = hud.set_capture_exclusion(True)
@@ -80,12 +80,12 @@ class TestBatch19HardwareHUD(unittest.TestCase):
 
     def test_target_box_and_status_update(self):
         """Verifies target bounding box and status updates cleanly."""
-        hud = HomieHardwareHUD()
+        hud = HelmHardwareHUD()
         hud.create_overlay()
         try:
-            hud.set_target_box(100, 150, 300, 200, "HOMIE: SNAP_WINDOW (calc)")
+            hud.set_target_box(100, 150, 300, 200, "HELM: SNAP_WINDOW (calc)")
             self.assertEqual(hud.target_box, (100, 150, 300, 200))
-            self.assertEqual(hud.status_text, "HOMIE: SNAP_WINDOW (calc)")
+            self.assertEqual(hud.status_text, "HELM: SNAP_WINDOW (calc)")
 
             hud.show()
             self.assertTrue(hud.is_visible)

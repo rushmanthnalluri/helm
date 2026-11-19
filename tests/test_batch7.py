@@ -3,7 +3,7 @@
 - Mobile Remote HTML & Actions (mobile_remote.py)
 - Semantic Screen Memory & Recall (semantic_screen_memory.py)
 - Claude Chrome Bridge (claude_bridge.py)
-- Fast command extensions in homie.py
+- Fast command extensions in helm.py
 """
 
 import os
@@ -21,7 +21,7 @@ import phone_gateway
 import mobile_remote
 import semantic_screen_memory
 import claude_bridge
-import homie
+import helm
 
 class TestBatch7Features(unittest.TestCase):
     def setUp(self):
@@ -62,14 +62,14 @@ class TestBatch7Features(unittest.TestCase):
 
     def test_mobile_remote_html_rendering(self):
         html = mobile_remote.render_remote_html()
-        self.assertIn("Homie PC Remote", html)
+        self.assertIn("Helm PC Remote", html)
         self.assertIn("Trackpad", html)
         self.assertIn("Media & Deck", html)
         self.assertIn("/api/remote-action", html)
 
     def test_semantic_screen_memory_crud_and_privacy(self):
         # Record normal event
-        ok = semantic_screen_memory.record_screen_event("code.exe", "test_batch7.py - homie", "def test_something(): pass")
+        ok = semantic_screen_memory.record_screen_event("code.exe", "test_batch7.py - helm", "def test_something(): pass")
         self.assertTrue(ok)
 
         # Record sensitive event (should be blocked)
@@ -109,17 +109,17 @@ class TestBatch7Features(unittest.TestCase):
 
     def test_fast_commands_batch7(self):
         # Phone status fast command
-        handled, msg = homie.try_fast_command("phone status")
+        handled, msg = helm.try_fast_command("phone status")
         self.assertTrue(handled)
         self.assertIn("Phone Gateway", msg)
 
         # Screen timeline fast command
-        handled2, msg2 = homie.try_fast_command("screen timeline")
+        handled2, msg2 = helm.try_fast_command("screen timeline")
         self.assertTrue(handled2)
         self.assertIn("Screen Timeline", msg2)
 
         # Search on screen fast command
-        handled3, msg3 = homie.try_fast_command("find on screen test_batch7.py")
+        handled3, msg3 = helm.try_fast_command("find on screen test_batch7.py")
         self.assertTrue(handled3)
         self.assertIn("Screen History matches", msg3)
 

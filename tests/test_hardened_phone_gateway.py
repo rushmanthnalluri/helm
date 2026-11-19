@@ -27,8 +27,8 @@ import phone_gateway
 class TestHardenedPhoneGateway(unittest.TestCase):
 
     def setUp(self):
-        import homie_supervisor, kill_switch, taint_tracker, action_broker
-        for p in [homie_supervisor.DIRTY_FLAG_PATH, homie_supervisor.CRASH_HISTORY_PATH]:
+        import helm_supervisor, kill_switch, taint_tracker, action_broker
+        for p in [helm_supervisor.DIRTY_FLAG_PATH, helm_supervisor.CRASH_HISTORY_PATH]:
             if os.path.exists(p):
                 try: os.remove(p)
                 except Exception: pass
@@ -38,8 +38,8 @@ class TestHardenedPhoneGateway(unittest.TestCase):
         action_broker._GLOBAL_BROKER = None
 
     def tearDown(self):
-        import homie_supervisor, kill_switch, taint_tracker, action_broker
-        for p in [homie_supervisor.DIRTY_FLAG_PATH, homie_supervisor.CRASH_HISTORY_PATH]:
+        import helm_supervisor, kill_switch, taint_tracker, action_broker
+        for p in [helm_supervisor.DIRTY_FLAG_PATH, helm_supervisor.CRASH_HISTORY_PATH]:
             if os.path.exists(p):
                 try: os.remove(p)
                 except Exception: pass
@@ -108,8 +108,8 @@ class TestHardenedPhoneGateway(unittest.TestCase):
                     self.headers = {
                         "Content-Type": "application/json",
                         "Authorization": "Bearer test_device_token",
-                        "X-Homie-Timestamp": str(time.time()),
-                        "X-Homie-Nonce": f"nonce_call_{time.time()}_{os.getpid()}"
+                        "X-Helm-Timestamp": str(time.time()),
+                        "X-Helm-Nonce": f"nonce_call_{time.time()}_{os.getpid()}"
                     }
                     self.sent_code = None
                     self.sent_body = None
@@ -159,8 +159,8 @@ class TestHardenedPhoneGateway(unittest.TestCase):
             h_expired = MockHandler({
                 "Content-Type": "application/json",
                 "Authorization": "Bearer test",
-                "X-Homie-Timestamp": str(time.time() - 100),
-                "X-Homie-Nonce": "nonce_expired_1"
+                "X-Helm-Timestamp": str(time.time() - 100),
+                "X-Helm-Nonce": "nonce_expired_1"
             })
             h_expired._handle_audio_call(json.dumps({"audio_b64": "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA="}))
             self.assertEqual(h_expired.sent_code, 401)
@@ -171,8 +171,8 @@ class TestHardenedPhoneGateway(unittest.TestCase):
             h_valid = MockHandler({
                 "Content-Type": "application/json",
                 "Authorization": "Bearer test",
-                "X-Homie-Timestamp": str(time.time()),
-                "X-Homie-Nonce": test_nonce
+                "X-Helm-Timestamp": str(time.time()),
+                "X-Helm-Nonce": test_nonce
             })
             h_valid._handle_audio_call(json.dumps({"audio_b64": "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA="}))
             self.assertEqual(h_valid.sent_code, 200)
@@ -181,8 +181,8 @@ class TestHardenedPhoneGateway(unittest.TestCase):
             h_replay = MockHandler({
                 "Content-Type": "application/json",
                 "Authorization": "Bearer test",
-                "X-Homie-Timestamp": str(time.time()),
-                "X-Homie-Nonce": test_nonce
+                "X-Helm-Timestamp": str(time.time()),
+                "X-Helm-Nonce": test_nonce
             })
             h_replay._handle_audio_call(json.dumps({"audio_b64": "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA="}))
             self.assertEqual(h_replay.sent_code, 401)
@@ -206,7 +206,7 @@ class TestHardenedPhoneGateway(unittest.TestCase):
             h_no_nonce = MockHandler({
                 "Content-Type": "application/json",
                 "Authorization": "Bearer test",
-                "X-Homie-Timestamp": str(time.time())
+                "X-Helm-Timestamp": str(time.time())
             })
             h_no_nonce._handle_audio_call(json.dumps({"audio_b64": "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA="}))
             self.assertEqual(h_no_nonce.sent_code, 400)
@@ -216,7 +216,7 @@ class TestHardenedPhoneGateway(unittest.TestCase):
             h_no_ts = MockHandler({
                 "Content-Type": "application/json",
                 "Authorization": "Bearer test",
-                "X-Homie-Nonce": "nonce_123"
+                "X-Helm-Nonce": "nonce_123"
             })
             h_no_ts._handle_audio_call(json.dumps({"audio_b64": "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA="}))
             self.assertEqual(h_no_ts.sent_code, 400)
@@ -229,8 +229,8 @@ class TestHardenedPhoneGateway(unittest.TestCase):
                 self.headers = {
                     "Content-Type": "application/octet-stream",
                     "Authorization": "Bearer test",
-                    "X-Homie-Timestamp": str(time.time()),
-                    "X-Homie-Nonce": "nonce_size_check"
+                    "X-Helm-Timestamp": str(time.time()),
+                    "X-Helm-Nonce": "nonce_size_check"
                 }
                 self.sent_code = None
                 self.sent_body = None
@@ -255,7 +255,7 @@ class TestHardenedPhoneGateway(unittest.TestCase):
 
         # WRITE_EXEC tool (launch app) from phone caller_id without step-up token
         ok, msg, res = broker.execute_action(
-            "homie_launch_app",
+            "helm_launch_app",
             {"app_name": "notepad"},
             caller_id="phone_gateway"
         )
@@ -269,8 +269,8 @@ class TestHardenedPhoneGateway(unittest.TestCase):
                 self.headers = {
                     "Content-Type": "application/json",
                     "Authorization": "Bearer invalid_unpaired_token",
-                    "X-Homie-Timestamp": str(time.time()),
-                    "X-Homie-Nonce": "unauth_nonce_1"
+                    "X-Helm-Timestamp": str(time.time()),
+                    "X-Helm-Nonce": "unauth_nonce_1"
                 }
                 self.sent_code = None
                 self.sent_body = None
@@ -296,8 +296,8 @@ class TestHardenedPhoneGateway(unittest.TestCase):
                 self.headers = {
                     "Content-Type": "application/json",
                     "Authorization": "Bearer test_token",
-                    "X-Homie-Timestamp": str(time.time()),
-                    "X-Homie-Nonce": f"nonce_silent_{time.time()}"
+                    "X-Helm-Timestamp": str(time.time()),
+                    "X-Helm-Nonce": f"nonce_silent_{time.time()}"
                 }
                 self.sent_code = None
                 self.sent_body = None
@@ -326,14 +326,14 @@ class TestHardenedPhoneGateway(unittest.TestCase):
 
         # 1. Test HTML rendering
         html = phone_gateway._get_signing_portal_html()
-        self.assertIn("Homie Phone Authenticator", html)
+        self.assertIn("Helm Phone Authenticator", html)
         self.assertIn("What You See Is What You Sign", html)
         self.assertIn("Cryptographic Challenge Hash", html)
 
         # 2. Generate challenge
         ch = phone_approval_portal.generate_approval_challenge(
             step_up_id="step_gw_001",
-            tool_name="homie_snap_window",
+            tool_name="helm_snap_window",
             arguments={"app_name": "notepad"},
             session_id="gw_sess",
             taint_epoch=0,
@@ -359,7 +359,7 @@ class TestHardenedPhoneGateway(unittest.TestCase):
         data = json.loads(handler.sent_body)
         self.assertEqual(len(data["challenges"]), 1)
         self.assertEqual(data["challenges"][0]["step_up_id"], "step_gw_001")
-        self.assertEqual(data["challenges"][0]["tool_name"], "homie_snap_window")
+        self.assertEqual(data["challenges"][0]["tool_name"], "helm_snap_window")
         self.assertEqual(data["challenges"][0]["device_id"], "gw_test_phone")
 
         phone_approval_portal.clear_active_challenges()

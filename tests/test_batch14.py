@@ -17,7 +17,7 @@ if BASE_DIR not in sys.path:
 
 import windows_tools
 import taint_tracker
-import homie_mcp
+import helm_mcp
 
 class TestBatch14HardwareTrust(unittest.TestCase):
 
@@ -63,10 +63,10 @@ class TestBatch14HardwareTrust(unittest.TestCase):
         orig_fn = windows_tools.is_prohibited_target_process
         try:
             windows_tools.is_prohibited_target_process = lambda hwnd=None: (True, "Prohibited process image: 'cmd.exe'")
-            res_click = homie_mcp.execute_mcp_tool("homie_agent_click", {"x": 100, "y": 200, "element_name": "BenignButton"})
+            res_click = helm_mcp.execute_mcp_tool("helm_agent_click", {"x": 100, "y": 200, "element_name": "BenignButton"})
             self.assertIn("Security Gate: Input denied. Prohibited process image: 'cmd.exe'", res_click)
 
-            res_type = homie_mcp.execute_mcp_tool("homie_agent_type", {"text": "hello", "element_name": "InputBox"})
+            res_type = helm_mcp.execute_mcp_tool("helm_agent_type", {"text": "hello", "element_name": "InputBox"})
             self.assertIn("Security Gate: Input denied. Prohibited process image: 'cmd.exe'", res_type)
         finally:
             windows_tools.is_prohibited_target_process = orig_fn
@@ -77,10 +77,10 @@ class TestBatch14HardwareTrust(unittest.TestCase):
         self.assertFalse(taint_tracker.is_session_tainted(session))
 
         # Read clipboard has returns_untrusted: True
-        res = homie_mcp.execute_mcp_tool("homie_get_clipboard", {}, caller_id=session)
+        res = helm_mcp.execute_mcp_tool("helm_get_clipboard", {}, caller_id=session)
         self.assertTrue(taint_tracker.is_session_tainted(session))
         status = taint_tracker.get_taint_status(session)
-        self.assertIn("tool_provenance:homie_get_clipboard", status["source"])
+        self.assertIn("tool_provenance:helm_get_clipboard", status["source"])
 
     def test_human_only_taint_clearance(self):
         """Verifies workstation taint clearance requires explicit human authorization."""

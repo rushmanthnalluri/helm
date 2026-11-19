@@ -2,7 +2,7 @@
 
 import unittest
 import time
-from homie_plan_envelopes import (
+from helm_plan_envelopes import (
     Step,
     Scope,
     Budget,
@@ -19,16 +19,16 @@ class TestPlanEnvelopes(unittest.TestCase):
 
     def setUp(self):
         self.supervisor_secret = b"test_supervisor_secret_32_bytes_len"
-        self.step1 = Step(id="s1", tool="homie_get_vitals", args_template={})
+        self.step1 = Step(id="s1", tool="helm_get_vitals", args_template={})
         self.step2 = Step(
             id="s2",
-            tool="homie_search_context",
+            tool="helm_search_context",
             args_template={"query": "meeting summary"},
             depends_on=("s1",)
         )
         self.step3_write = Step(
             id="s3",
-            tool="homie_remember_fact",
+            tool="helm_remember_fact",
             args_template={"key": "project_lead", "fact": "Priya"},
             depends_on=("s2",)
         )
@@ -40,7 +40,7 @@ class TestPlanEnvelopes(unittest.TestCase):
             budget=Budget(max_steps=5, max_keystrokes=200, max_egress_bytes=50000),
             expiry=int(time.time() + 3600),
             taint_epoch=0,
-            declared_untrusted_reads=("homie_search_context",)
+            declared_untrusted_reads=("helm_search_context",)
         )
 
     def test_1_supervisor_risk_calculation(self):
@@ -53,7 +53,7 @@ class TestPlanEnvelopes(unittest.TestCase):
         # Step with untrusted handle argument is strictly GATED
         step_handle = Step(
             id="s_handle",
-            tool="homie_send_email",
+            tool="helm_send_email",
             args_template={"body_handle": "$EMAIL_abc123"}
         )
         tier_h, gated_h = SupervisorRiskCalculator.calculate_step_risk(step_handle)
@@ -65,36 +65,36 @@ class TestPlanEnvelopes(unittest.TestCase):
 
         # Attempting step 2 before step 1 fails dependency check
         with self.assertRaises(PlanExecutionError) as ctx:
-            executor.execute_step("s2", "homie_search_context", {"query": "meeting summary"}, current_taint_epoch=0)
+            executor.execute_step("s2", "helm_search_context", {"query": "meeting summary"}, current_taint_epoch=0)
         self.assertIn("Dependency 's1' not satisfied", str(ctx.exception))
 
         # Execute step 1 -> succeeds
-        res1 = executor.execute_step("s1", "homie_get_vitals", {}, current_taint_epoch=0)
+        res1 = executor.execute_step("s1", "helm_get_vitals", {}, current_taint_epoch=0)
         self.assertTrue(res1["ok"])
 
         # Execute step 2 -> succeeds
-        res2 = executor.execute_step("s2", "homie_search_context", {"query": "meeting summary"}, current_taint_epoch=0)
+        res2 = executor.execute_step("s2", "helm_search_context", {"query": "meeting summary"}, current_taint_epoch=0)
         self.assertTrue(res2["ok"])
 
     def test_3_argument_deviation_is_hard_failure(self):
         """Any deviation in arguments template causes hard failure without prompting."""
         executor = PlanExecutor(self.plan, phone_signature="sig_test", supervisor_secret=self.supervisor_secret)
-        executor.execute_step("s1", "homie_get_vitals", {}, current_taint_epoch=0)
+        executor.execute_step("s1", "helm_get_vitals", {}, current_taint_epoch=0)
 
         # Worker supplies altered argument for s2
         altered_args = {"query": "attacker query inject"}
         with self.assertRaises(PlanExecutionError) as ctx:
-            executor.execute_step("s2", "homie_search_context", altered_args, current_taint_epoch=0)
+            executor.execute_step("s2", "helm_search_context", altered_args, current_taint_epoch=0)
         self.assertIn("Arguments deviation for step 's2'", str(ctx.exception))
 
     def test_4_unexpected_taint_invalidates_plan(self):
         """Unexpected new taint halts execution and requires replanning."""
         executor = PlanExecutor(self.plan, phone_signature="sig_test", supervisor_secret=self.supervisor_secret)
-        executor.execute_step("s1", "homie_get_vitals", {}, current_taint_epoch=0)
+        executor.execute_step("s1", "helm_get_vitals", {}, current_taint_epoch=0)
 
         # Session acquires unexpected new taint (epoch bumped to 1)
         with self.assertRaises(PlanExecutionError) as ctx:
-            executor.execute_step("s2", "homie_search_context", {"query": "meeting summary"}, current_taint_epoch=1)
+            executor.execute_step("s2", "helm_search_context", {"query": "meeting summary"}, current_taint_epoch=1)
         self.assertIn("Unexpected new taint detected", str(ctx.exception))
 
     def test_5_macro_compilation_blocks_tainted_plans(self):
@@ -129,7 +129,7 @@ class TestPlanEnvelopes(unittest.TestCase):
             PolicyEnvelope(
                 envelope_id="env_ui",
                 allowed_process_images=["notepad.exe"],
-                allowed_action_types=["homie_agent_type"],
+                allowed_action_types=["helm_agent_type"],
                 step_budget=5,
                 keystroke_cap=100,
                 expiry=time.time() + 300,
@@ -143,7 +143,7 @@ class TestPlanEnvelopes(unittest.TestCase):
             PolicyEnvelope(
                 envelope_id="env_worker",
                 allowed_process_images=["notepad.exe"],
-                allowed_action_types=["homie_agent_type"],
+                allowed_action_types=["helm_agent_type"],
                 step_budget=5,
                 keystroke_cap=100,
                 expiry=time.time() + 300,

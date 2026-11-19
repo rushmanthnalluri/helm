@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-logger = logging.getLogger("homie.rails_confirmation")
+logger = logging.getLogger("helm.rails_confirmation")
 
 TOKEN_EXPIRY_SECONDS = 300.0  # 5 minutes
 PROGRESSIVE_TRUST_ENABLED = False
@@ -29,33 +29,33 @@ PROGRESSIVE_TRUST_ENABLED = False
 
 def _format_impact_summary(tool_name: str, arguments: Dict[str, Any]) -> str:
     """Produces a concise, plain-English summary of what the consequential action will do."""
-    if tool_name == "homie_set_clipboard":
+    if tool_name == "helm_set_clipboard":
         text = str(arguments.get("text", ""))
         preview = text[:40] + ("..." if len(text) > 40 else "")
         return f"Will overwrite system clipboard with {len(text)} characters: {preview!r}"
 
-    elif tool_name == "homie_launch_app":
+    elif tool_name == "helm_launch_app":
         app = arguments.get("app_name", arguments.get("path", "unknown"))
         return f"Will launch application: {app}"
 
-    elif tool_name == "homie_close_app":
+    elif tool_name == "helm_close_app":
         app = arguments.get("app_name", "unknown")
         return f"Will force close application window/process: {app}"
 
-    elif tool_name == "homie_kill_process":
+    elif tool_name == "helm_kill_process":
         target = arguments.get("target", arguments.get("pid", "unknown"))
         return f"Will kill process: {target}"
 
-    elif tool_name == "homie_safe_command":
+    elif tool_name == "helm_safe_command":
         cmd = arguments.get("command", "")
         return f"Will execute system command: {cmd}"
 
-    elif tool_name == "homie_send_chat":
+    elif tool_name == "helm_send_chat":
         chat_id = arguments.get("chat_id", "")
         text = str(arguments.get("text", ""))
         return f"Will send message to chat {chat_id}: {text[:50]!r}"
 
-    elif tool_name in ("homie_agent_click", "homie_agent_type", "homie_send_hotkey", "homie_agent_mouse_move"):
+    elif tool_name in ("helm_agent_click", "helm_agent_type", "helm_send_hotkey", "helm_agent_mouse_move"):
         return f"Will perform automated UI interaction ({tool_name}) with parameters: {arguments}"
 
     # Default description
@@ -247,13 +247,13 @@ class ConfirmationGate:
                 except Exception as e:
                     err_detail = str(e)
 
-                # Path B: Verify via homie_supervisor Signed Approval Blob (CHALLENGE_V3)
+                # Path B: Verify via helm_supervisor Signed Approval Blob (CHALLENGE_V3)
                 if not verified:
                     try:
-                        import homie_supervisor
+                        import helm_supervisor
                         import taint_tracker
                         t_epoch = taint_tracker.get_taint_epoch()
-                        if homie_supervisor.verify_signed_approval_evidence(
+                        if helm_supervisor.verify_signed_approval_evidence(
                             signed_evidence, req.caller_id, req.tool_name, args_hash, t_epoch
                         ):
                             verified = True

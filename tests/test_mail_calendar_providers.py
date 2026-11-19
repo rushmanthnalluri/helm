@@ -7,8 +7,8 @@ import base64
 import unittest
 from unittest.mock import MagicMock, patch
 
-import homie_mail_calendar
-from homie_mail_calendar import (
+import helm_mail_calendar
+from helm_mail_calendar import (
     MailConnector,
     CalendarConnector,
     get_mail_connector,
@@ -36,7 +36,7 @@ class TestMailCalendarProviders(unittest.TestCase):
 
     def tearDown(self):
         # Clean up environment variables if set during test
-        for var in ["HOMIE_MAIL_PROVIDER", "HOMIE_GOOGLE_TOKEN_PATH", "HOMIE_MS_TOKEN_PATH", "HOMIE_MS_TOKEN"]:
+        for var in ["HELM_MAIL_PROVIDER", "HELM_GOOGLE_TOKEN_PATH", "HELM_MS_TOKEN_PATH", "HELM_MS_TOKEN"]:
             os.environ.pop(var, None)
 
     # ------------------------------------------------------------------------
@@ -51,12 +51,12 @@ class TestMailCalendarProviders(unittest.TestCase):
         self.assertEqual(conn.provider, "mock")
 
     def test_provider_detection_env_override(self):
-        """Verifies environment variable HOMIE_MAIL_PROVIDER overrides settings."""
-        os.environ["HOMIE_MAIL_PROVIDER"] = "gmail"
+        """Verifies environment variable HELM_MAIL_PROVIDER overrides settings."""
+        os.environ["HELM_MAIL_PROVIDER"] = "gmail"
         conn = MailConnector()
         self.assertEqual(conn.provider, "gmail")
 
-        os.environ["HOMIE_MAIL_PROVIDER"] = "outlook"
+        os.environ["HELM_MAIL_PROVIDER"] = "outlook"
         conn2 = MailConnector()
         self.assertEqual(conn2.provider, "outlook")
 
@@ -181,7 +181,7 @@ class TestMailCalendarProviders(unittest.TestCase):
         self.assertIn("Mail.Send", MSAL_SCOPES)
         self.assertIn("Calendars.Read", MSAL_SCOPES)
 
-    @patch("homie_mail_calendar.requests.get")
+    @patch("helm_mail_calendar.requests.get")
     def test_outlook_fetch_unread_emails(self, mock_get):
         """Verifies fetch_outlook_emails calls Graph messages endpoint with isRead eq false."""
         mock_resp = MagicMock()
@@ -220,7 +220,7 @@ class TestMailCalendarProviders(unittest.TestCase):
         self.assertIn("https://graph.microsoft.com/v1.0/me/messages", called_url)
         self.assertIn("$filter=isRead eq false", called_url)
 
-    @patch("homie_mail_calendar.requests.get")
+    @patch("helm_mail_calendar.requests.get")
     def test_outlook_fetch_calendar_events(self, mock_get):
         """Verifies fetch_calendar_events queries Microsoft Graph calendarView endpoint."""
         mock_resp = MagicMock()
@@ -258,7 +258,7 @@ class TestMailCalendarProviders(unittest.TestCase):
         self.assertIn("startDateTime=", called_url)
         self.assertIn("endDateTime=", called_url)
 
-    @patch("homie_mail_calendar.requests.post")
+    @patch("helm_mail_calendar.requests.post")
     def test_outlook_send_email(self, mock_post):
         """Verifies send_email dispatches via Microsoft Graph sendMail endpoint."""
         mock_resp = MagicMock()
@@ -313,7 +313,7 @@ class TestMailCalendarProviders(unittest.TestCase):
 
     def test_calendar_mock_fetch_events(self):
         """Verifies CalendarConnector mock mode returns local events."""
-        from homie_mail_calendar import CalendarEvent
+        from helm_mail_calendar import CalendarEvent
         import time
 
         cal = CalendarConnector(provider="mock")

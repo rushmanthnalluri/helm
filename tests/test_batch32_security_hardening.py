@@ -23,12 +23,12 @@ if BASE_DIR not in sys.path:
 
 import phone_approval_portal
 import policy_envelope
-import homie_supervisor
+import helm_supervisor
 import client_token_auth
 import agent_audit_ledger
 import taint_tracker
 import kill_switch
-import homie
+import helm
 
 # Testing helper for Ed25519 signatures
 from Crypto.Signature import eddsa
@@ -37,10 +37,10 @@ from tests.phone_testing_keys import generate_test_phone_keypair, sign_enrollmen
 
 class TestBatch32SecurityHardening(unittest.TestCase):
     def setUp(self):
-        os.environ["HOMIE_TEST_ENV"] = "1"
-        os.environ["HOMIE_COMPLETE_MEDIATION"] = "1"
+        os.environ["HELM_TEST_ENV"] = "1"
+        os.environ["HELM_COMPLETE_MEDIATION"] = "1"
         # Reset lockout and dirty flags
-        for f in [".homie_supervisor_dirty.flag", ".homie_enrollment_lockout.json"]:
+        for f in [".helm_supervisor_dirty.flag", ".helm_enrollment_lockout.json"]:
             if os.path.exists(f):
                 try:
                     os.remove(f)
@@ -203,7 +203,7 @@ class TestBatch32SecurityHardening(unittest.TestCase):
         captured = []
         phone_approval_portal.set_display_driver(lambda code: captured.append(code) or True)
 
-        handled, msg = homie.try_fast_command("pair phone")
+        handled, msg = helm.try_fast_command("pair phone")
         self.assertFalse(handled, "Acoustic injection prevention: 'pair phone' must not be triggered via ambient voice")
         self.assertEqual(len(captured), 0)
 
@@ -215,7 +215,7 @@ class TestBatch32SecurityHardening(unittest.TestCase):
             signature="test_sig",
             expiry=time.time() + 300,
             allowed_process_images=["chrome.exe"],
-            allowed_action_types=["homie_agent_type", "homie_browse"],
+            allowed_action_types=["helm_agent_type", "helm_browse"],
             step_budget=5,
             keystroke_cap=100,
             allowed_domains=["secure-portal.com"],
@@ -224,21 +224,21 @@ class TestBatch32SecurityHardening(unittest.TestCase):
         env.is_active = True
 
         # Case A: Missing process image when allowed_process_images is specified -> MUST DENY
-        ok_a, msg_a, _ = env.check_boundary("homie_agent_type", {"text": "hello"}, current_process_image=None, current_taint_epoch=1, current_domain="secure-portal.com")
+        ok_a, msg_a, _ = env.check_boundary("helm_agent_type", {"text": "hello"}, current_process_image=None, current_taint_epoch=1, current_domain="secure-portal.com")
         self.assertFalse(ok_a)
         self.assertIn("process", msg_a.lower())
 
         # Case B: Missing domain for browser action when allowed_domains is specified -> MUST DENY
-        ok_b, msg_b, _ = env.check_boundary("homie_browse", {"url": "https://secure-portal.com"}, current_process_image="chrome.exe", current_taint_epoch=1, current_domain=None)
+        ok_b, msg_b, _ = env.check_boundary("helm_browse", {"url": "https://secure-portal.com"}, current_process_image="chrome.exe", current_taint_epoch=1, current_domain=None)
         self.assertFalse(ok_b)
         self.assertIn("domain", msg_b.lower())
 
         # Case C: Key is "Enter" or "ENTER" with capital letters -> MUST DENY
-        ok_c, msg_c, _ = env.check_boundary("homie_agent_type", {"key": "Enter"}, current_process_image="chrome.exe", current_taint_epoch=1, current_domain="secure-portal.com")
+        ok_c, msg_c, _ = env.check_boundary("helm_agent_type", {"key": "Enter"}, current_process_image="chrome.exe", current_taint_epoch=1, current_domain="secure-portal.com")
         self.assertFalse(ok_c)
         self.assertIn("enter", msg_c.lower())
 
-        ok_d, msg_d, _ = env.check_boundary("homie_agent_type", {"key": "ENTER"}, current_process_image="chrome.exe", current_taint_epoch=1, current_domain="secure-portal.com")
+        ok_d, msg_d, _ = env.check_boundary("helm_agent_type", {"key": "ENTER"}, current_process_image="chrome.exe", current_taint_epoch=1, current_domain="secure-portal.com")
         self.assertFalse(ok_d)
         self.assertIn("enter", msg_d.lower())
 
@@ -250,7 +250,7 @@ class TestBatch32SecurityHardening(unittest.TestCase):
             signature="test_sig",
             expiry=time.time() + 300,
             allowed_process_images=["chrome.exe"],
-            allowed_action_types=["homie_agent_type"],
+            allowed_action_types=["helm_agent_type"],
             step_budget=1,
             keystroke_cap=100,
             allowed_domains=["secure-portal.com"],
@@ -259,17 +259,17 @@ class TestBatch32SecurityHardening(unittest.TestCase):
         env.is_active = True
 
         # First check reserves the single available step
-        ok1, msg1, ks1 = env.check_boundary("homie_agent_type", {"text": "a"}, "chrome.exe", 1, "secure-portal.com")
+        ok1, msg1, ks1 = env.check_boundary("helm_agent_type", {"text": "a"}, "chrome.exe", 1, "secure-portal.com")
         self.assertTrue(ok1)
 
         # Immediate second concurrent check exceeds budget due to reservation!
-        ok2, msg2, ks2 = env.check_boundary("homie_agent_type", {"text": "b"}, "chrome.exe", 1, "secure-portal.com")
+        ok2, msg2, ks2 = env.check_boundary("helm_agent_type", {"text": "b"}, "chrome.exe", 1, "secure-portal.com")
         self.assertFalse(ok2)
         self.assertIn("budget", msg2.lower())
 
         # Releasing reservation allows subsequent check to pass
         env.release_reservation()
-        ok3, msg3, ks3 = env.check_boundary("homie_agent_type", {"text": "c"}, "chrome.exe", 1, "secure-portal.com")
+        ok3, msg3, ks3 = env.check_boundary("helm_agent_type", {"text": "c"}, "chrome.exe", 1, "secure-portal.com")
         self.assertTrue(ok3)
 
         # Committing step permanently records it
@@ -280,66 +280,66 @@ class TestBatch32SecurityHardening(unittest.TestCase):
         """Directive 8: When client token enforcement is active, omitting client_token fails closed."""
         import heartbeat_lease
         client_token_auth.set_token_enforcement(True)
-        supervisor = homie_supervisor.PolicySupervisor()
-        supervisor.state = homie_supervisor.STATE_ARMED
+        supervisor = helm_supervisor.PolicySupervisor()
+        supervisor.state = helm_supervisor.STATE_ARMED
         supervisor.lease_token, _ = heartbeat_lease.acquire_lease("supervisor_worker", duration=30.0)
         supervisor.last_heartbeat_time = time.time()
 
         # Omitting client_token must be DENIED
         reply_bytes = supervisor._handle_propose({
-            "tool": "homie_get_vitals",
+            "tool": "helm_get_vitals",
             "args": {},
             "client_token": None
         }, seq=1)
-        _, _, _, payload, _ = homie_supervisor.BinaryFrameCodec.decode_frame(reply_bytes)
+        _, _, _, payload, _ = helm_supervisor.BinaryFrameCodec.decode_frame(reply_bytes)
         self.assertEqual(payload.get("status"), "DENY")
-        self.assertEqual(payload.get("reason_code"), homie_supervisor.REASON_UNAUTHORIZED_TOKEN)
+        self.assertEqual(payload.get("reason_code"), helm_supervisor.REASON_UNAUTHORIZED_TOKEN)
 
     def test_9_supervisor_locks_if_intent_ledger_fails(self):
         """Directive 9: If audit ledger write for INTENT fails, supervisor must transition to LOCKED."""
         import heartbeat_lease
-        supervisor = homie_supervisor.PolicySupervisor()
-        supervisor.state = homie_supervisor.STATE_ARMED
+        supervisor = helm_supervisor.PolicySupervisor()
+        supervisor.state = helm_supervisor.STATE_ARMED
         supervisor.lease_token, _ = heartbeat_lease.acquire_lease("supervisor_worker", duration=30.0)
         supervisor.last_heartbeat_time = time.time()
 
         with patch("agent_audit_ledger.record_agent_action", side_effect=IOError("Disk write failure")):
             reply_bytes = supervisor._handle_propose({
-                "tool": "homie_set_clipboard",
+                "tool": "helm_set_clipboard",
                 "args": {"text": "test"}
             }, seq=1)
 
-            self.assertEqual(supervisor.state, homie_supervisor.STATE_LOCKED)
-            _, msg_type, _, payload, _ = homie_supervisor.BinaryFrameCodec.decode_frame(reply_bytes)
-            self.assertEqual(msg_type, homie_supervisor.MSG_ERROR)
+            self.assertEqual(supervisor.state, helm_supervisor.STATE_LOCKED)
+            _, msg_type, _, payload, _ = helm_supervisor.BinaryFrameCodec.decode_frame(reply_bytes)
+            self.assertEqual(msg_type, helm_supervisor.MSG_ERROR)
 
     def test_10_approval_cache_binds_caller_id_with_ttl(self):
         """Directive 10: Supervisor approval cache strictly binds (caller_id, tool, args_hash, taint_epoch)."""
-        supervisor = homie_supervisor.PolicySupervisor()
+        supervisor = helm_supervisor.PolicySupervisor()
         args_hash = "abc123hash"
         from tests.phone_testing_keys import enroll_test_device, mint_test_action_approval
         priv_k, pub_k = enroll_test_device("primary_phone")
-        signed_blob = mint_test_action_approval(priv_k, "homie_set_clipboard", args_hash, "primary_phone", taint_epoch=2)
+        signed_blob = mint_test_action_approval(priv_k, "helm_set_clipboard", args_hash, "primary_phone", taint_epoch=2)
         signed_blob["caller_id"] = "worker_1"
-        signed_blob["tool_name"] = "homie_set_clipboard"
+        signed_blob["tool_name"] = "helm_set_clipboard"
         signed_blob["args_hash"] = args_hash
-        supervisor.record_approved_action("worker_1", "homie_set_clipboard", args_hash, taint_epoch=2, ttl=60.0, signed_blob=signed_blob)
+        supervisor.record_approved_action("worker_1", "helm_set_clipboard", args_hash, taint_epoch=2, ttl=60.0, signed_blob=signed_blob)
 
         # Wrong caller cannot consume and must not evict legitimate approval from cache
-        consumed_wrong_caller = supervisor.consume_approved_action("worker_2", "homie_set_clipboard", args_hash, taint_epoch=2)
+        consumed_wrong_caller = supervisor.consume_approved_action("worker_2", "helm_set_clipboard", args_hash, taint_epoch=2)
         self.assertFalse(consumed_wrong_caller)
-        self.assertIn(("worker_1", "homie_set_clipboard", args_hash.lower(), 2), supervisor._approved_actions, "Wrong caller evicted legitimate approval from cache!")
+        self.assertIn(("worker_1", "helm_set_clipboard", args_hash.lower(), 2), supervisor._approved_actions, "Wrong caller evicted legitimate approval from cache!")
 
         # Wrong taint epoch cannot consume
-        consumed_wrong_epoch = supervisor.consume_approved_action("worker_1", "homie_set_clipboard", args_hash, taint_epoch=3)
+        consumed_wrong_epoch = supervisor.consume_approved_action("worker_1", "helm_set_clipboard", args_hash, taint_epoch=3)
         self.assertFalse(consumed_wrong_epoch)
 
         # Correct caller and epoch consumes successfully
-        consumed_ok = supervisor.consume_approved_action("worker_1", "homie_set_clipboard", args_hash, taint_epoch=2)
+        consumed_ok = supervisor.consume_approved_action("worker_1", "helm_set_clipboard", args_hash, taint_epoch=2)
         self.assertTrue(consumed_ok)
 
         # Single-use: cannot consume twice
-        consumed_again = supervisor.consume_approved_action("worker_1", "homie_set_clipboard", args_hash, taint_epoch=2)
+        consumed_again = supervisor.consume_approved_action("worker_1", "helm_set_clipboard", args_hash, taint_epoch=2)
         self.assertFalse(consumed_again)
 
 

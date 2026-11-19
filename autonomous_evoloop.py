@@ -1,4 +1,4 @@
-"""Homie Autonomous Evolution Loop Engine.
+"""Helm Autonomous Evolution Loop Engine.
 Runs the continuous autonomous loop:
 Claude in Chrome ➔ Directives & Critique ➔ Code Implementation ➔ Verification & Evals ➔ Update Claude ➔ Repeat
 
@@ -19,9 +19,9 @@ if BASE_DIR not in sys.path:
 
 import claude_bridge
 import ai_engine
-import homie
+import helm
 
-logger = logging.getLogger("homie.evoloop")
+logger = logging.getLogger("helm.evoloop")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 LOG_FILE = Path(BASE_DIR) / "autonomous_evolution_log.jsonl"
@@ -71,7 +71,7 @@ def execute_evolution_cycle(cycle_num=1, custom_prompt=None):
         f"Current Status: {test_summary}\n"
         "All security guardrails, taint tracking, and desktop agent evals are verified.\n"
         "What is the next high-impact capability or architectural improvement we should implement right now "
-        "to advance Homie toward being the world's most powerful assistant?"
+        "to advance Helm toward being the world's most powerful assistant?"
     )
 
     # 3. Post to active Claude in Chrome
@@ -90,7 +90,7 @@ def execute_evolution_cycle(cycle_num=1, custom_prompt=None):
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Homie Continuous Evolution Engine")
+    parser = argparse.ArgumentParser(description="Helm Continuous Evolution Engine")
     parser.add_argument("--cycle", type=int, default=1, help="Execute single cycle number")
     parser.add_argument("--daemon", action="store_true", help="Run continuously in background")
     args = parser.parse_args()

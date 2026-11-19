@@ -1,4 +1,4 @@
-"""tests/test_lazy_imports.py - Unit test suite for Homie lazy import engine and background pre-warming.
+"""tests/test_lazy_imports.py - Unit test suite for Helm lazy import engine and background pre-warming.
 
 Verifies:
 1. LazyModule defers importing the target module until first attribute access.
@@ -18,7 +18,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-from homie_lazy import (
+from helm_lazy import (
     LazyModule,
     preload_in_background,
     get_preload_status,
@@ -49,8 +49,8 @@ class TestLazyImports(unittest.TestCase):
         self.assertIsNone(lazy_json._mod)
 
         # Access valid attribute: dumps
-        result = lazy_json.dumps({"homie": "fast_start"})
-        self.assertEqual(result, '{"homie": "fast_start"}')
+        result = lazy_json.dumps({"helm": "fast_start"})
+        self.assertEqual(result, '{"helm": "fast_start"}')
 
         # Verify underlying module is now loaded
         self.assertTrue(lazy_json.is_loaded)
@@ -59,13 +59,13 @@ class TestLazyImports(unittest.TestCase):
 
         # Access another attribute on already loaded module
         parsed = lazy_json.loads(result)
-        self.assertEqual(parsed, {"homie": "fast_start"})
+        self.assertEqual(parsed, {"helm": "fast_start"})
 
     def test_attribute_error_on_nonexistent_attribute(self):
         """Test that accessing a nonexistent attribute raises AttributeError."""
         lazy_math = LazyModule("math")
         with self.assertRaises(AttributeError):
-            _ = lazy_math.completely_nonexistent_homie_attribute_12345
+            _ = lazy_math.completely_nonexistent_helm_attribute_12345
 
     def test_background_preload_thread_starts(self):
         """Test that preload_in_background spins up a daemon Thread that executes preloads."""

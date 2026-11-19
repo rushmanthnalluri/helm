@@ -89,7 +89,7 @@ def capture_current_screen() -> bytes | None:
     except Exception:
         return None
 
-logger = logging.getLogger("homie.agent_core")
+logger = logging.getLogger("helm.agent_core")
 
 
 class ProviderError(RuntimeError):
@@ -132,7 +132,7 @@ def stream_provider_turn(
     if provider_id not in {"gemini", "nvidia", "groq", "ollama"}:
         raise ProviderError(
             f"Provider '{provider_id}' is not supported by terminal chat. "
-            "Choose gemini, nvidia, groq, or ollama in Homie's settings."
+            "Choose gemini, nvidia, groq, or ollama in Helm's settings."
         )
     if provider["api_key"] == "none" and provider_id != "ollama":
         env_key = ai_engine.PROVIDER_CONFIGS[provider_id]["env_key"]
@@ -447,7 +447,7 @@ def _close_on_cancel(response, cancel_event):
                     pass
                 return
 
-    watcher = threading.Thread(target=watch, name="homie-stream-cancel", daemon=True)
+    watcher = threading.Thread(target=watch, name="helm-stream-cancel", daemon=True)
     watcher.start()
     try:
         yield response
@@ -481,12 +481,12 @@ def humanize_local_action_reply(reply):
     if clean.startswith("Security Gate:"):
         reason = clean[len("Security Gate:"):].strip()
         if "supervisor process is unreachable" in reason.lower() or "supervisor connection error" in reason.lower():
-            return "I couldn't carry out that PC action because Homie's action service is disconnected. Restart Homie and try again."
+            return "I couldn't carry out that PC action because Helm's action service is disconnected. Restart Helm and try again."
         if "shadow" in reason.lower():
-            return "Homie is in preview mode, so it didn't change anything on your PC."
+            return "Helm is in preview mode, so it didn't change anything on your PC."
         return f"I couldn't complete that action. {reason}"
     if clean.startswith("[SHADOW MODE]") or clean.startswith("[SHADOW_SIMULATION]"):
-        return "Preview only: Homie didn't change anything on your PC."
+        return "Preview only: Helm didn't change anything on your PC."
     return clean
 
 
@@ -552,8 +552,8 @@ class AgentCore:
                 tool_schemas = self.tool_registry.schemas() if self.tool_registry else []
                 provider_options = {"cancel_event": cancel_event} if cancel_event is not None else {}
                 # OpenJarvis Session Compression: precompress & consolidate long context
-                import homie_session_compression
-                compressed_messages = homie_session_compression.ContextCompressor().process(self.messages)
+                import helm_session_compression
+                compressed_messages = helm_session_compression.ContextCompressor().process(self.messages)
                 model_turn = self._provider_call(
                     compressed_messages, self.system_prompt, self.prefs, tool_schemas,
                     on_delta, **provider_options,
@@ -568,8 +568,8 @@ class AgentCore:
                     self.messages.append({"role": "assistant", "content": reply})
                     # Proposal-Only Fact Extraction: proposes facts via confirmation gate (never writes directly)
                     try:
-                        import homie_memory_extractor
-                        extractor = homie_memory_extractor.FactExtractor()
+                        import helm_memory_extractor
+                        extractor = helm_memory_extractor.FactExtractor()
                         new_facts = extractor.extract(text, reply)
                         if new_facts and self.memory_store:
                             for k, f in new_facts:
@@ -648,7 +648,7 @@ class AgentCore:
                         "name": call.name,
                         "content": json.dumps(result, ensure_ascii=False, default=str),
                     })
-                    if self.memory_store and call.name in ("homie_remember_fact", "homie_forget_fact") and result.get("ok"):
+                    if self.memory_store and call.name in ("helm_remember_fact", "helm_forget_fact") and result.get("ok"):
                         import durable_memory
                         facts = self.memory_store.list_facts()
                         facts_block = durable_memory.format_facts_for_prompt(facts)

@@ -1,8 +1,8 @@
-# 🏠 Homie — The privacy-first, locally-sovereign AI assistant for Windows
+# 🏠 Helm — The privacy-first, locally-sovereign AI assistant for Windows
 
 <p align="center">
   Hold <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>Space</kbd>, say what you need, let go.<br>
-  <b>Homie</b> moves your windows, reads your screen, controls your PC, and thinks for you — entirely on your hardware.
+  <b>Helm</b> moves your windows, reads your screen, controls your PC, and thinks for you — entirely on your hardware.
 </p>
 
 <p align="center">
@@ -11,9 +11,9 @@
 
 ---
 
-## 🌟 What is Homie?
+## 🌟 What is Helm?
 
-**Homie** is an open-source, privacy-first desktop AI assistant built natively for **Windows 10 and Windows 11**. It combines push-to-talk voice control, real-time screen vision, window management, anticipatory intelligence, and enterprise-grade security into a single lightweight tray application — with every piece of voice processing running 100% on your own hardware.
+**Helm** is an open-source, privacy-first desktop AI assistant built natively for **Windows 10 and Windows 11**. It combines push-to-talk voice control, real-time screen vision, window management, anticipatory intelligence, and enterprise-grade security into a single lightweight tray application — with every piece of voice processing running 100% on your own hardware.
 
 ### Core Capabilities
 
@@ -21,7 +21,7 @@
 | :--- | :--- |
 | **🎙️ Push-to-talk Voice** | Hold <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Space</kbd> anywhere, speak naturally, release to send. Local `faster-whisper` (CTranslate2 INT8) — audio never leaves your PC. |
 | **⚡ Instant Commands** | Window snapping, media keys, app launching, web search, time queries — bypass the AI entirely and run in **<50 ms**. |
-| **👀 Screen Vision & OCR** | *"What's on my screen?"* — Homie takes a high-res display capture and analyzes it on the spot. |
+| **👀 Screen Vision & OCR** | *"What's on my screen?"* — Helm takes a high-res display capture and analyzes it on the spot. |
 | **🪟 Window Management** | *"Put Chrome on the left and VS Code on the right"* — snaps across any number of monitors, respects the taskbar. |
 | **🧠 Durable Memory & Rules** | *"Remember to always reply in bullet points"* — stored persistently and injected into every future prompt. |
 | **🔮 Anticipatory Engine** | Pre-meeting intelligence cards, end-of-day briefings, ambient desktop intent monitoring. |
@@ -34,7 +34,7 @@
 
 ## 🤖 Multi-Provider AI
 
-Homie supports four AI providers — **start completely free** with local Ollama (no account, no key, 100% offline):
+Helm supports four AI providers — **start completely free** with local Ollama (no account, no key, 100% offline):
 
 | Provider | Free Tier | Supported Models |
 | :--- | :--- | :--- |
@@ -58,7 +58,7 @@ setx NVIDIA_API_KEY "nvapi-..."
 # Ollama needs no key — just run: ollama pull qwen2.5
 ```
 
-Or set it in `~/.config/homie/settings.json`:
+Or set it in `~/.config/helm/settings.json`:
 
 ```json
 {
@@ -95,7 +95,7 @@ pip install -r requirements.txt
 
 ---
 
-## 🎮 Launching Homie
+## 🎮 Launching Helm
 
 ### Desktop App
 
@@ -104,7 +104,7 @@ python app.py
 # or double-click run.bat
 ```
 
-Homie opens a compact chat window and adds a **System Tray** icon. Minimize it to keep it out of the way — the global push-to-talk shortcut works wherever Homie is running.
+Helm opens a compact chat window and adds a **System Tray** icon. Minimize it to keep it out of the way — the global push-to-talk shortcut works wherever Helm is running.
 
 ### Text-Only Terminal Chat
 
@@ -112,7 +112,7 @@ Homie opens a compact chat window and adds a **System Tray** icon. Minimize it t
 python chat_cli.py
 ```
 
-Streaming text conversation using your configured provider. Keeps full conversation history in memory, can read system vitals and recent Downloads via the ActionBroker. Set `HOMIE_NAME` to customize the assistant name.
+Streaming text conversation using your configured provider. Keeps full conversation history in memory, can read system vitals and recent Downloads via the ActionBroker. Set `HELM_NAME` to customize the assistant name.
 
 ### Global Hotkeys
 
@@ -126,7 +126,7 @@ Streaming text conversation using your configured provider. Keeps full conversat
 
 ## 🗣️ Things You Can Say
 
-| You Say | What Homie Does |
+| You Say | What Helm Does |
 | :--- | :--- |
 | *"Chrome on the left, Notepad on the right."* | Snaps and arranges both windows instantly. |
 | *"Pause music"* / *"Volume up"* | Triggers Windows media keys — 0 ms delay. |
@@ -144,27 +144,27 @@ Streaming text conversation using your configured provider. Keeps full conversat
 
 ```powershell
 # Ask a question
-python homie.py "What's on my screen?"
+python helm.py "What's on my screen?"
 
 # Capture all connected displays
-python homie.py --look
+python helm.py --look
 
 # Snap foreground window
-python homie.py --place "" left
-python homie.py --place chrome right
+python helm.py --place "" left
+python helm.py --place chrome right
 
 # Fast DuckDuckGo search (no key needed)
-python homie.py --search "faster-whisper windows"
+python helm.py --search "faster-whisper windows"
 
 # Read plain text from a URL
-python homie.py --read "https://news.ycombinator.com"
+python helm.py --read "https://news.ycombinator.com"
 
 # Save or remove persistent rules
-python homie.py --remember "Prefer concise code examples"
-python homie.py --forget "concise"
+python helm.py --remember "Prefer concise code examples"
+python helm.py --forget "concise"
 
 # Test instant command
-python homie.py --fast "pause music"
+python helm.py --fast "pause music"
 ```
 
 ---
@@ -173,7 +173,7 @@ python homie.py --fast "pause music"
 
 Message or send voice notes to your PC from anywhere — 100% free:
 
-- 🎙️ **Voice Walkie-Talkie**: Send a Telegram voice message; Homie transcribes it locally, executes, and replies to your phone.
+- 🎙️ **Voice Walkie-Talkie**: Send a Telegram voice message; Helm transcribes it locally, executes, and replies to your phone.
 - 📸 **`/screen`** — Get an instant screenshot of all your displays.
 - 🔒 **`/lock`** — Lock the workstation immediately from anywhere.
 - 🪟 **`/snap left`** / **`/snap right`** — Remote window management.
@@ -189,7 +189,7 @@ Message or send voice notes to your PC from anywhere — 100% free:
    ```powershell
    setx TELEGRAM_BOT_TOKEN "7890123456:AAH..."
    ```
-3. Run Homie (`.\run.bat`). In the tray menu, choose **Copy Telegram pairing command**, paste it into your bot's private chat. Send `/start` after pairing.
+3. Run Helm (`.\run.bat`). In the tray menu, choose **Copy Telegram pairing command**, paste it into your bot's private chat. Send `/start` after pairing.
 
 ---
 
@@ -197,31 +197,31 @@ Message or send voice notes to your PC from anywhere — 100% free:
 
 | Feature | How |
 | :--- | :--- |
-| **Mobile Web Audio Call** | Open `http://<your-pc-ip>:5055/call` in a mobile browser on Wi-Fi. Live two-way duplex voice — speak to Homie, hear synthesized answers in your earpiece. |
-| **Twilio PSTN Inbound** | Dial a real phone number. Homie picks up, executes your desktop task, replies over the phone line. |
+| **Mobile Web Audio Call** | Open `http://<your-pc-ip>:5055/call` in a mobile browser on Wi-Fi. Live two-way duplex voice — speak to Helm, hear synthesized answers in your earpiece. |
+| **Twilio PSTN Inbound** | Dial a real phone number. Helm picks up, executes your desktop task, replies over the phone line. |
 | **Wireless Trackpad / Remote** | Open `/remote` on your phone browser — full wireless trackpad, media controller, and presentation clicker (slide advance, blackout, keyboard input). |
 
 ---
 
 ## 🔌 Integrations
 
-### MCP Server (`homie_mcp.py`)
-Exposes Homie as a **Model Context Protocol** server over JSON-RPC 2.0. Claude Desktop, Cursor, and any MCP-aware IDE can natively query screen memory, snap windows, check system vitals, and control the PC without any extra plugin.
+### MCP Server (`helm_mcp.py`)
+Exposes Helm as a **Model Context Protocol** server over JSON-RPC 2.0. Claude Desktop, Cursor, and any MCP-aware IDE can natively query screen memory, snap windows, check system vitals, and control the PC without any extra plugin.
 
-### Mail & Calendar (`homie_mail_calendar.py`)
+### Mail & Calendar (`helm_mail_calendar.py`)
 Read and write emails and calendar events across **Google Workspace** and **Microsoft 365**. All write operations are gated behind WebAuthn physical verification.
 
-### Browser Automation (`homie_browser_broker.py`, `homie_cdp.py`)
+### Browser Automation (`helm_browser_broker.py`, `helm_cdp.py`)
 CDP-based browser control with WebAuthn gating and anti-TOCTOU DOM checks before any destructive browser action.
 
-### IDE Bridge (`homie_ide_bridge.py`)
-Bi-directional bridge between Homie and your active IDE session for autonomous code review and iterative engineering loops.
+### IDE Bridge (`helm_ide_bridge.py`)
+Bi-directional bridge between Helm and your active IDE session for autonomous code review and iterative engineering loops.
 
 ---
 
 ## 🧩 Plugin System
 
-Homie ships with a first-class plugin runtime. Drop a plugin folder into `plugins/` to extend capabilities at runtime.
+Helm ships with a first-class plugin runtime. Drop a plugin folder into `plugins/` to extend capabilities at runtime.
 
 **Bundled plugin:**
 - `plugins/spotify/` — Spotify playback control via Spotify Web API (see `plugins/spotify/README.md`)
@@ -230,9 +230,9 @@ Homie ships with a first-class plugin runtime. Drop a plugin folder into `plugin
 
 ```python
 # plugins/myplugin/plugin.py
-from homie_plugins import HomiePlugin
+from helm_plugins import HelmPlugin
 
-class MyPlugin(HomiePlugin):
+class MyPlugin(HelmPlugin):
     name = "myplugin"
 
     def on_command(self, text: str) -> bool:
@@ -242,27 +242,27 @@ class MyPlugin(HomiePlugin):
         return False             # pass through
 ```
 
-Place `manifest.json` alongside `plugin.py` to describe the plugin's name, version, and trigger phrases. Homie's plugin loader (`homie_plugins.py`) discovers and hot-loads plugins on startup.
+Place `manifest.json` alongside `plugin.py` to describe the plugin's name, version, and trigger phrases. Helm's plugin loader (`helm_plugins.py`) discovers and hot-loads plugins on startup.
 
-**Skill Compiler** (`skill_compiler.py`): Describe a workflow in natural language and Homie compiles it into a reusable, deterministic macro (<50 ms replay).
+**Skill Compiler** (`skill_compiler.py`): Describe a workflow in natural language and Helm compiles it into a reusable, deterministic macro (<50 ms replay).
 
 ---
 
 ## 🛡️ Security Architecture
 
-Homie was built from the ground up with a defense-in-depth security model. Key layers:
+Helm was built from the ground up with a defense-in-depth security model. Key layers:
 
 | Layer | Module | Detail |
 | :--- | :--- | :--- |
-| **AppContainer Sandbox** | `homie_confinement.py`, `worker_confinement.py` | Worker processes run inside AppContainer with a job-object kill switch — no escape to host process. |
+| **AppContainer Sandbox** | `helm_confinement.py`, `worker_confinement.py` | Worker processes run inside AppContainer with a job-object kill switch — no escape to host process. |
 | **WebAuthn Physical Gate** | `webauthn_verifier.py`, `phone_approval_portal.py` | Destructive or sensitive actions (mail write, browser automation, vault access) require physical phone verification. |
 | **Cryptographic Audit Ledger** | `agent_audit_ledger.py` | Immutable SHA-256 hash-chained ledger of every agent tool invocation. Dynamic nonce prompt-injection boundaries. |
 | **Session Taint Tracking** | `taint_tracker.py` | Sessions are tainted when untrusted data is ingested; subsequent write actions require out-of-band step-up approval. |
 | **Step-Up Approval Gate** | `step_up_gate.py` | Multi-stage confirmation for elevated actions; integrates with WebAuthn. |
 | **Crypto Vault** | `crypto_vault.py` | Encrypted local credential store with key recovery. |
 | **Policy Envelopes & Rails** | `policy_envelope.py`, `rails_config.py`, `rails_audit.py` | Declarative allow/deny policy rails around every agent action. |
-| **Prompt-Injection Defense** | `homie_confinement.py`, `rails_content_boundary.py` | Content boundary enforcement, credential stripping (`homie_credential_stripper.py`), SSRF prevention (`homie_ssrf.py`). |
-| **Intrusion Watch** | `homie_intrusion_watch.py` | Canary monitor + adversarial red-team (`adversarial_red_team.py`) with 100% kill rate across 112 security mutations in CI. |
+| **Prompt-Injection Defense** | `helm_confinement.py`, `rails_content_boundary.py` | Content boundary enforcement, credential stripping (`helm_credential_stripper.py`), SSRF prevention (`helm_ssrf.py`). |
+| **Intrusion Watch** | `helm_intrusion_watch.py` | Canary monitor + adversarial red-team (`adversarial_red_team.py`) with 100% kill rate across 112 security mutations in CI. |
 | **Injection Baseline Harness** | `injection_baseline_harness.py` | Automated mutation injection test harness used in the security regression suite. |
 | **Trust Tiers** | `trust_tiers.py`, `client_token_auth.py` | Tiered permission model for local UI, Telegram, MCP, and phone gateway channels. |
 
@@ -278,7 +278,7 @@ d:\homie\
 │
 ├── 🧠 Core
 │   ├── app.py                      # PyWebView chat window, hotkeys, system tray
-│   ├── homie.py                    # Core brain, fast command engine, safety gate
+│   ├── helm.py                    # Core brain, fast command engine, safety gate
 │   ├── chat_core.py                # Shared tool-aware conversation core
 │   ├── chat_cli.py                 # Text-only terminal chat interface
 │   ├── ai_engine.py                # Multi-provider AI router (Gemini / Groq / NVIDIA / Ollama)
@@ -287,14 +287,14 @@ d:\homie\
 │   ├── agent_tools.py              # Agent tool definitions and schema
 │   ├── durable_memory.py           # Persistent memory & custom rules store
 │   ├── task_manager.py             # Background task lifecycle management
-│   └── homie_lazy.py               # Lazy-import bootstrapper for fast startup
+│   └── helm_lazy.py               # Lazy-import bootstrapper for fast startup
 │
 ├── 🎙️ Voice & TTS
 │   ├── voice.py                    # Local Whisper STT & live RMS visualizer
 │   ├── voice_pipeline.py           # STT → router → TTS pipeline orchestration
 │   ├── voice_inject.py             # Voice barge-in & interrupt handling
-│   ├── homie_voice_stream.py       # Streaming voice session management
-│   ├── homie_tts.py                # Neural TTS (Kokoro / Piper / Windows SAPI)
+│   ├── helm_voice_stream.py       # Streaming voice session management
+│   ├── helm_tts.py                # Neural TTS (Kokoro / Piper / Windows SAPI)
 │   ├── wake_word_engine.py         # Always-on wake-word detection (optional)
 │   └── pipeline_telemetry.py       # Per-stage latency tracking (STT/Router/Win32/TTS)
 │
@@ -302,23 +302,23 @@ d:\homie\
 │   ├── ui/chat.html                # Compact chat window, transcript, voice controls
 │   ├── ui/settings.html            # Settings pane (hotkey, models, safe mode)
 │   ├── tray_hud.py                 # System tray icon & HUD overlay
-│   ├── homie_hud.py                # HUD rendering engine
-│   ├── homie_omnibar.py            # Fuzzy search launcher overlay (Ctrl+Space)
-│   ├── homie_canvas.py             # Canvas drawing layer
-│   ├── homie_ghost_desktop.py      # Ghost desktop preview mode
+│   ├── helm_hud.py                # HUD rendering engine
+│   ├── helm_omnibar.py            # Fuzzy search launcher overlay (Ctrl+Space)
+│   ├── helm_canvas.py             # Canvas drawing layer
+│   ├── helm_ghost_desktop.py      # Ghost desktop preview mode
 │   └── windows_tools.py            # Win32 automation (monitors, media keys, mss)
 │
 ├── 🔮 Anticipatory Engine & Memory
-│   ├── homie_anticipatory.py       # Pre-meeting intelligence, ambient monitoring
-│   ├── homie_briefing.py           # End-of-day briefing generator
-│   ├── homie_briefs.py             # Morning brief & daily digest
+│   ├── helm_anticipatory.py       # Pre-meeting intelligence, ambient monitoring
+│   ├── helm_briefing.py           # End-of-day briefing generator
+│   ├── helm_briefs.py             # Morning brief & daily digest
 │   ├── semantic_screen_memory.py   # Hybrid vector-search screen memory
 │   ├── screen_ocr_engine.py        # OCR pipeline for semantic indexing
-│   ├── homie_memory_extractor.py   # Entity & fact extraction from screen frames
-│   ├── homie_context_search.py     # Semantic search across screen memory
-│   ├── homie_knowledge_graph.py    # Knowledge graph over extracted entities
+│   ├── helm_memory_extractor.py   # Entity & fact extraction from screen frames
+│   ├── helm_context_search.py     # Semantic search across screen memory
+│   ├── helm_knowledge_graph.py    # Knowledge graph over extracted entities
 │   ├── focus_tracker.py            # Active window & attention tracking
-│   ├── homie_focus_mode.py         # Focus mode: close distractions, open tools
+│   ├── helm_focus_mode.py         # Focus mode: close distractions, open tools
 │   ├── assistant_timeline.py       # Event timeline & timeline-aware queries
 │   └── meeting_notes.py            # Auto meeting notes from screen/audio
 │
@@ -329,55 +329,55 @@ d:\homie\
 │   ├── crypto_vault.py             # Encrypted local credential vault
 │   ├── webauthn_verifier.py        # WebAuthn physical phone gate
 │   ├── phone_approval_portal.py    # Out-of-band approval portal
-│   ├── homie_confinement.py        # AppContainer sandbox enforcement
+│   ├── helm_confinement.py        # AppContainer sandbox enforcement
 │   ├── worker_confinement.py       # Job-object kill for worker processes
-│   ├── homie_structured_approval.py# Structured confirmation protocol
+│   ├── helm_structured_approval.py# Structured confirmation protocol
 │   ├── policy_envelope.py          # Declarative action policy envelopes
 │   ├── rails_config.py             # Policy rails configuration
 │   ├── rails_audit.py              # Rails audit trail
 │   ├── rails_content_boundary.py   # Prompt content boundary enforcement
 │   ├── rails_confirmation.py       # Action confirmation rails
-│   ├── homie_credential_stripper.py# Strip credentials from prompts/logs
-│   ├── homie_ssrf.py               # SSRF prevention layer
-│   ├── homie_quarantine_reader.py  # Quarantine untrusted file content
+│   ├── helm_credential_stripper.py# Strip credentials from prompts/logs
+│   ├── helm_ssrf.py               # SSRF prevention layer
+│   ├── helm_quarantine_reader.py  # Quarantine untrusted file content
 │   ├── trust_tiers.py              # Channel trust tier model
 │   ├── client_token_auth.py        # Token auth for MCP / API clients
 │   ├── injection_baseline_harness.py # Mutation injection test harness
 │   ├── adversarial_red_team.py     # Automated adversarial testing
-│   ├── homie_intrusion_watch.py    # Canary & intrusion monitor
+│   ├── helm_intrusion_watch.py    # Canary & intrusion monitor
 │   ├── canary_monitor.py           # File-system canary tokens
 │   └── log_redactor.py             # PII / credential log redaction
 │
 ├── 🤖 VLA Desktop Agent
 │   ├── desktop_agent.py            # UIA-first accessibility grounding agent
-│   ├── homie_vla_agent.py          # VLA desktop action planner
+│   ├── helm_vla_agent.py          # VLA desktop action planner
 │   ├── grounding_tools.py          # UI element grounding & tree traversal
 │   ├── workflow_compiler.py        # Natural-language → <50ms macro compiler
 │   ├── skill_compiler.py           # Skill DSL compiler & registry
-│   └── homie_skills.py             # Skill runtime & execution
+│   └── helm_skills.py             # Skill runtime & execution
 │
 ├── 🔌 Integrations
-│   ├── homie_mcp.py                # MCP server (JSON-RPC 2.0)
+│   ├── helm_mcp.py                # MCP server (JSON-RPC 2.0)
 │   ├── telegram_bridge.py          # Telegram bot (voice, /screen, /lock, /snap, /open, /media)
 │   ├── phone_gateway.py            # Twilio PSTN inbound voice gateway
 │   ├── mobile_remote.py            # Wireless trackpad / presentation remote
-│   ├── homie_mail_calendar.py      # Mail & Calendar (Google + M365, WebAuthn gated)
-│   ├── homie_browser_broker.py     # CDP browser automation broker
-│   ├── homie_cdp.py                # Chrome DevTools Protocol bridge
-│   ├── homie_ide_bridge.py         # IDE bi-directional bridge
+│   ├── helm_mail_calendar.py      # Mail & Calendar (Google + M365, WebAuthn gated)
+│   ├── helm_browser_broker.py     # CDP browser automation broker
+│   ├── helm_cdp.py                # Chrome DevTools Protocol bridge
+│   ├── helm_ide_bridge.py         # IDE bi-directional bridge
 │   ├── claude_bridge.py            # Claude Desktop / Cursor bridge
 │   ├── notification_mirror.py      # Windows notification mirroring
-│   └── homie_attachments.py        # File/image attachment handling
+│   └── helm_attachments.py        # File/image attachment handling
 │
 ├── 🛠️ Tools & Utilities
-│   ├── homie_everything_search.py  # Everything SDK fast file search
-│   ├── homie_file_witness.py       # File system change witness
+│   ├── helm_everything_search.py  # Everything SDK fast file search
+│   ├── helm_file_witness.py       # File system change witness
 │   ├── file_indexer.py             # Semantic file indexer
-│   ├── homie_netstat.py            # Network state inspector
-│   ├── homie_resource_tracker.py   # CPU/memory/disk resource tracking
-│   ├── homie_hardware_profiler.py  # Hardware capability profiling
-│   ├── homie_apps_catalog.py       # Installed app catalog & fuzzy match
-│   ├── homie_layout_profiles.py    # Saved window layout profiles
+│   ├── helm_netstat.py            # Network state inspector
+│   ├── helm_resource_tracker.py   # CPU/memory/disk resource tracking
+│   ├── helm_hardware_profiler.py  # Hardware capability profiling
+│   ├── helm_apps_catalog.py       # Installed app catalog & fuzzy match
+│   ├── helm_layout_profiles.py    # Saved window layout profiles
 │   ├── quick_notes.py              # Quick sticky-note capture
 │   ├── reminder_scheduler.py       # In-process reminder scheduler
 │   ├── clipboard_classifier.py     # Clipboard content classifier
@@ -385,30 +385,30 @@ d:\homie\
 │   └── event_log.py                # Structured event log
 │
 ├── 🏃 Runtime & Distribution
-│   ├── homie_supervisor.py         # Background supervisor daemon
-│   ├── homie_supervisor_daemon.py  # Daemon process manager
-│   ├── homie_watchdog.py           # Health watchdog & auto-restart
-│   ├── homie_selfheal.py           # Self-healing recovery logic
-│   ├── homie_updater.py            # Velopack auto-updater (Ed25519-signed)
+│   ├── helm_supervisor.py         # Background supervisor daemon
+│   ├── helm_supervisor_daemon.py  # Daemon process manager
+│   ├── helm_watchdog.py           # Health watchdog & auto-restart
+│   ├── helm_selfheal.py           # Self-healing recovery logic
+│   ├── helm_updater.py            # Velopack auto-updater (Ed25519-signed)
 │   ├── update_verifier.py          # Monotonic rollback protection
 │   ├── heartbeat_service.py        # Heartbeat lease service
 │   ├── heartbeat_lease.py          # Lease acquisition & renewal
 │   ├── key_recovery.py             # Vault key recovery flow
 │   ├── kill_switch.py              # Emergency kill switch
-│   ├── homie_session_compression.py# Long-session context compression
-│   ├── homie_retrospective.py      # Session retrospective & learning
+│   ├── helm_session_compression.py# Long-session context compression
+│   ├── helm_retrospective.py      # Session retrospective & learning
 │   ├── startup_bench.py            # Startup latency benchmark
 │   ├── shadow_mode.py              # Shadow / dry-run execution mode
 │   ├── presence_monitor.py         # User presence detection
 │   ├── device_registry.py          # Registered device management
 │   ├── install.ps1                 # Automated Windows installer
 │   ├── run.bat                     # Windows batch launcher
-│   ├── homie.spec                  # PyInstaller spec
+│   ├── helm.spec                  # PyInstaller spec
 │   ├── packaging/                  # MSIX, Inno Setup, WinGet manifests
 │   └── requirements.txt            # Python dependencies
 │
 ├── 🧩 Plugins
-│   ├── homie_plugins.py            # Plugin loader & runtime
+│   ├── helm_plugins.py            # Plugin loader & runtime
 │   └── plugins/spotify/            # Spotify Web API plugin
 │
 └── 🧪 Tests (90+ files)
@@ -419,7 +419,7 @@ d:\homie\
 
 ## 🧪 Running Tests
 
-Homie has a comprehensive test suite — **90+ test files** covering security hardening, voice pipeline, UI integration, tools, red-team adversarial scenarios, and mutation injection:
+Helm has a comprehensive test suite — **90+ test files** covering security hardening, voice pipeline, UI integration, tools, red-team adversarial scenarios, and mutation injection:
 
 ```powershell
 python -m pytest -q
@@ -428,10 +428,10 @@ python -m pytest -q
 `tests/conftest.py` resets safety state between tests. Key test areas:
 
 - **Security** — `test_batch29`–`test_batch43_security_hardening.py`, `test_confinement_attacks.py`, `test_injection_baseline_harness.py`, `test_tier_a_adversarial.py`, `test_semantic_red_team.py`, `test_model_level_red_team.py`, `test_fuzz_guardrails.py`
-- **Voice** — `test_voice.py`, `test_voice_pipeline.py`, `test_wake_word_engine.py`, `test_homie_tts.py`
+- **Voice** — `test_voice.py`, `test_voice_pipeline.py`, `test_wake_word_engine.py`, `test_helm_tts.py`
 - **Desktop Agent / VLA** — `test_desktop_agent_evals.py`, `test_grounding_tools.py`, `test_skill_compiler_and_recovery.py`, `test_omnibar_wiring.py`
 - **Integrations** — `test_mail_calendar.py`, `test_telegram_bridge.py`, `test_webauthn_verifier.py`, `test_browser_broker.py`, `test_hardened_phone_gateway.py`
-- **Core** — `test_homie.py`, `test_fast_commands.py`, `test_windows_tools.py`, `test_durable_memory.py`, `test_chat_core.py`
+- **Core** — `test_helm.py`, `test_fast_commands.py`, `test_windows_tools.py`, `test_durable_memory.py`, `test_chat_core.py`
 
 ---
 
@@ -441,8 +441,8 @@ python -m pytest -q
 | :--- | :--- |
 | **Cross-device sync** | Sync memory, rules, and layout profiles across multiple Windows PCs via encrypted relay. |
 | **Real-time streaming voice** | Continuous voice mode (always-listening VAD) with sub-200 ms round-trip end-to-end. |
-| **macOS port** | Bring Homie's core voice + window management to macOS using Accessibility APIs. |
-| **Plugin marketplace** | Signed community plugin registry — discover and install Homie plugins in one click. |
+| **macOS port** | Bring Helm's core voice + window management to macOS using Accessibility APIs. |
+| **Plugin marketplace** | Signed community plugin registry — discover and install Helm plugins in one click. |
 | **Workflow engine** | Visual drag-and-drop pipeline builder that compiles to the skill compiler's macro format. |
 
 ---
@@ -469,7 +469,7 @@ Areas especially welcoming contributions: new plugins, additional language/TTS s
 
 ## 📜 Credits & Acknowledgments
 
-- **Atticus for macOS**: Concept and original inspiration from [Caleb Writes Code](https://youtube.com/@calebwritescode) and [SaarthurR/atticus-mac](https://github.com/SaarthurR/atticus-mac). Homie is an independent Windows-native reimplementation.
+- **Atticus for macOS**: Concept and original inspiration from [Caleb Writes Code](https://youtube.com/@calebwritescode) and [SaarthurR/atticus-mac](https://github.com/SaarthurR/atticus-mac). Helm is an independent Windows-native reimplementation.
 - **Thinking Orbs**: Canvas particle animation by [Jakub Antalik](https://github.com/Jakubantalik/thinking-orbs) (MIT).
 - Built with Python, PyWebView, faster-whisper, and PyWin32.
 

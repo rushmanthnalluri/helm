@@ -35,15 +35,15 @@ if BASE_DIR not in sys.path:
 import update_verifier
 import policy_envelope
 import phone_approval_portal
-import homie_supervisor
+import helm_supervisor
 from tests.phone_testing_keys import generate_test_phone_keypair, sign_enrollment_approval, get_test_pairing_code
 
 
 class TestBatch34SecurityHardening(unittest.TestCase):
 
     def setUp(self):
-        os.environ["HOMIE_TEST_ENV"] = "1"
-        os.environ["HOMIE_COMPLETE_MEDIATION"] = "1"
+        os.environ["HELM_TEST_ENV"] = "1"
+        os.environ["HELM_COMPLETE_MEDIATION"] = "1"
 
     def test_1_rotated_pinned_publisher_public_key(self):
         """Directive 1: Pinned publisher key has been rotated to new key and is valid Ed25519."""
@@ -60,7 +60,7 @@ class TestBatch34SecurityHardening(unittest.TestCase):
             signature="test_sig",
             expiry=time.time() + 300,
             allowed_process_images=["notepad.exe"],
-            allowed_action_types=["homie_agent_type", "homie_send_hotkey"],
+            allowed_action_types=["helm_agent_type", "helm_send_hotkey"],
             step_budget=20,
             keystroke_cap=500,
             allowed_domains=["allowed.com"],
@@ -80,7 +80,7 @@ class TestBatch34SecurityHardening(unittest.TestCase):
 
         for idx, args in enumerate(allowed_cases):
             ok, msg, _ = env.check_boundary(
-                "homie_agent_type", args, "notepad.exe", 1, "allowed.com"
+                "helm_agent_type", args, "notepad.exe", 1, "allowed.com"
             )
             self.assertTrue(ok, f"Allowed case {idx} with args {args} was falsely rejected: {msg}")
 
@@ -99,7 +99,7 @@ class TestBatch34SecurityHardening(unittest.TestCase):
 
         for idx, args in enumerate(blocked_cases):
             ok, msg, _ = env.check_boundary(
-                "homie_agent_type", args, "notepad.exe", 1, "allowed.com"
+                "helm_agent_type", args, "notepad.exe", 1, "allowed.com"
             )
             self.assertFalse(ok, f"Blocked case {idx} with args {args} should have been rejected")
             self.assertIn("enter", msg.lower())
@@ -107,8 +107,8 @@ class TestBatch34SecurityHardening(unittest.TestCase):
     def test_3_envelope_reservation_token_single_point_release_across_supervisor_exits(self):
         """Directive 3: Envelope reservation token guarantees 0 leaked reservations across all supervisor exits."""
         import heartbeat_lease
-        supervisor = homie_supervisor.PolicySupervisor()
-        supervisor.state = homie_supervisor.STATE_ARMED
+        supervisor = helm_supervisor.PolicySupervisor()
+        supervisor.state = helm_supervisor.STATE_ARMED
         supervisor.lease_token, _ = heartbeat_lease.acquire_lease("supervisor_worker", duration=30.0)
         supervisor.last_heartbeat_time = time.time()
 
@@ -118,7 +118,7 @@ class TestBatch34SecurityHardening(unittest.TestCase):
             signature="test_sig",
             expiry=time.time() + 300,
             allowed_process_images=["chrome.exe"],
-            allowed_action_types=["homie_agent_type"],
+            allowed_action_types=["helm_agent_type"],
             step_budget=10,
             keystroke_cap=100,
             allowed_domains=["secure-portal.com"],
@@ -130,13 +130,13 @@ class TestBatch34SecurityHardening(unittest.TestCase):
         with patch("windows_tools.get_foreground_window", return_value={"proc_name": "chrome.exe", "title": "secure-portal.com"}):
             # Exit Path 1: Taint check hard denial
             with patch("taint_tracker.check_action_privilege", return_value=(False, False, "Taint Denied")):
-                supervisor._handle_propose({"tool": "homie_agent_type", "args": {"text": "hello"}}, seq=1)
+                supervisor._handle_propose({"tool": "helm_agent_type", "args": {"text": "hello"}}, seq=1)
             self.assertEqual(env.reserved_steps, 0)
             self.assertEqual(env.steps_consumed, 0)
 
             # Exit Path 2: Step-up token required (NEEDS_HUMAN)
             with patch("taint_tracker.check_action_privilege", return_value=(False, True, "Needs step-up")):
-                supervisor._handle_propose({"tool": "homie_agent_type", "args": {"text": "hello"}}, seq=2)
+                supervisor._handle_propose({"tool": "helm_agent_type", "args": {"text": "hello"}}, seq=2)
             self.assertEqual(env.reserved_steps, 0)
             self.assertEqual(env.steps_consumed, 0)
 
@@ -144,7 +144,7 @@ class TestBatch34SecurityHardening(unittest.TestCase):
             with patch("taint_tracker.check_action_privilege", return_value=(True, False, "Allowed")):
                 with patch("shadow_mode.is_shadow_mode_active", return_value=True):
                     with patch("shadow_mode.record_simulated_action", return_value={"action_id": "sim_1"}):
-                        supervisor._handle_propose({"tool": "homie_agent_type", "args": {"text": "hello"}}, seq=3)
+                        supervisor._handle_propose({"tool": "helm_agent_type", "args": {"text": "hello"}}, seq=3)
             self.assertEqual(env.reserved_steps, 0)
             self.assertEqual(env.steps_consumed, 0)
 
@@ -152,7 +152,7 @@ class TestBatch34SecurityHardening(unittest.TestCase):
             with patch("taint_tracker.check_action_privilege", return_value=(True, False, "Allowed")):
                 with patch("shadow_mode.is_shadow_mode_active", return_value=False):
                     with patch.object(supervisor.actuator, "execute_actuator", side_effect=RuntimeError("Actuator crashed")):
-                        supervisor._handle_propose({"tool": "homie_agent_type", "args": {"text": "hello"}}, seq=4)
+                        supervisor._handle_propose({"tool": "helm_agent_type", "args": {"text": "hello"}}, seq=4)
             self.assertEqual(env.reserved_steps, 0)
             self.assertEqual(env.steps_consumed, 0)
 
@@ -190,7 +190,7 @@ class TestBatch34SecurityHardening(unittest.TestCase):
             signature="test_sig",
             expiry=time.time() + 300,
             allowed_process_images=["notepad.exe"],
-            allowed_action_types=["homie_agent_type", "homie_send_hotkey"],
+            allowed_action_types=["helm_agent_type", "helm_send_hotkey"],
             step_budget=10,
             keystroke_cap=100,
             allowed_domains=["allowed.com"],
@@ -200,7 +200,7 @@ class TestBatch34SecurityHardening(unittest.TestCase):
 
         # Policy envelope rejects synthetic hotkey Ctrl+Alt+P
         ok, msg, _ = env.check_boundary(
-            "homie_send_hotkey", {"hotkey": "ctrl+alt+p"}, "notepad.exe", 1, "allowed.com"
+            "helm_send_hotkey", {"hotkey": "ctrl+alt+p"}, "notepad.exe", 1, "allowed.com"
         )
         self.assertFalse(ok)
         self.assertIn("ctrl+alt+p", msg.lower())
@@ -216,7 +216,7 @@ class TestBatch34SecurityHardening(unittest.TestCase):
                 signature="test_sig",
                 expiry=time.time() + 300,
                 allowed_process_images=[proc],
-                allowed_action_types=["homie_agent_type"],
+                allowed_action_types=["helm_agent_type"],
                 step_budget=5,
                 keystroke_cap=100,
                 allowed_domains=["authorized.com"],
@@ -226,7 +226,7 @@ class TestBatch34SecurityHardening(unittest.TestCase):
 
             # Out of scope domain navigation is blocked
             ok, msg, _ = env.check_boundary(
-                "homie_agent_type", {"text": "hello"}, proc, 1, current_domain="evil.com"
+                "helm_agent_type", {"text": "hello"}, proc, 1, current_domain="evil.com"
             )
             self.assertFalse(ok, f"Browser process {proc} must enforce domain scoping")
             self.assertIn("domain", msg.lower())

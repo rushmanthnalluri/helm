@@ -1,4 +1,4 @@
-"""Workspace Presets and Multi-Window Layout Manager for Homie.
+"""Workspace Presets and Multi-Window Layout Manager for Helm.
 Saves and restores multi-window arrangements across monitors (e.g. 'dev', 'meeting', 'social')
 keyed by process names with automatic coordinate restoration.
 """

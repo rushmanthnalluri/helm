@@ -1,4 +1,4 @@
-"""grounding_tools.py - Grounded UI Automation Tools for Homie Agent.
+"""grounding_tools.py - Grounded UI Automation Tools for Helm Agent.
 
 Provides robust Vision-Language-Action (VLA) grounding:
 - UI element discovery with Set-of-Marks (SoM) numerical badges
@@ -6,7 +6,7 @@ Provides robust Vision-Language-Action (VLA) grounding:
 - Grounded text typing via UIA ValuePattern (avoiding clipboard pollution)
 - Post-action UIA and vision verification
 
-Wraps HomieVLAAgent from homie_vla_agent.py with comprehensive fallbacks.
+Wraps HelmVLAAgent from helm_vla_agent.py with comprehensive fallbacks.
 """
 
 from __future__ import annotations
@@ -18,16 +18,16 @@ from typing import Any, Dict, List, Optional
 import windows_tools
 
 try:
-    import homie_vla_agent
-    from homie_vla_agent import HomieVLAAgent, get_vla_agent, UIElementMark, SetOfMarksEngine
+    import helm_vla_agent
+    from helm_vla_agent import HelmVLAAgent, get_vla_agent, UIElementMark, SetOfMarksEngine
 except ImportError:
-    homie_vla_agent = None
-    HomieVLAAgent = None
+    helm_vla_agent = None
+    HelmVLAAgent = None
     get_vla_agent = None
     UIElementMark = None
     SetOfMarksEngine = None
 
-logger = logging.getLogger("homie.grounding_tools")
+logger = logging.getLogger("helm.grounding_tools")
 
 
 def get_screen_elements(window_title: Optional[str] = None) -> dict:
@@ -193,7 +193,7 @@ def grounded_click(target_description: str, app_window_title: Optional[str] = No
         cx, cy = matched.get("center", [0, 0])
         import action_broker
         ok, msg, _ = action_broker.execute_action(
-            "homie_agent_click",
+            "helm_agent_click",
             {"x": cx, "y": cy, "element_name": matched.get("name", "")}
         )
 
@@ -303,7 +303,7 @@ def grounded_type(target_description: str, text: str, app_window_title: Optional
         if not applied:
             import action_broker
             ok, msg, _ = action_broker.execute_action(
-                "homie_agent_type",
+                "helm_agent_type",
                 {"text": text, "element_name": matched.get("name", "")}
             )
             applied = ok

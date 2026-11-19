@@ -1,6 +1,6 @@
-# 🤝 Contributing to Homie
+# 🤝 Contributing to Helm
 
-Thank you for your interest in contributing to **Homie** — an open-source Windows desktop AI assistant built with Python. Whether you're squashing bugs, dreaming up features, or just improving a typo in the docs, every contribution makes Homie smarter, safer, and more useful for everyone. We're glad you're here! 🎉
+Thank you for your interest in contributing to **Helm** — an open-source Windows desktop AI assistant built with Python. Whether you're squashing bugs, dreaming up features, or just improving a typo in the docs, every contribution makes Helm smarter, safer, and more useful for everyone. We're glad you're here! 🎉
 
 ---
 
@@ -9,10 +9,10 @@ Thank you for your interest in contributing to **Homie** — an open-source Wind
 There are many ways to get involved — no contribution is too small:
 
 - 🐛 **Bug Reports** — Found something broken? Open an issue with clear reproduction steps, your OS version, and any relevant logs.
-- 💡 **Feature Requests** — Have an idea that would make Homie better? Open a discussion or issue describing the problem you're solving and your proposed approach.
-- 🔌 **Plugins** — Extend Homie's capabilities by writing a new plugin. See [Adding a Plugin](#-adding-a-plugin) below.
+- 💡 **Feature Requests** — Have an idea that would make Helm better? Open a discussion or issue describing the problem you're solving and your proposed approach.
+- 🔌 **Plugins** — Extend Helm's capabilities by writing a new plugin. See [Adding a Plugin](#-adding-a-plugin) below.
 - 📝 **Documentation** — Improve README files, add docstrings, write guides, or fix typos. Great docs are a superpower.
-- 🌐 **Translations** — Help make Homie accessible to more users by contributing locale strings.
+- 🌐 **Translations** — Help make Helm accessible to more users by contributing locale strings.
 - 🔬 **Tests** — Add test coverage for untested paths, edge cases, or new features.
 
 ---
@@ -21,7 +21,7 @@ There are many ways to get involved — no contribution is too small:
 
 ### Prerequisites
 
-- **Windows 10 or Windows 11** (required — Homie uses Windows-native APIs)
+- **Windows 10 or Windows 11** (required — Helm uses Windows-native APIs)
 - **Python 3.10 or later** (Python 3.14 recommended to match CI)
 - **Git**
 
@@ -29,8 +29,8 @@ There are many ways to get involved — no contribution is too small:
 
 ```powershell
 # 1. Fork the repo on GitHub, then clone your fork
-git clone https://github.com/<your-username>/homie.git
-cd homie
+git clone https://github.com/<your-username>/helm.git
+cd helm
 
 # 2. (Recommended) Create and activate a virtual environment
 python -m venv .venv
@@ -43,20 +43,20 @@ pip install -r requirements.txt
 python app.py
 
 # 5. Or run the CLI brain
-python homie.py
+python helm.py
 
 # 6. Or launch the terminal chat interface
 python chat_cli.py
 ```
 
 > [!NOTE]
-> Configuration lives at `%USERPROFILE%\.config\homie\settings.json`. You can also override most settings via environment variables. See the README for details.
+> Configuration lives at `%USERPROFILE%\.config\helm\settings.json`. You can also override most settings via environment variables. See the README for details.
 
 ---
 
 ## 🧪 Running Tests
 
-Homie has a comprehensive test suite with **350+ tests across 90+ test files**.
+Helm has a comprehensive test suite with **350+ tests across 90+ test files**.
 
 ### Run the Full Suite
 
@@ -130,7 +130,7 @@ The following modules implement core trust and safety mechanisms. **Any pull req
 | Module | Purpose |
 |---|---|
 | `webauthn_verifier.py` | FIDO2/WebAuthn credential verification |
-| `homie_confinement.py` | Main process sandboxing and confinement |
+| `helm_confinement.py` | Main process sandboxing and confinement |
 | `worker_confinement.py` | AppContainer worker sandboxing |
 | `rails_*.py` | Safety rails and output filtering |
 | `taint_tracker.py` | Taint propagation for untrusted input |
@@ -156,7 +156,7 @@ python -m pytest tests/test_security_mutations.py -q
 
 ## 🔌 Adding a Plugin
 
-Homie's plugin system lives in `homie_plugins.py` and the `plugins/` directory. The best reference implementation is the **Spotify plugin**:
+Helm's plugin system lives in `helm_plugins.py` and the `plugins/` directory. The best reference implementation is the **Spotify plugin**:
 
 ```
 plugins/
@@ -173,7 +173,7 @@ Declares the plugin's identity, version, required permissions, and the intents i
 {
   "name": "spotify",
   "version": "1.0.0",
-  "description": "Control Spotify playback via Homie.",
+  "description": "Control Spotify playback via Helm.",
   "permissions": ["network"],
   "intents": ["play_music", "pause_music", "skip_track"]
 }
@@ -181,7 +181,7 @@ Declares the plugin's identity, version, required permissions, and the intents i
 
 ### `plugin.py`
 
-Implements the intent handlers that Homie dispatches to:
+Implements the intent handlers that Helm dispatches to:
 
 ```python
 class SpotifyPlugin:
@@ -210,9 +210,9 @@ Open an issue to discuss your plugin idea before building something large — we
 
 The following files and patterns must **never** appear in a commit:
 
-- `.homie_vault.key`
-- `.homie_session.token`
-- `.homie_ledger_hmac.key`
+- `.helm_vault.key`
+- `.helm_session.token`
+- `.helm_ledger_hmac.key`
 - `.env`
 - API keys, tokens, or passwords of any kind
 
@@ -260,9 +260,9 @@ security(crypto_vault): rotate key derivation to Argon2id
 
 **Please do not report security vulnerabilities as public GitHub issues.**
 
-If you discover a security vulnerability in Homie:
+If you discover a security vulnerability in Helm:
 
-1. **GitHub Security Advisories (preferred):** Open a [private security advisory](https://github.com/your-org/homie/security/advisories/new) on the repository. This keeps the report confidential until a fix is ready.
+1. **GitHub Security Advisories (preferred):** Open a [private security advisory](https://github.com/your-org/helm/security/advisories/new) on the repository. This keeps the report confidential until a fix is ready.
 2. **Email:** Send details to the maintainers via the security contact listed in `SECURITY.md`.
 
 Please include:
@@ -270,16 +270,16 @@ Please include:
 - Reproduction steps or a minimal proof-of-concept
 - Affected versions or modules
 
-We aim to acknowledge reports within **48 hours** and to coordinate disclosure with you. Thank you for helping keep Homie and its users safe. 🛡️
+We aim to acknowledge reports within **48 hours** and to coordinate disclosure with you. Thank you for helping keep Helm and its users safe. 🛡️
 
 ---
 
 ## 📄 License
 
-Homie is released under the **MIT License**. By contributing, you agree that your contributions will be licensed under the same MIT License that covers the project.
+Helm is released under the **MIT License**. By contributing, you agree that your contributions will be licensed under the same MIT License that covers the project.
 
 See [`LICENSE`](./LICENSE) for the full license text.
 
 ---
 
-*Happy hacking! If you have any questions, feel free to open a discussion or reach out in the community chat. We're excited to build Homie with you.* 🏠✨
+*Happy hacking! If you have any questions, feel free to open a discussion or reach out in the community chat. We're excited to build Helm with you.* 🏠✨

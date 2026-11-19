@@ -1,5 +1,5 @@
 """
-Homie Voice Caret Text Injection — System-wide inline text injection.
+Helm Voice Caret Text Injection — System-wide inline text injection.
 Pastes transcribed text directly at the current caret/cursor position
 in any active foreground application (Word, Slack, VSCode, Browser, etc.).
 """

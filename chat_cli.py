@@ -1,4 +1,4 @@
-"""Run Homie's text-first, streaming terminal conversation."""
+"""Run Helm's text-first, streaming terminal conversation."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ DEFAULT_PREFS = {
 
 
 def config_dir() -> Path:
-    return Path(os.environ.get("HOMIE_DIR") or (Path.home() / ".config" / "homie"))
+    return Path(os.environ.get("HELM_DIR") or (Path.home() / ".config" / "helm"))
 
 
 def load_preferences() -> dict:
@@ -51,7 +51,7 @@ def load_mission() -> str:
 
 def main() -> int:
     prefs = load_preferences()
-    assistant_name = os.environ.get("HOMIE_NAME") or prefs.get("assistantName") or "Homie"
+    assistant_name = os.environ.get("HELM_NAME") or prefs.get("assistantName") or "Helm"
     registry = build_default_registry()
     import durable_memory
     memory_store = durable_memory.get_default_memory_store()

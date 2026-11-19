@@ -1,4 +1,4 @@
-"""Homie Per-Client Scoped Revocable Token Manager.
+"""Helm Per-Client Scoped Revocable Token Manager.
 Provides cryptographically secure authentication tokens for MCP clients, IDE plugins,
 and remote agents:
 - Enforces Principle of Least Privilege: Default scope is strictly READ_ONLY
@@ -22,7 +22,7 @@ if BASE_DIR not in sys.path:
 
 import db_utils
 
-logger = logging.getLogger("homie.token_auth")
+logger = logging.getLogger("helm.token_auth")
 
 VALID_SCOPES = {"READ_ONLY", "SENSITIVE_READ", "WRITE_EXEC", "ADMIN"}
 
@@ -69,7 +69,7 @@ def create_client_token(client_name, scopes=None, ttl_seconds=86400 * 30):
         raise ValueError(f"Invalid scope(s): {invalid}. Allowed: {VALID_SCOPES}")
 
     token_id = secrets.token_hex(8)
-    secret_key = f"homie_tk_{token_id}_{secrets.token_urlsafe(24)}"
+    secret_key = f"helm_tk_{token_id}_{secrets.token_urlsafe(24)}"
     token_hash = _hash_token(secret_key)
     now = time.time()
     expires_at = (now + ttl_seconds) if ttl_seconds else None

@@ -2,12 +2,12 @@ with open("tests/test_batch7.py", "rb") as f:
     c = f.read().decode("utf-8")
 
 old = """        # Search on screen fast command
-        handled3, msg3 = homie.try_fast_command("find on screen test_batch7.py")"""
+        handled3, msg3 = helm.try_fast_command("find on screen test_batch7.py")"""
 
 new = """        # Search on screen fast command
         import semantic_screen_memory
-        semantic_screen_memory.record_screen_event("code.exe", "test_batch7.py - homie", "def test_something(): pass")
-        handled3, msg3 = homie.try_fast_command("find on screen test_batch7.py")"""
+        semantic_screen_memory.record_screen_event("code.exe", "test_batch7.py - helm", "def test_something(): pass")
+        handled3, msg3 = helm.try_fast_command("find on screen test_batch7.py")"""
 
 crlf = "\r\n" in c
 cn = c.replace("\r\n", "\n")

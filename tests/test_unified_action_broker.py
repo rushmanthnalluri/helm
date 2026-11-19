@@ -20,19 +20,19 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 import action_broker
-import homie_supervisor
+import helm_supervisor
 import kill_switch
 import taint_tracker
 import agent_audit_ledger
-import homie
+import helm
 
 
 class TestUnifiedActionBroker(unittest.TestCase):
 
     def setUp(self):
-        os.environ["HOMIE_TEST_ENV"] = "1"
-        os.environ["HOMIE_COMPLETE_MEDIATION"] = "1"
-        for p in [homie_supervisor.DIRTY_FLAG_PATH, homie_supervisor.CRASH_HISTORY_PATH]:
+        os.environ["HELM_TEST_ENV"] = "1"
+        os.environ["HELM_COMPLETE_MEDIATION"] = "1"
+        for p in [helm_supervisor.DIRTY_FLAG_PATH, helm_supervisor.CRASH_HISTORY_PATH]:
             if os.path.exists(p):
                 try:
                     os.remove(p)
@@ -44,7 +44,7 @@ class TestUnifiedActionBroker(unittest.TestCase):
         action_broker._GLOBAL_BROKER = None
 
     def tearDown(self):
-        for p in [homie_supervisor.DIRTY_FLAG_PATH, homie_supervisor.CRASH_HISTORY_PATH]:
+        for p in [helm_supervisor.DIRTY_FLAG_PATH, helm_supervisor.CRASH_HISTORY_PATH]:
             if os.path.exists(p):
                 try:
                     os.remove(p)
@@ -60,13 +60,13 @@ class TestUnifiedActionBroker(unittest.TestCase):
 
         for caller in ["desktop_user", "desktop_voice", "telegram_remote", "ai_engine"]:
             ok, msg, res = broker.execute_action(
-                "homie_snap_window", {"app_name": "notepad", "position": "left"}, caller_id=caller
+                "helm_snap_window", {"app_name": "notepad", "position": "left"}, caller_id=caller
             )
             self.assertTrue(ok, f"Caller '{caller}' failed action execution: {msg}")
             self.assertIn("Success:", msg)
 
         # READ_ONLY action executes directly across all callers including phone_gateway
-        ok_phone, msg_phone, res_phone = broker.execute_action("homie_get_vitals", {}, caller_id="phone_gateway")
+        ok_phone, msg_phone, res_phone = broker.execute_action("helm_get_vitals", {}, caller_id="phone_gateway")
         self.assertTrue(ok_phone, f"phone_gateway read-only execution failed: {msg_phone}")
 
     def test_kill_switch_halts_actions_across_all_callers(self):
@@ -79,13 +79,13 @@ class TestUnifiedActionBroker(unittest.TestCase):
 
         for caller in ["desktop_user", "desktop_voice", "telegram_remote", "phone_gateway", "ai_engine"]:
             ok, msg, res = broker.execute_action(
-                "homie_snap_window", {"app_name": "notepad", "position": "left"}, caller_id=caller
+                "helm_snap_window", {"app_name": "notepad", "position": "left"}, caller_id=caller
             )
             self.assertFalse(ok)
             self.assertIn("Emergency kill switch is actively engaged", msg)
 
         # But READ_ONLY tools remain operational for diagnostic investigation
-        ok_read, msg_read, _ = broker.execute_action("homie_get_vitals", {}, caller_id="desktop_user")
+        ok_read, msg_read, _ = broker.execute_action("helm_get_vitals", {}, caller_id="desktop_user")
         self.assertTrue(ok_read)
 
     def test_taint_gate_and_step_up_single_use_consumption(self):
@@ -95,11 +95,11 @@ class TestUnifiedActionBroker(unittest.TestCase):
         args = {"app_name": "notepad", "position": "right"}
 
         # 1. Untrusted ingress taints session
-        taint_tracker.mark_session_tainted(caller, source="tool_provenance:homie_read_screen_memory")
+        taint_tracker.mark_session_tainted(caller, source="tool_provenance:helm_read_screen_memory")
         self.assertTrue(taint_tracker.is_session_tainted(caller))
 
         # 2. WRITE_EXEC action blocked without step-up token
-        ok, msg, _ = broker.execute_action("homie_snap_window", args, caller_id=caller)
+        ok, msg, _ = broker.execute_action("helm_snap_window", args, caller_id=caller)
         self.assertFalse(ok)
         self.assertIn("STEP_UP_REQUIRED", msg)
 
@@ -111,30 +111,30 @@ class TestUnifiedActionBroker(unittest.TestCase):
 
         # 3. Action permitted when providing valid step-up token
         ok_auth, msg_auth, _ = broker.execute_action(
-            "homie_snap_window", args, caller_id=caller, step_up_token=step_up_id
+            "helm_snap_window", args, caller_id=caller, step_up_token=step_up_id
         )
         self.assertTrue(ok_auth, f"Authorized execution failed: {msg_auth}")
 
         # 4. REPLAY ATTACK: Replaying the consumed step_up_id must be rejected
         ok_replay, msg_replay, _ = broker.execute_action(
-            "homie_snap_window", args, caller_id=caller, step_up_token=step_up_id
+            "helm_snap_window", args, caller_id=caller, step_up_token=step_up_id
         )
         self.assertFalse(ok_replay)
         self.assertIn("Step-up token rejected", msg_replay)
 
-    def test_homie_fast_commands_mediated_through_broker(self):
-        """Verifies homie.try_fast_command routes via ActionBroker and records in audit ledger."""
+    def test_helm_fast_commands_mediated_through_broker(self):
+        """Verifies helm.try_fast_command routes via ActionBroker and records in audit ledger."""
         import unittest.mock as mock
         with mock.patch("windows_tools.place_window", return_value=(True, "Placed chrome on left")):
             # 1. Execute fast command
-            handled, msg = homie.try_fast_command("put chrome on left", caller_id="desktop_voice")
+            handled, msg = helm.try_fast_command("put chrome on left", caller_id="desktop_voice")
             self.assertTrue(handled)
             self.assertIn("Placed", msg)
 
         # 2. Verify audit ledger entry was written with HMAC signature
         entries = agent_audit_ledger.query_audit_entries(limit=5)
         found = any(
-            e.get("caller_id") == "desktop_voice" and e.get("tool_name") == "homie_place_window"
+            e.get("caller_id") == "desktop_voice" and e.get("tool_name") == "helm_place_window"
             for e in entries
         )
         self.assertTrue(found, "Audit entry for mediated fast command was not found in ledger")
@@ -145,7 +145,7 @@ class TestUnifiedActionBroker(unittest.TestCase):
 
         taint_tracker.mark_session_tainted("screen_reader", source="screen_capture")
         with mock.patch("windows_tools.play_youtube", return_value=(True, "Opened YouTube results")) as play:
-            handled, message = homie.try_fast_command(
+            handled, message = helm.try_fast_command(
                 "Can you open YouTube and play Telugu songs?", caller_id="desktop_user"
             )
 
@@ -155,7 +155,7 @@ class TestUnifiedActionBroker(unittest.TestCase):
 
         # This narrow exception must not extend to model-driven or write operations.
         allowed, needs_step_up, reason = taint_tracker.check_action_privilege(
-            "ai_text_agent", "REVERSIBLE", "homie_play_youtube", {"query": "Telugu songs"}
+            "ai_text_agent", "REVERSIBLE", "helm_play_youtube", {"query": "Telugu songs"}
         )
         self.assertFalse(allowed)
         self.assertTrue(needs_step_up)

@@ -1,10 +1,10 @@
-# Homie Packaging & Distribution Pipeline
+# Helm Packaging & Distribution Pipeline
 
-Homie provides a modern, production-grade release toolchain for Windows:
-1. **PyInstaller**: Compiles Python source, native libraries (WinRT, CTranslate2, PortAudio), and UI assets into a standalone directory (`dist/homie`).
-2. **MSIX**: Windows App package with isolated registry virtualization, identity enforcement, visual tiles, file-type associations (`.homie`, `.hnote`), and enterprise deployment.
+Helm provides a modern, production-grade release toolchain for Windows:
+1. **PyInstaller**: Compiles Python source, native libraries (WinRT, CTranslate2, PortAudio), and UI assets into a standalone directory (`dist/helm`).
+2. **MSIX**: Windows App package with isolated registry virtualization, identity enforcement, visual tiles, file-type associations (`.helm`, `.hnote`), and enterprise deployment.
 3. **Velopack**: High-performance, delta-compressed auto-updater (successor to Squirrel) with atomic background updates and restart coordination.
-4. **WinGet**: Windows Package Manager community manifest for single-command installation (`winget install Homie.DesktopAI`).
+4. **WinGet**: Windows Package Manager community manifest for single-command installation (`winget install Helm.DesktopAI`).
 
 ---
 
@@ -12,36 +12,36 @@ Homie provides a modern, production-grade release toolchain for Windows:
 
 ```
                       ┌──────────────────────┐
-                      │   Homie Source Code   │
+                      │   Helm Source Code   │
                       │ (app.py, UI, engines)│
                       └──────────┬───────────┘
                                  │
                                  ▼
                      [ PyInstaller Compiler ]
-                        (homie.spec --clean)
+                        (helm.spec --clean)
                                  │
                                  ▼
                     ┌─────────────────────────┐
-                    │    dist/homie/ (onedir)  │
-                    │   Homie.exe + DLLs + UI  │
+                    │    dist/helm/ (onedir)  │
+                    │   Helm.exe + DLLs + UI  │
                     └────────────┬────────────┘
                                  │
              ┌───────────────────┴───────────────────┐
              ▼                                       ▼
   [ MSIX Packaging Pipeline ]             [ Velopack Update Pipeline ]
    scripts/build_msix.ps1                  scripts/setup_velopack.py
-   - packaging/AppxManifest.xml            - vpk pack --packId Homie
+   - packaging/AppxManifest.xml            - vpk pack --packId Helm
    - packaging/assets (Pillow PNGs)        - Releases/ (full + delta nupkg)
-   - makeappx.exe pack                     - homie_updater.py client
+   - makeappx.exe pack                     - helm_updater.py client
    - signtool.exe sign                               │
              │                                       │
              ▼                                       ▼
-     dist/Homie.msix                           Delta Release CDN
+     dist/Helm.msix                           Delta Release CDN
              │
              ▼
   [ WinGet Distribution ]
-   packaging/winget/Homie.yaml
-   winget install Homie.DesktopAI
+   packaging/winget/Helm.yaml
+   winget install Helm.DesktopAI
 ```
 
 ---
@@ -80,15 +80,15 @@ pip install velopack
 
 ## 2. Compiling the Standalone Binary (PyInstaller)
 
-The standalone binary is generated using `homie.spec`, which bundles pywebview, faster-whisper, winrt, cryptography, sounddevice, and on-disk assets:
+The standalone binary is generated using `helm.spec`, which bundles pywebview, faster-whisper, winrt, cryptography, sounddevice, and on-disk assets:
 ```powershell
 # Manual PyInstaller compilation
-pyinstaller homie.spec --clean --noconfirm
+pyinstaller helm.spec --clean --noconfirm
 
 # Or using the build script
 python scripts/build_standalone.py --clean
 ```
-The output is staged at `dist/homie/` (with `Homie.exe` and `ui/`).
+The output is staged at `dist/helm/` (with `Helm.exe` and `ui/`).
 
 ---
 
@@ -103,11 +103,11 @@ The script `scripts/build_msix.ps1` automates the entire MSIX packaging process:
    - `StoreLogo.png` (Store & installer icon)
    - `SplashScreen.png` (App launch splash)
 2. Writes a valid `packaging/AppxManifest.xml` declaring:
-   - Package identity: `Name="Homie.DesktopAI"`, `Publisher="CN=Homie, ..."`, `Version="1.0.0.0"`
+   - Package identity: `Name="Helm.DesktopAI"`, `Publisher="CN=Helm, ..."`, `Version="1.0.0.0"`
    - Capability: `runFullTrust` (restricted capability for desktop apps)
-   - File type associations: `.homie` and `.hnote`
-3. Stages the manifest and assets into `dist/homie/`.
-4. Executes `makeappx.exe pack /d dist\homie /p dist\Homie.msix /o`.
+   - File type associations: `.helm` and `.hnote`
+3. Stages the manifest and assets into `dist/helm/`.
+4. Executes `makeappx.exe pack /d dist\helm /p dist\Helm.msix /o`.
 5. Signs the package with `signtool.exe`.
 
 ### Running the MSIX Build
@@ -133,32 +133,32 @@ Run PowerShell as Administrator:
 ```powershell
 # 1. Create code signing certificate in CurrentUser\My
 $cert = New-SelfSignedCertificate -Type Custom `
-    -Subject "CN=Homie, O=Homie, L=San Francisco, S=CA, C=US" `
+    -Subject "CN=Helm, O=Helm, L=San Francisco, S=CA, C=US" `
     -KeyUsage DigitalSignature `
-    -FriendlyName "Homie Dev Cert" `
+    -FriendlyName "Helm Dev Cert" `
     -CertStoreLocation "Cert:\CurrentUser\My" `
     -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3")
 
 # 2. Export PFX with password
-$pwd = ConvertTo-SecureString -String "HomieSecret123!" -Force -AsPlainText
-Export-PfxCertificate -Cert $cert -FilePath "packaging\HomieDev.pfx" -Password $pwd
+$pwd = ConvertTo-SecureString -String "HelmSecret123!" -Force -AsPlainText
+Export-PfxCertificate -Cert $cert -FilePath "packaging\HelmDev.pfx" -Password $pwd
 
 # 3. Export public CER certificate for client installation
-Export-Certificate -Cert $cert -FilePath "packaging\HomieDev.cer"
+Export-Certificate -Cert $cert -FilePath "packaging\HelmDev.cer"
 
 # 4. Trust certificate on local machine (Administrator prompt required)
-Import-Certificate -FilePath "packaging\HomieDev.cer" -CertStoreLocation "Cert:\LocalMachine\TrustedPeople"
+Import-Certificate -FilePath "packaging\HelmDev.cer" -CertStoreLocation "Cert:\LocalMachine\TrustedPeople"
 ```
 
 ### Signing the MSIX Package
 ```powershell
 # Sign with the exported PFX certificate:
-signtool sign /fd SHA256 /f "packaging\HomieDev.pfx" /p "HomieSecret123!" /tr http://timestamp.digicert.com /td SHA256 dist\Homie.msix
+signtool sign /fd SHA256 /f "packaging\HelmDev.pfx" /p "HelmSecret123!" /tr http://timestamp.digicert.com /td SHA256 dist\Helm.msix
 
 # Or pass parameters directly to build_msix.ps1:
 powershell -ExecutionPolicy Bypass -File scripts/build_msix.ps1 `
-    -CertPath "packaging\HomieDev.pfx" `
-    -CertPassword "HomieSecret123!"
+    -CertPath "packaging\HelmDev.pfx" `
+    -CertPassword "HelmSecret123!"
 ```
 
 ---
@@ -170,26 +170,26 @@ Velopack manages frictionless background updates without administrative prompts.
 ### Packaging a Velopack Release
 ```powershell
 # Using the setup_velopack automation script:
-python scripts/setup_velopack.py --packVersion 1.0.0 --packDir dist/homie
+python scripts/setup_velopack.py --packVersion 1.0.0 --packDir dist/helm
 
 # Or directly via vpk CLI:
-vpk pack --packId Homie --packVersion 1.0.0 --packDir dist\homie --mainExe homie.exe --outputDir releases
+vpk pack --packId Helm --packVersion 1.0.0 --packDir dist\helm --mainExe helm.exe --outputDir releases
 ```
 
 ### Generated Release Artifacts
 Inside `releases/`:
-- `Homie-1.0.0-full.nupkg`: Complete application package.
-- `Homie-1.0.1-delta.nupkg`: Byte-level diff containing only changed binaries.
+- `Helm-1.0.0-full.nupkg`: Complete application package.
+- `Helm-1.0.1-delta.nupkg`: Byte-level diff containing only changed binaries.
 - `releases.win.json`: Release index ingested by client updaters.
 - `Setup.exe`: Single-file web/offline bootstrapper.
 
-### In-App Update Verification (`homie_updater.py`)
-In Homie runtime code:
+### In-App Update Verification (`helm_updater.py`)
+In Helm runtime code:
 ```python
-from homie_updater import check_for_update, apply_update
+from helm_updater import check_for_update, apply_update
 
 # Check for new version against update server
-update_info = check_for_update("https://releases.homie.internal/windows")
+update_info = check_for_update("https://releases.helm.internal/windows")
 if update_info and update_info.get("is_available"):
     print(f"Update available: {update_info['target_version']}")
     # Download and apply update with restart
@@ -200,36 +200,36 @@ if update_info and update_info.get("is_available"):
 
 ## 6. WinGet Manifest & Community Submission
 
-Homie provides a singleton manifest for the official Windows Package Manager repository:
-Path: `packaging/winget/Homie.yaml`
+Helm provides a singleton manifest for the official Windows Package Manager repository:
+Path: `packaging/winget/Helm.yaml`
 
 ### Preparing a WinGet Release
-1. Build and sign `dist/Homie.msix`.
+1. Build and sign `dist/Helm.msix`.
 2. Compute the SHA-256 checksum of the installer:
    ```powershell
-   Get-FileHash dist\Homie.msix -Algorithm SHA256
+   Get-FileHash dist\Helm.msix -Algorithm SHA256
    ```
-3. Update `packaging/winget/Homie.yaml`:
+3. Update `packaging/winget/Helm.yaml`:
    - Set `PackageVersion: <version>`
-   - Set `InstallerUrl: https://github.com/homie-ai/homie/releases/download/v<version>/Homie.msix`
+   - Set `InstallerUrl: https://github.com/helm-ai/helm/releases/download/v<version>/Helm.msix`
    - Paste the calculated `InstallerSha256` hash.
 
 ### Validating & Testing Locally
 ```powershell
 # Validate manifest syntax against WinGet schema
-winget validate --manifest packaging/winget/Homie.yaml
+winget validate --manifest packaging/winget/Helm.yaml
 
 # Test local installation
-winget install --manifest packaging/winget/Homie.yaml
+winget install --manifest packaging/winget/Helm.yaml
 ```
 
 ### Submitting to microsoft/winget-pkgs
 Submit using the official `wingetcreate` CLI:
 ```powershell
 winget install Microsoft.WinGetCreate
-wingetcreate submit packaging/winget/Homie.yaml
+wingetcreate submit packaging/winget/Helm.yaml
 ```
-Alternatively, fork [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) and submit a pull request under `manifests/h/Homie/DesktopAI/<version>/`.
+Alternatively, fork [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs) and submit a pull request under `manifests/h/Helm/DesktopAI/<version>/`.
 
 ---
 
@@ -265,19 +265,19 @@ jobs:
         run: dotnet tool install -g vpk
 
       - name: Build Standalone Binary
-        run: pyinstaller homie.spec --clean --noconfirm
+        run: pyinstaller helm.spec --clean --noconfirm
 
       - name: Build and Pack MSIX
         run: powershell -ExecutionPolicy Bypass -File scripts/build_msix.ps1 -SkipBuildExe -Version "${{ github.ref_name }}"
 
       - name: Create Velopack Release
-        run: python scripts/setup_velopack.py --packVersion "${{ github.ref_name }}" --packDir dist/homie
+        run: python scripts/setup_velopack.py --packVersion "${{ github.ref_name }}" --packDir dist/helm
 
       - name: Upload Release Artifacts
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/Homie.msix
+            dist/Helm.msix
             releases/*
 ```
 
@@ -290,10 +290,10 @@ jobs:
   - `Properties`: DisplayName, PublisherDisplayName, Logo, Description
   - `Capabilities`: `rescap:Capability Name="runFullTrust"`
   - `VisualElements`: Square150x150Logo, Square44x44Logo, DefaultTile, SplashScreen
-  - `File associations`: `.homie`, `.hnote`
+  - `File associations`: `.helm`, `.hnote`
 - [x] Placeholder PNG icons (44x44, 150x150, 310x310, StoreLogo, Wide310x150, SplashScreen) generated via Pillow in `packaging/assets/`.
 - [x] `scripts/build_msix.ps1` supports `-DryRun`, `-SkipBuildExe`, `-SkipSign`, and custom versioning.
 - [x] `scripts/setup_velopack.py` provides `vpk` installation guide, command generation, and release packaging.
-- [x] `homie_updater.py` exposes `check_for_update()`, `apply_update()`, and `is_velopack_available()` with stub fallback.
-- [x] `packaging/winget/Homie.yaml` conforms to WinGet singleton v1.6.0 schema (`PackageIdentifier`, `PackageVersion`, `InstallerUrl`, `InstallerType: msix`).
+- [x] `helm_updater.py` exposes `check_for_update()`, `apply_update()`, and `is_velopack_available()` with stub fallback.
+- [x] `packaging/winget/Helm.yaml` conforms to WinGet singleton v1.6.0 schema (`PackageIdentifier`, `PackageVersion`, `InstallerUrl`, `InstallerType: msix`).
 - [x] `requirements.txt` includes `velopack>=0.0.1` without version conflicts.

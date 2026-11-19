@@ -19,7 +19,7 @@ Directives Covered:
    - SupervisorActuator foreground TOCTOU checks scoped strictly to UI-interactive tools (click, type, mouse_move, hotkey).
    - Non-window tools (set_clipboard, snap_window, launch_app) skip foreground window checks.
 6. Admin-Protected ProgramData Console Recovery Token:
-   - Elevated recovery commands write tokens to C:\\ProgramData\\Homie\\console_recovery.token with owner/Admin-only DACL.
+   - Elevated recovery commands write tokens to C:\\ProgramData\\Helm\\console_recovery.token with owner/Admin-only DACL.
    - consume_console_recovery_token verifies and atomically consumes admin recovery tokens.
 """
 
@@ -35,7 +35,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-import homie_supervisor
+import helm_supervisor
 import phone_approval_portal
 import device_registry
 import windows_tools
@@ -65,7 +65,7 @@ class TestBatch38SecurityHardening(unittest.TestCase):
         priv_pem, pub_pem = enroll_test_device("primary_phone")
         authorized_caller = "worker_b38_alpha"
         unauthorized_caller = "worker_b38_bravo"
-        tool_name = "homie_set_clipboard"
+        tool_name = "helm_set_clipboard"
         args = {"text": "top_secret_data"}
         epoch = taint_tracker.get_taint_epoch()
 
@@ -93,7 +93,7 @@ class TestBatch38SecurityHardening(unittest.TestCase):
         self.assertTrue(ok, msg)
 
         # Step 3: Authorized caller consumes successfully
-        sup = homie_supervisor.PolicySupervisor()
+        sup = helm_supervisor.PolicySupervisor()
         args_hash = challenge["args_hash"].lower()
 
         # Unauthorized caller attempt MUST fail closed
@@ -108,24 +108,24 @@ class TestBatch38SecurityHardening(unittest.TestCase):
         """Directive 1 & 2: Rebuilding signed challenge string catches tampered fields even if hash was signed."""
         priv_pem, pub_pem = enroll_test_device("primary_phone")
         caller_id = "worker_b38_tamper"
-        tool_name = "homie_set_clipboard"
+        tool_name = "helm_set_clipboard"
         args_hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         epoch = taint_tracker.get_taint_epoch()
         nonce = "1234567890abcdef1234567890abcdef"
         expiry = int(time.time() + 60)
         seq = 1
 
-        # Real challenge hash over tool_name="homie_set_clipboard"
+        # Real challenge hash over tool_name="helm_set_clipboard"
         raw = f"CHALLENGE_V3|primary_phone|{caller_id}|{tool_name}|{args_hash}|{nonce}|{expiry}|{epoch}|{seq}"
         real_hash = hashlib.sha256(raw.encode('utf-8')).hexdigest()
         sig = sign_test_challenge(priv_pem, real_hash)
 
-        # Attacker tampers with tool_name -> "homie_launch_app" in the blob while keeping original challenge_hash
+        # Attacker tampers with tool_name -> "helm_launch_app" in the blob while keeping original challenge_hash
         tampered_blob = {
             "version": "CHALLENGE_V3",
             "device_id": "primary_phone",
             "caller_id": caller_id,
-            "tool_name": "homie_launch_app",
+            "tool_name": "helm_launch_app",
             "args_hash": args_hash,
             "nonce": nonce,
             "expiry": expiry,
@@ -136,8 +136,8 @@ class TestBatch38SecurityHardening(unittest.TestCase):
         }
 
         # Supervisor must recompute hash from blob fields: mismatch between recomputed hash and blob hash fails closed
-        valid = homie_supervisor.verify_signed_approval_evidence(
-            tampered_blob, caller_id, "homie_launch_app", args_hash, epoch
+        valid = helm_supervisor.verify_signed_approval_evidence(
+            tampered_blob, caller_id, "helm_launch_app", args_hash, epoch
         )
         self.assertFalse(valid, "Supervisor accepted tampered challenge blob!")
 
@@ -145,7 +145,7 @@ class TestBatch38SecurityHardening(unittest.TestCase):
         """Directive 3: Malicious junk row at lower id does not burn approval for legitimate candidate rows."""
         priv_pem, pub_pem = enroll_test_device("primary_phone")
         caller_id = "worker_b38_burn"
-        tool_name = "homie_set_clipboard"
+        tool_name = "helm_set_clipboard"
         args = {"text": "genuine_action"}
         clean_args = json.dumps(args, sort_keys=True, separators=(',', ':'))
         args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
@@ -159,7 +159,7 @@ class TestBatch38SecurityHardening(unittest.TestCase):
 
         # Step 2: Insert junk forged row at id=1
         with db_utils.get_db() as conn:
-            homie_supervisor._init_approved_actions_table(conn)
+            helm_supervisor._init_approved_actions_table(conn)
             # Row 1: Junk unauthenticated row
             conn.execute("""
                 INSERT INTO approved_actions (caller_id, tool, args_hash, taint_epoch, expiry, consumed, signature_blob)
@@ -173,7 +173,7 @@ class TestBatch38SecurityHardening(unittest.TestCase):
             conn.commit()
 
         # Supervisor must burn/skip row 1 and successfully consume row 2
-        sup = homie_supervisor.PolicySupervisor()
+        sup = helm_supervisor.PolicySupervisor()
         consumed = sup.consume_approved_action(caller_id, tool_name, args_hash, epoch)
         self.assertTrue(consumed, "Anti-Burn DoS failed: junk row 1 blocked legitimate approval consumption on row 2!")
 
@@ -181,7 +181,7 @@ class TestBatch38SecurityHardening(unittest.TestCase):
         """Directive 3: Re-inserting a valid signed blob into SQLite fails because nonce is already consumed."""
         priv_pem, pub_pem = enroll_test_device("primary_phone")
         caller_id = "worker_b38_replay"
-        tool_name = "homie_set_clipboard"
+        tool_name = "helm_set_clipboard"
         args = {"text": "replay_target"}
         clean_args = json.dumps(args, sort_keys=True, separators=(',', ':'))
         args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
@@ -192,7 +192,7 @@ class TestBatch38SecurityHardening(unittest.TestCase):
         )
         signed_blob["caller_id"] = caller_id
 
-        sup = homie_supervisor.PolicySupervisor()
+        sup = helm_supervisor.PolicySupervisor()
         sup.record_approved_action(caller_id, tool_name, args_hash, epoch, ttl=60.0, signed_blob=signed_blob)
 
         # First consumption succeeds
@@ -249,14 +249,14 @@ class TestBatch38SecurityHardening(unittest.TestCase):
 
     def test_6_actuator_scoping_exempts_non_window_tools(self):
         """Directive 5: Foreground TOCTOU check scoped strictly to UI tools; non-window tools are exempted."""
-        sup = homie_supervisor.PolicySupervisor()
-        actuator = homie_supervisor.SupervisorActuator(sup)
+        sup = helm_supervisor.PolicySupervisor()
+        actuator = helm_supervisor.SupervisorActuator(sup)
 
         # Configure policy envelope restricting to notepad.exe
         env = policy_envelope.PolicyEnvelope(
             envelope_id="env_test_scoping",
             allowed_process_images=["notepad.exe"],
-            allowed_action_types=["homie_agent_type", "homie_set_clipboard"],
+            allowed_action_types=["helm_agent_type", "helm_set_clipboard"],
             step_budget=10,
             keystroke_cap=500,
             expiry=time.time() + 60.0,
@@ -267,19 +267,19 @@ class TestBatch38SecurityHardening(unittest.TestCase):
 
         # Simulate foreground window being calc.exe (outside envelope)
         with patch("windows_tools.get_foreground_window", return_value={"proc_name": "calc.exe", "hwnd": 12345}):
-            # UI interactive tool (homie_agent_type) must raise CompleteMediationBreachError due to TOCTOU mismatch
-            with self.assertRaises(homie_supervisor.CompleteMediationBreachError) as cm:
-                actuator.execute_actuator("homie_agent_type", {"text": "hello"}, caller_id="worker", seq=1)
+            # UI interactive tool (helm_agent_type) must raise CompleteMediationBreachError due to TOCTOU mismatch
+            with self.assertRaises(helm_supervisor.CompleteMediationBreachError) as cm:
+                actuator.execute_actuator("helm_agent_type", {"text": "hello"}, caller_id="worker", seq=1)
             self.assertIn("TOCTOU detected", str(cm.exception))
 
-            # Non-window tool (homie_set_clipboard) skips foreground window check
-            with patch("homie_mcp.execute_mcp_tool", return_value="success"), \
+            # Non-window tool (helm_set_clipboard) skips foreground window check
+            with patch("helm_mcp.execute_mcp_tool", return_value="success"), \
                  patch.object(sup, "verify_and_consume_intent_token", return_value=True):
-                res = actuator.execute_actuator("homie_set_clipboard", {"text": "safe"}, caller_id="worker", intent_token="dummy", seq=2)
+                res = actuator.execute_actuator("helm_set_clipboard", {"text": "safe"}, caller_id="worker", intent_token="dummy", seq=2)
                 self.assertEqual(res, "success")
 
     def test_7_admin_recovery_token_programdata_path(self):
-        """Directive 6: Elevated recovery commands write and consume tokens via C:\\ProgramData\\Homie."""
+        """Directive 6: Elevated recovery commands write and consume tokens via C:\\ProgramData\\Helm."""
         import tempfile
         token = "admin_recovery_test_token_12345678"
         with tempfile.TemporaryDirectory() as tmpdir:

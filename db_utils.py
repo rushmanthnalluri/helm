@@ -1,4 +1,4 @@
-"""Centralized SQLite Database Connection Manager for Homie.
+"""Centralized SQLite Database Connection Manager for Helm.
 Enforces Write-Ahead Logging (WAL) mode, 5000ms busy timeout, and normalized synchronization
 to guarantee thread safety, zero database-locked errors, and optimal concurrent performance.
 """
@@ -6,9 +6,9 @@ import os
 import sqlite3
 import contextlib
 
-CONFIG_DIR = os.environ.get('HOMIE_DIR') or os.path.join(os.path.expanduser('~'), '.config', 'homie')
+CONFIG_DIR = os.environ.get('HELM_DIR') or os.path.join(os.path.expanduser('~'), '.config', 'helm')
 os.makedirs(CONFIG_DIR, exist_ok=True)
-DEFAULT_DB_PATH = os.path.join(CONFIG_DIR, 'homie.db')
+DEFAULT_DB_PATH = os.path.join(CONFIG_DIR, 'helm.db')
 
 @contextlib.contextmanager
 def get_db_connection(db_path=None):

@@ -12,11 +12,11 @@ Tests verifying Batch 35 architectural hardening directives:
    - Actuator crash/exception consumes step budget (steps_consumed += 1, reserved_steps == 0).
    - Early proposal denial before actuator releases reservation (steps_consumed == 0, reserved_steps == 0).
 4. Directive 4: Production Approval Relay to Supervisor Cache and SQLite:
-   - phone_approval_portal.verify_action_approval relays to homie_supervisor.record_approved_action.
+   - phone_approval_portal.verify_action_approval relays to helm_supervisor.record_approved_action.
    - Cross-process SQLite approved_actions table and in-memory cache both populated.
-   - homie_supervisor.consume_approved_action successfully consumes.
+   - helm_supervisor.consume_approved_action successfully consumes.
 5. Directive 5: Production Console Callers for generate_console_recovery_token:
-   - homie.py CLI commands (--pairing-unlock, --recover-device) call generate_console_recovery_token.
+   - helm.py CLI commands (--pairing-unlock, --recover-device) call generate_console_recovery_token.
    - Non-interactive invocation fails closed.
 6. Directive 6: Physical-Only Low-Level Keyboard Hook in app.py:
    - WH_KEYBOARD_LL hook callback filters LLKHF_INJECTED.
@@ -37,7 +37,7 @@ if BASE_DIR not in sys.path:
 import update_verifier
 import policy_envelope
 import phone_approval_portal
-import homie_supervisor
+import helm_supervisor
 import windows_tools
 from tests.phone_testing_keys import generate_test_phone_keypair, sign_enrollment_approval, get_test_pairing_code
 
@@ -45,8 +45,8 @@ from tests.phone_testing_keys import generate_test_phone_keypair, sign_enrollmen
 class TestBatch35SecurityHardening(unittest.TestCase):
 
     def setUp(self):
-        os.environ["HOMIE_TEST_ENV"] = "1"
-        os.environ["HOMIE_COMPLETE_MEDIATION"] = "1"
+        os.environ["HELM_TEST_ENV"] = "1"
+        os.environ["HELM_COMPLETE_MEDIATION"] = "1"
         import kill_switch
         kill_switch.disengage_kill_switch("EXPLICIT_HUMAN_CONFIRMATION")
         try:
@@ -78,7 +78,7 @@ class TestBatch35SecurityHardening(unittest.TestCase):
         env = policy_envelope.PolicyEnvelope(
             envelope_id="test_env_canon",
             allowed_process_images=["notepad.exe"],
-            allowed_action_types=["homie_agent_type", "homie_send_hotkey", "homie_remote_trackpad"],
+            allowed_action_types=["helm_agent_type", "helm_send_hotkey", "helm_remote_trackpad"],
             step_budget=5,
             keystroke_cap=500,
             expiry=time.time() + 300,
@@ -88,37 +88,37 @@ class TestBatch35SecurityHardening(unittest.TestCase):
         env.is_active = True
 
         # Case 1: key="\n" (strip() makes empty string, but must be caught)
-        ok, msg, _ = env.check_boundary("homie_remote_trackpad", {"action": "key", "key": "\n"}, "notepad.exe", 1)
+        ok, msg, _ = env.check_boundary("helm_remote_trackpad", {"action": "key", "key": "\n"}, "notepad.exe", 1)
         self.assertFalse(ok)
         self.assertIn("Enter-to-submit", msg)
 
         # Case 2: text=["enter"]
-        ok, msg, _ = env.check_boundary("homie_agent_type", {"text": ["enter"], "element_name": "input_box"}, "notepad.exe", 1)
+        ok, msg, _ = env.check_boundary("helm_agent_type", {"text": ["enter"], "element_name": "input_box"}, "notepad.exe", 1)
         self.assertFalse(ok)
         self.assertIn("Enter-to-submit", msg)
 
         # Case 3: text=["a", "\n"]
-        ok, msg, _ = env.check_boundary("homie_agent_type", {"text": ["a", "\n"], "element_name": "input_box"}, "notepad.exe", 1)
+        ok, msg, _ = env.check_boundary("helm_agent_type", {"text": ["a", "\n"], "element_name": "input_box"}, "notepad.exe", 1)
         self.assertFalse(ok)
         self.assertIn("Enter-to-submit", msg)
 
         # Case 4: keycode=[13]
-        ok, msg, _ = env.check_boundary("homie_send_hotkey", {"keycode": [13]}, "notepad.exe", 1)
+        ok, msg, _ = env.check_boundary("helm_send_hotkey", {"keycode": [13]}, "notepad.exe", 1)
         self.assertFalse(ok)
         self.assertIn("Enter-to-submit", msg)
 
         # Case 5: vk=13.0 (float)
-        ok, msg, _ = env.check_boundary("homie_send_hotkey", {"vk": 13.0}, "notepad.exe", 1)
+        ok, msg, _ = env.check_boundary("helm_send_hotkey", {"vk": 13.0}, "notepad.exe", 1)
         self.assertFalse(ok)
         self.assertIn("Enter-to-submit", msg)
 
         # Case 6: vk="0x0d" (hex string)
-        ok, msg, _ = env.check_boundary("homie_send_hotkey", {"vk": "0x0d"}, "notepad.exe", 1)
+        ok, msg, _ = env.check_boundary("helm_send_hotkey", {"vk": "0x0d"}, "notepad.exe", 1)
         self.assertFalse(ok)
         self.assertIn("Enter-to-submit", msg)
 
         # Case 7: Synthetic Ctrl+Alt+P chord in list format
-        ok, msg, _ = env.check_boundary("homie_send_hotkey", {"keys": ["ctrl", "alt", "p"]}, "notepad.exe", 1)
+        ok, msg, _ = env.check_boundary("helm_send_hotkey", {"keys": ["ctrl", "alt", "p"]}, "notepad.exe", 1)
         self.assertFalse(ok)
         self.assertIn("Ctrl+Alt+P", msg)
 
@@ -129,14 +129,14 @@ class TestBatch35SecurityHardening(unittest.TestCase):
             {"text": "return to sender", "element_name": "doc"},
         ]
         for idx, prose_args in enumerate(allowed_prose):
-            ok, msg, _ = env.check_boundary("homie_agent_type", prose_args, "notepad.exe", 1)
+            ok, msg, _ = env.check_boundary("helm_agent_type", prose_args, "notepad.exe", 1)
             self.assertTrue(ok, f"Prose case {idx} falsely rejected: {msg}")
 
     def test_3_unknown_outcome_consumes_step_budget(self):
         """Directive 3: UNKNOWN outcomes consume step budget; release reservation ONLY if actuator was never invoked."""
-        sup = homie_supervisor.PolicySupervisor()
-        sup.state = homie_supervisor.STATE_ARMED
-        client = homie_supervisor.SupervisorClient(supervisor_instance=sup)
+        sup = helm_supervisor.PolicySupervisor()
+        sup.state = helm_supervisor.STATE_ARMED
+        client = helm_supervisor.SupervisorClient(supervisor_instance=sup)
         client.connect()
         client.hello()
         client.seq = 100
@@ -146,7 +146,7 @@ class TestBatch35SecurityHardening(unittest.TestCase):
         env = policy_envelope.PolicyEnvelope(
             envelope_id="test_env_unknown_outcome",
             allowed_process_images=["notepad.exe"],
-            allowed_action_types=["homie_agent_type"],
+            allowed_action_types=["helm_agent_type"],
             step_budget=5,
             keystroke_cap=500,
             expiry=time.time() + 300,
@@ -164,7 +164,7 @@ class TestBatch35SecurityHardening(unittest.TestCase):
         # The step budget MUST be consumed because the actuator ran side-effects!
         with patch.object(windows_tools, "get_foreground_window", return_value={"proc_name": "notepad.exe", "hwnd": 1234}):
             with patch.object(sup.actuator, 'execute_actuator', side_effect=RuntimeError("Driver crashed mid-typewrite")):
-                rep = client.propose("homie_agent_type", {"text": "hello world", "target_process": "notepad.exe"})
+                rep = client.propose("helm_agent_type", {"text": "hello world", "target_process": "notepad.exe"})
                 self.assertEqual(rep.get("status"), "DENY")
                 self.assertIn("Driver crashed mid-typewrite", rep.get("reason", ""))
 
@@ -180,7 +180,7 @@ class TestBatch35SecurityHardening(unittest.TestCase):
         self.assertEqual(env.reserved_steps, 0)
 
     def test_4_production_approval_relay_to_supervisor_cache_and_db(self):
-        """Directive 4: verify_action_approval relays directly to homie_supervisor.record_approved_action."""
+        """Directive 4: verify_action_approval relays directly to helm_supervisor.record_approved_action."""
         priv_pem, pub_pem = generate_test_phone_keypair()
         device_id = "test_phone_b35"
 
@@ -198,7 +198,7 @@ class TestBatch35SecurityHardening(unittest.TestCase):
 
         # Create signed action approval using standard test helper
         from tests.phone_testing_keys import mint_test_action_approval
-        action_name = "homie_set_clipboard"
+        action_name = "helm_set_clipboard"
         payload_hash = "3a7b9c2d1e0f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b"
         approval_dict = mint_test_action_approval(
             phone_private_key=priv_pem,
@@ -214,37 +214,37 @@ class TestBatch35SecurityHardening(unittest.TestCase):
 
         # Verify supervisor can consume the approved action
         taint_epoch = approval_dict["taint_epoch"]
-        consumed = homie_supervisor.consume_approved_action("worker_b35", action_name, payload_hash, taint_epoch)
+        consumed = helm_supervisor.consume_approved_action("worker_b35", action_name, payload_hash, taint_epoch)
         self.assertTrue(consumed, "Supervisor failed to consume relayed action approval")
 
         # Second consumption must fail (single-use)
-        consumed_again = homie_supervisor.consume_approved_action("worker_b35", action_name, payload_hash, taint_epoch)
+        consumed_again = helm_supervisor.consume_approved_action("worker_b35", action_name, payload_hash, taint_epoch)
         self.assertFalse(consumed_again, "Replay attack succeeded on consumed approval")
 
     def test_5_console_recovery_token_cli_caller(self):
-        """Directive 5: homie.py CLI commands (--pairing-unlock, --recover-device) generate recovery tokens."""
-        import homie
+        """Directive 5: helm.py CLI commands (--pairing-unlock, --recover-device) generate recovery tokens."""
+        import helm
 
         # Non-interactive invocation must fail closed
-        with patch('sys.argv', ['homie.py', '--pairing-unlock']):
+        with patch('sys.argv', ['helm.py', '--pairing-unlock']):
             with patch('sys.stdin.isatty', return_value=False):
                 with patch('sys.stdout') as mock_out:
-                    homie.main()
+                    helm.main()
                     # Should print security error about console presence
                     self.assertTrue(any("Interactive console presence required" in str(c) for c in mock_out.write.call_args_list))
 
         # Interactive invocation with confirmation code
-        with patch('sys.argv', ['homie.py', '--pairing-unlock']):
+        with patch('sys.argv', ['helm.py', '--pairing-unlock']):
             with patch('sys.stdin.isatty', return_value=True), patch('ctypes.windll.shell32.IsUserAnAdmin', return_value=1):
                 with patch('builtins.input', return_value='CONFIRM-RESET'):
                     with patch.object(phone_approval_portal, 'generate_console_recovery_token', wraps=phone_approval_portal.generate_console_recovery_token) as mock_gen:
-                        homie.main()
+                        helm.main()
                         self.assertEqual(mock_gen.call_count, 1)
 
     def test_6_physical_only_low_level_keyboard_hook(self):
         """Directive 6: Low-level keyboard hook callback in app.py strictly ignores injected keystrokes."""
-        from app import HomieApp
-        app = HomieApp()
+        from app import HelmApp
+        app = HelmApp()
 
         import ctypes
         from ctypes import wintypes

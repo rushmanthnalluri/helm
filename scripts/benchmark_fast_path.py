@@ -18,28 +18,28 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-import homie_supervisor
-import homie_mcp
+import helm_supervisor
+import helm_mcp
 
 def benchmark(n_iterations=500):
-    os.environ["HOMIE_TEST_ENV"] = "1"
-    os.environ["HOMIE_COMPLETE_MEDIATION"] = "1"
+    os.environ["HELM_TEST_ENV"] = "1"
+    os.environ["HELM_COMPLETE_MEDIATION"] = "1"
 
-    supervisor = homie_supervisor.PolicySupervisor()
-    supervisor.state = homie_supervisor.STATE_ARMED
+    supervisor = helm_supervisor.PolicySupervisor()
+    supervisor.state = helm_supervisor.STATE_ARMED
     actuator = supervisor.actuator
 
     # 5 warm-up iterations to prime SQLite connection, table schemas, and JIT subkey cache
     for warm_seq in range(1, 6):
-        w_token = supervisor.mint_intent_token("homie_snap_window", {"app_name": "notepad"}, f"warm_{warm_seq}", warm_seq)
-        actuator.execute_actuator("homie_snap_window", {"app_name": "notepad"}, caller_id=f"warm_{warm_seq}", intent_token=w_token, seq=warm_seq)
+        w_token = supervisor.mint_intent_token("helm_snap_window", {"app_name": "notepad"}, f"warm_{warm_seq}", warm_seq)
+        actuator.execute_actuator("helm_snap_window", {"app_name": "notepad"}, caller_id=f"warm_{warm_seq}", intent_token=w_token, seq=warm_seq)
 
     latencies_ms = []
 
     for seq in range(1, n_iterations + 1):
         caller_id = f"worker_{seq}" # Avoid rate limiting
         args = {"app_name": "notepad"}
-        tool = "homie_snap_window"
+        tool = "helm_snap_window"
         req_id = f"bench_{seq}"
 
         t0 = time.perf_counter()

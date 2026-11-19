@@ -1,5 +1,5 @@
 """
-Homie Windows Hello Biometric Authentication Integration.
+Helm Windows Hello Biometric Authentication Integration.
 Uses WinRT Windows.Security.Credentials.UI.UserConsentVerifier for native
 fingerprint, facial recognition (IR camera), or Windows PIN verification.
 """
@@ -29,16 +29,16 @@ class WindowsHello:
         Checks UserConsentVerifier.CheckAvailabilityAsync() returns ConsentVerifierAvailability.AVAILABLE.
         """
         # Test mode hook for mocking in automated tests
-        mock_avail = os.environ.get("HOMIE_MOCK_WINDOWS_HELLO_AVAILABLE")
+        mock_avail = os.environ.get("HELM_MOCK_WINDOWS_HELLO_AVAILABLE")
         if mock_avail is not None:
             return mock_avail.lower() in ("1", "true", "yes")
 
-        mock_env = os.environ.get("HOMIE_MOCK_WINDOWS_HELLO")
+        mock_env = os.environ.get("HELM_MOCK_WINDOWS_HELLO")
         if mock_env is not None:
             return mock_env.lower() in ("1", "true", "yes")
 
         # In automated test mode without explicit mock, avoid interactive prompts or hangs
-        if os.environ.get("HOMIE_TEST_MODE") or os.environ.get("PYTEST_CURRENT_TEST"):
+        if os.environ.get("HELM_TEST_MODE") or os.environ.get("PYTEST_CURRENT_TEST"):
             return False
 
         global _AVAILABILITY_CACHE
@@ -84,11 +84,11 @@ class WindowsHello:
             return False
 
     @classmethod
-    async def verify(cls, reason: str = "Homie needs your approval") -> bool:
+    async def verify(cls, reason: str = "Helm needs your approval") -> bool:
         """Trigger UserConsentVerifier.RequestVerificationAsync(reason).
         Returns True if biometric/PIN passes, False on cancel or failure.
         """
-        mock_env = os.environ.get("HOMIE_MOCK_WINDOWS_HELLO")
+        mock_env = os.environ.get("HELM_MOCK_WINDOWS_HELLO")
         if mock_env is not None:
             res = mock_env.lower() in ("1", "true", "yes")
             logger.info("[WindowsHello] Mocked verify: %s", res)
@@ -113,9 +113,9 @@ class WindowsHello:
             return False
 
     @classmethod
-    def verify_sync(cls, reason: str = "Homie needs your approval", timeout_seconds: float = 30.0) -> bool:
+    def verify_sync(cls, reason: str = "Helm needs your approval", timeout_seconds: float = 30.0) -> bool:
         """Synchronous wrapper for verify(reason) using asyncio.run() or a dedicated thread worker."""
-        mock_env = os.environ.get("HOMIE_MOCK_WINDOWS_HELLO")
+        mock_env = os.environ.get("HELM_MOCK_WINDOWS_HELLO")
         if mock_env is not None:
             return mock_env.lower() in ("1", "true", "yes")
 
@@ -155,7 +155,7 @@ def is_windows_hello_available() -> bool:
 
 
 def prompt_windows_hello(
-    prompt_message: str = "Homie AI: Authorize consequential desktop action",
+    prompt_message: str = "Helm AI: Authorize consequential desktop action",
     timeout_seconds: float = 30.0,
 ) -> Dict[str, Any]:
     verified = WindowsHello.verify_sync(prompt_message, timeout_seconds=timeout_seconds)

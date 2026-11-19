@@ -1,4 +1,4 @@
-"""Windows Hardware OCR Engine for Homie Screen Memory & Recall.
+"""Windows Hardware OCR Engine for Helm Screen Memory & Recall.
 Provides native Windows 10/11 OCR using Windows.Media.Ocr via winrt or winsdk,
 with robust fallbacks to pytesseract and image/UI heuristics:
 - Windows.Media.Ocr: Hardware-accelerated, language-aware, zero-network, local offline OCR
@@ -26,7 +26,7 @@ try:
 except ImportError:
     windows_tools = None
 
-logger = logging.getLogger("homie.screen_ocr_engine")
+logger = logging.getLogger("helm.screen_ocr_engine")
 
 
 def _run_async(coro, timeout: float = 15.0):

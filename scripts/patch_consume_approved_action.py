@@ -1,4 +1,4 @@
-with open("homie_supervisor.py", "rb") as f:
+with open("helm_supervisor.py", "rb") as f:
     c = f.read().decode("utf-8")
 
 old_consume = """    def consume_approved_action(self, caller_id: str, tool: str, args_hash: str, taint_epoch: int) -> bool:
@@ -131,12 +131,12 @@ new_consume = """    def consume_approved_action(self, caller_id: str, tool: str
 
 crlf = "\r\n" in c
 cn = c.replace("\r\n", "\n")
-assert old_consume in cn, "old_consume not found in homie_supervisor.py"
+assert old_consume in cn, "old_consume not found in helm_supervisor.py"
 cn = cn.replace(old_consume, new_consume, 1)
 if crlf:
     cn = cn.replace("\n", "\r\n")
 
-with open("homie_supervisor.py", "wb") as f:
+with open("helm_supervisor.py", "wb") as f:
     f.write(cn.encode("utf-8"))
 
-print("Successfully patched consume_approved_action in homie_supervisor.py")
+print("Successfully patched consume_approved_action in helm_supervisor.py")

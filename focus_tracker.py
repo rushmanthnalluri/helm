@@ -1,4 +1,4 @@
-"""Active Window Time Tracking and Focus Intelligence for Homie.
+"""Active Window Time Tracking and Focus Intelligence for Helm.
 Tracks application foreground time, generates daily productivity reports,
 and automatically detects fullscreen mode or active meetings for notification suppression.
 """

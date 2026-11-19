@@ -1,8 +1,8 @@
-"""Homie Phone Gateway.
+"""Helm Phone Gateway.
 Provides interactive telephone voice calling to your Windows PC via:
 1. Twilio Voice PSTN Webhook: Call your PC from any standard mobile phone or landline.
 2. Mobile Duplex Web Audio Portal (/call): Call your PC from any smartphone browser over Wi-Fi/LAN without Twilio fees.
-3. Outbound Telephone Alerts: Homie can dial your phone when critical alerts or timers trigger.
+3. Outbound Telephone Alerts: Helm can dial your phone when critical alerts or timers trigger.
 """
 
 import os
@@ -22,7 +22,7 @@ if BASE_DIR not in sys.path:
 import windows_tools
 import db_utils
 
-logger = logging.getLogger("homie.phone_gateway")
+logger = logging.getLogger("helm.phone_gateway")
 
 # Default gateway configuration
 DEFAULT_PHONE_CONFIG = {
@@ -36,7 +36,7 @@ DEFAULT_PHONE_CONFIG = {
     "twilio_auth_token": "",
     "twilio_phone_number": "",
     "user_phone_number": "",
-    "voice_greeting": "Homie workstation online. How can I assist you?",
+    "voice_greeting": "Helm workstation online. How can I assist you?",
     "voice_name": "Polly.Danielle"
 }
 
@@ -160,7 +160,7 @@ def generate_qr_base64(url):
     return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 def get_phone_config_path():
-    cfg_dir = Path.home() / ".config" / "homie"
+    cfg_dir = Path.home() / ".config" / "helm"
     cfg_dir.mkdir(parents=True, exist_ok=True)
     return cfg_dir / "phone_config.json"
 
@@ -202,8 +202,8 @@ def execute_phone_instruction(speech_text, session_id="call"):
 
     # 1. Try instant fast-command first (<50ms)
     try:
-        import homie
-        handled, msg = homie.try_fast_command(speech, caller_id="phone_gateway")
+        import helm
+        handled, msg = helm.try_fast_command(speech, caller_id="phone_gateway")
         if handled:
             # Clean up message for voice output (short & clear)
             clean_msg = msg.replace("\n", ". ").replace("`", "")
@@ -214,11 +214,11 @@ def execute_phone_instruction(speech_text, session_id="call"):
     # 2. Try AI Engine tool execution through shared broker
     try:
         import ai_engine
-        import homie
-        prefs = homie.get_prefs()
+        import helm
+        prefs = helm.get_prefs()
         
         system_prompt = (
-            "You are Homie, speaking over a live telephone call to your user about their Windows PC. "
+            "You are Helm, speaking over a live telephone call to your user about their Windows PC. "
             "Keep replies brief, conversational, and helpful (1-3 sentences). "
             "Do not output markdown, bullet points, asterisks, or code blocks, as this is read over a phone call."
         )
@@ -240,7 +240,7 @@ def _get_call_page_html() -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>Homie Phone Call</title>
+<title>Helm Phone Call</title>
 <style>
   * {{ box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
   body {{ background: #0d1117; color: #e6edf3; display: flex; flex-direction: column; height: 100vh; overflow: hidden; justify-content: space-between; align-items: center; padding: 24px; }}
@@ -269,7 +269,7 @@ def _get_call_page_html() -> str:
 </head>
 <body>
   <div class="header">
-    <h1>🏠 Homie Voice Call</h1>
+    <h1>🏠 Helm Voice Call</h1>
     <p>Live audio connection to your Windows PC</p>
     <div class="status-badge"><span class="status-dot"></span> PC Connected</div>
   </div>
@@ -346,7 +346,7 @@ function initMediaRecorder() {{
       reader.onloadend = async () => {{
         const b64 = reader.result.split(',')[1];
         const urlParams = new URLSearchParams(window.location.search);
-        const token = urlParams.get('token') || sessionStorage.getItem('homie_token') || '';
+        const token = urlParams.get('token') || sessionStorage.getItem('helm_token') || '';
         try {{
           const resp = await fetch('/api/audio-call', {{
             method: 'POST',
@@ -395,11 +395,11 @@ function initSpeech() {{
       const userText = lastResult[0].transcript.trim();
       if (!userText) return;
       addBubble(userText, 'user');
-      callStatus.textContent = 'Processing with Homie...';
+      callStatus.textContent = 'Processing with Helm...';
       
       try {{
         const urlParams = new URLSearchParams(window.location.search);
-        const token = urlParams.get('token') || sessionStorage.getItem('homie_token') || '';
+        const token = urlParams.get('token') || sessionStorage.getItem('helm_token') || '';
         const resp = await fetch('/api/web-call', {{
           method: 'POST',
           headers: {{ 'Content-Type': 'application/json' }},
@@ -440,7 +440,7 @@ function toggleCall() {{
       inCall = true;
       callBtn.classList.add('in-call');
       callStatus.textContent = 'Listening... Speak anytime';
-      speakTTS("Homie online. I am listening.");
+      speakTTS("Helm online. I am listening.");
     }} catch(e) {{
       console.error(e);
     }}
@@ -464,7 +464,7 @@ def _get_signing_portal_html() -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; connect-src 'self'; style-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'self'">
-<title>Homie Hardware Approval Portal</title>
+<title>Helm Hardware Approval Portal</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
   body { background: #090d16; color: #e6edf3; min-height: 100vh; padding: 16px; display: flex; flex-direction: column; align-items: center; }
@@ -490,7 +490,7 @@ def _get_signing_portal_html() -> str:
 </head>
 <body>
   <div class="card">
-    <h1>🛡️ Homie Phone Authenticator</h1>
+    <h1>🛡️ Helm Phone Authenticator</h1>
     <p class="sub">Hardware-Grounded RFC 8032 Ed25519 Cryptographic Approval Portal</p>
     <div class="field">
       <label>Device ID</label>
@@ -516,7 +516,7 @@ def _get_signing_portal_html() -> str:
   </div>
 
 <script>
-let clientCounter = parseInt(localStorage.getItem('homie_signing_counter') || '1');
+let clientCounter = parseInt(localStorage.getItem('helm_signing_counter') || '1');
 document.getElementById('counter-val').textContent = clientCounter;
 
 function getDeviceId() {
@@ -724,7 +724,7 @@ async function signAndApprove(ch, payloadSize) {
   };
 
   const urlParams = new URLSearchParams(window.location.search);
-  const token = urlParams.get('token') || sessionStorage.getItem('homie_token') || localStorage.getItem('homie_token') || '';
+  const token = urlParams.get('token') || sessionStorage.getItem('helm_token') || localStorage.getItem('helm_token') || '';
 
   try {
     const res = await fetch('/api/submit-approval', {
@@ -750,7 +750,7 @@ async function signAndApprove(ch, payloadSize) {
 async function denyChallenge(stepUpId) {
   const devId = getDeviceId();
   const urlParams = new URLSearchParams(window.location.search);
-  const token = urlParams.get('token') || sessionStorage.getItem('homie_token') || localStorage.getItem('homie_token') || '';
+  const token = urlParams.get('token') || sessionStorage.getItem('helm_token') || localStorage.getItem('helm_token') || '';
   try {
     await fetch('/api/deny-challenge', {
       method: 'POST',
@@ -853,7 +853,7 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
         elif path == "/status":
             conf = load_phone_config()
             import action_broker
-            ok, msg, res = action_broker.execute_action('homie_get_vitals', {}, caller_id='phone_gateway')
+            ok, msg, res = action_broker.execute_action('helm_get_vitals', {}, caller_id='phone_gateway')
             try:
                 vitals = json.loads(res) if ok and isinstance(res, str) else (res if isinstance(res, dict) else {})
             except Exception:
@@ -928,7 +928,7 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
             data = {}
 
         headers = getattr(self, "headers", None) or {}
-        token = headers.get("X-Homie-Token", "") or headers.get("Authorization", "").replace("Bearer ", "") or (data.get("token") if isinstance(data, dict) else "")
+        token = headers.get("X-Helm-Token", "") or headers.get("Authorization", "").replace("Bearer ", "") or (data.get("token") if isinstance(data, dict) else "")
         if not is_device_token_valid(token):
             self._send_response(401, "application/json", json.dumps({"error": "Unauthorized: Valid paired device token required"}))
             return
@@ -943,7 +943,7 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
         import phone_approval_portal
         # Authenticate caller device
         headers = getattr(self, "headers", None) or {}
-        token = headers.get("X-Homie-Token", "") or headers.get("Authorization", "").replace("Bearer ", "")
+        token = headers.get("X-Helm-Token", "") or headers.get("Authorization", "").replace("Bearer ", "")
         if not is_device_token_valid(token):
             self._send_response(401, "application/json", json.dumps({"error": "Unauthorized: Valid paired device token required"}))
             return
@@ -999,7 +999,7 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
             data = {}
 
         headers = getattr(self, "headers", None) or {}
-        token = headers.get("X-Homie-Token", "") or headers.get("Authorization", "").replace("Bearer ", "") or (data.get("token") if isinstance(data, dict) else "")
+        token = headers.get("X-Helm-Token", "") or headers.get("Authorization", "").replace("Bearer ", "") or (data.get("token") if isinstance(data, dict) else "")
         if not is_device_token_valid(token):
             self._send_response(401, "application/json", json.dumps({"error": "Unauthorized: Valid paired device token required"}))
             return
@@ -1066,7 +1066,7 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
                 self._send_response(200, "application/xml", twiml)
                 return
 
-        greeting = conf.get("voice_greeting", "Homie workstation online. How can I assist you?")
+        greeting = conf.get("voice_greeting", "Helm workstation online. How can I assist you?")
 
         # TwiML response with Gather
         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -1145,7 +1145,7 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
         audio_b64 = None
         try:
             import tempfile, voice, base64
-            tmp_wav = os.path.join(tempfile.gettempdir(), f"homie_call_reply_{int(time.time()*1000)}.wav")
+            tmp_wav = os.path.join(tempfile.gettempdir(), f"helm_call_reply_{int(time.time()*1000)}.wav")
             voice.synthesize_speech_to_wav(reply, tmp_wav)
             if os.path.exists(tmp_wav):
                 with open(tmp_wav, "rb") as wf:
@@ -1169,7 +1169,7 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
         Enforces fail-closed authentication first, mandatory timestamp (+/-30s replay window) and nonce,
         bounded per-device nonces, pre-read and duration caps (<=5MB and <=30s), singlet confined STT worker,
         supervisor-side reversible tier cap, and safe atomic temporary files."""
-        token = self.headers.get("X-Homie-Token", "") or self.headers.get("Authorization", "").replace("Bearer ", "")
+        token = self.headers.get("X-Helm-Token", "") or self.headers.get("Authorization", "").replace("Bearer ", "")
         conf = load_phone_config()
 
         # 1. Authenticate FIRST (fail closed: no configurable disablement)
@@ -1195,8 +1195,8 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
             wav_bytes = raw_body if isinstance(raw_body, bytes) else raw_body.encode("latin1")
 
         # 2. Mandatory Replay Protection: Timestamp window (+/- 30s) and single-use Nonce
-        ts_val = self.headers.get("X-Homie-Timestamp") or data.get("timestamp") or data.get("ts")
-        nonce_val = self.headers.get("X-Homie-Nonce") or data.get("nonce")
+        ts_val = self.headers.get("X-Helm-Timestamp") or data.get("timestamp") or data.get("ts")
+        nonce_val = self.headers.get("X-Helm-Nonce") or data.get("nonce")
 
         if not ts_val:
             self._send_response(400, "application/json", json.dumps({"error": "BAD_REQUEST: Missing required timestamp"}))
@@ -1281,7 +1281,7 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
         try:
             import tempfile, voice, base64, secrets
             rand_token = secrets.token_hex(16)
-            tmp_wav = os.path.join(tempfile.gettempdir(), f"homie_reply_{rand_token}.wav")
+            tmp_wav = os.path.join(tempfile.gettempdir(), f"helm_reply_{rand_token}.wav")
             voice.synthesize_speech_to_wav(reply, tmp_wav)
             if os.path.exists(tmp_wav):
                 with open(tmp_wav, "rb") as wf:
@@ -1321,7 +1321,7 @@ class PhoneGatewayHandler(BaseHTTPRequestHandler):
         action = data.get("action", "")
         import action_broker
         ok, msg, res = action_broker.execute_action(
-            "homie_remote_trackpad", data, caller_id="phone_remote"
+            "helm_remote_trackpad", data, caller_id="phone_remote"
         )
         result = {"success": ok, "action": action, "message": msg}
 

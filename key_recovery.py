@@ -1,9 +1,9 @@
-"""key_recovery.py - Cryptographic Backup and Disaster Recovery for Homie Vault.
+"""key_recovery.py - Cryptographic Backup and Disaster Recovery for Helm Vault.
 
 Provides secure offline backup and restore for the master workstation encryption key:
 - Uses PBKDF2-HMAC-SHA256 (600,000 iterations) to derive an export wrapping key from user passphrase.
 - Encrypts master DPAPI vault key using AES-256-GCM authenticated encryption.
-- Exports a portable armored backup envelope (.homie-backup).
+- Exports a portable armored backup envelope (.helm-backup).
 - Restores securely into Windows DPAPI-protected local storage upon verified passphrase entry.
 - Tamper-proof: Any alteration to the backup blob or wrong passphrase causes immediate hard denial.
 """
@@ -25,7 +25,7 @@ if BASE_DIR not in sys.path:
 
 import crypto_vault
 
-logger = logging.getLogger("homie.key_recovery")
+logger = logging.getLogger("helm.key_recovery")
 
 BACKUP_VERSION = 1
 PBKDF2_ITERATIONS = 600_000
@@ -46,7 +46,7 @@ def export_encrypted_backup(passphrase: str, output_path: Optional[str] = None) 
 
         nonce = get_random_bytes(12)
         cipher = AES.new(wrapping_key, AES.MODE_GCM, nonce=nonce)
-        cipher.update(b"HOMIE_KEY_BACKUP_V1")
+        cipher.update(b"HELM_KEY_BACKUP_V1")
         ciphertext, tag = cipher.encrypt_and_digest(master_key)
 
         payload = {
@@ -60,7 +60,7 @@ def export_encrypted_backup(passphrase: str, output_path: Optional[str] = None) 
         }
 
         armored = json.dumps(payload, indent=2)
-        target_path = output_path or os.path.join(BASE_DIR, "homie_vault_backup.json")
+        target_path = output_path or os.path.join(BASE_DIR, "helm_vault_backup.json")
         with open(target_path, "w", encoding="utf-8") as f:
             f.write(armored)
 
@@ -97,7 +97,7 @@ def restore_encrypted_backup(backup_path: str, passphrase: str) -> Tuple[bool, s
 
         wrapping_key = PBKDF2(clean_pass, salt, dkLen=32, count=iterations, hmac_hash_module=SHA256)
         cipher = AES.new(wrapping_key, AES.MODE_GCM, nonce=nonce)
-        cipher.update(b"HOMIE_KEY_BACKUP_V1")
+        cipher.update(b"HELM_KEY_BACKUP_V1")
         
         try:
             decrypted_master_key = cipher.decrypt_and_verify(ciphertext, tag)

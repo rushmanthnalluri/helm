@@ -1,4 +1,4 @@
-"""Homie Multi-Channel Canary Secret Monitor.
+"""Helm Multi-Channel Canary Secret Monitor.
 Protects against direct, encoded, and multi-step exfiltration:
 - Monitors all outbound egress: tool arguments, clipboard writes, typing text, and API responses.
 - Detects plaintext, Base64, Hex, and cross-call fragmented leak attempts.
@@ -16,7 +16,7 @@ if BASE_DIR not in sys.path:
 
 import kill_switch
 
-logger = logging.getLogger("homie.canary")
+logger = logging.getLogger("helm.canary")
 
 DEFAULT_CANARY_TOKEN = "CANARY_SECRET_ALPHA_OMEGA_998877"
 

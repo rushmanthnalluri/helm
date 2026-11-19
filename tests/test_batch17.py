@@ -1,5 +1,5 @@
 """Unit, integration, fuzz, and fail-closed security tests for Batch 17:
-Homie Out-of-Process Policy Supervisor & Watchdog Architecture.
+Helm Out-of-Process Policy Supervisor & Watchdog Architecture.
 """
 
 import os
@@ -12,8 +12,8 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-import homie_supervisor
-from homie_supervisor import (
+import helm_supervisor
+from helm_supervisor import (
     PolicySupervisor, SupervisorClient, BinaryFrameCodec,
     MSG_HELLO, MSG_PROPOSE, MSG_HEARTBEAT, MSG_SHUTDOWN,
     STATE_INIT, STATE_ARMED, STATE_LOCKED,
@@ -42,7 +42,7 @@ class TestBatch17Supervisor(unittest.TestCase):
         shadow_mode.clear_rate_limits()
         
         # Clean lingering dirty flag and crash history
-        from homie_supervisor import DIRTY_FLAG_PATH, CRASH_HISTORY_PATH
+        from helm_supervisor import DIRTY_FLAG_PATH, CRASH_HISTORY_PATH
         for p in [DIRTY_FLAG_PATH, CRASH_HISTORY_PATH]:
             if os.path.exists(p):
                 try:
@@ -56,7 +56,7 @@ class TestBatch17Supervisor(unittest.TestCase):
         kill_switch._ENGAGED_REASON = ""
         import desktop_agent
         desktop_agent.reset_abort()
-        from homie_supervisor import DIRTY_FLAG_PATH, CRASH_HISTORY_PATH
+        from helm_supervisor import DIRTY_FLAG_PATH, CRASH_HISTORY_PATH
         for p in [DIRTY_FLAG_PATH, CRASH_HISTORY_PATH]:
             if os.path.exists(p):
                 try:
@@ -128,7 +128,7 @@ class TestBatch17Supervisor(unittest.TestCase):
         client.connect()
         client.hello()
         
-        decision = client.propose("homie_get_vitals", {})
+        decision = client.propose("helm_get_vitals", {})
         self.assertEqual(decision["status"], "DENY")
         self.assertEqual(decision["reason_code"], REASON_SYSTEM_LOCKED)
 
@@ -139,7 +139,7 @@ class TestBatch17Supervisor(unittest.TestCase):
         self.assertEqual(supervisor.state, STATE_ARMED)
 
         # Now proposals execute normally
-        decision = client.propose("homie_get_vitals", {})
+        decision = client.propose("helm_get_vitals", {})
         self.assertEqual(decision["status"], "ALLOW")
         self.assertEqual(decision["reason_code"], REASON_OK)
 
@@ -152,7 +152,7 @@ class TestBatch17Supervisor(unittest.TestCase):
         client.connect()
         client.hello()
 
-        decision = client.propose("homie_get_vitals", {})
+        decision = client.propose("helm_get_vitals", {})
         self.assertEqual(decision["status"], "ALLOW")
 
         # Verify audit ledger has INTENT and OUTCOME entries
@@ -180,7 +180,7 @@ class TestBatch17Supervisor(unittest.TestCase):
         supervisor.last_heartbeat_time = time.time() - 6.0
         heartbeat_lease._ACTIVE_LEASES.clear()
 
-        decision = client.propose("homie_get_vitals", {})
+        decision = client.propose("helm_get_vitals", {})
         self.assertEqual(decision["status"], "DENY")
         self.assertEqual(decision["reason_code"], REASON_LEASE_EXPIRED)
 
@@ -188,7 +188,7 @@ class TestBatch17Supervisor(unittest.TestCase):
         supervisor.last_heartbeat_time = time.time()
         client.heartbeat(progress_counter=10)
         
-        decision = client.propose("homie_get_vitals", {})
+        decision = client.propose("helm_get_vitals", {})
         self.assertEqual(decision["status"], "ALLOW")
 
         supervisor.clean_shutdown()
@@ -204,7 +204,7 @@ class TestBatch17Supervisor(unittest.TestCase):
         canary = canary_monitor.DEFAULT_CANARY_TOKEN
         hostile_args = {"notes": f"Exfiltrating secret data: {canary}"}
 
-        decision = client.propose("homie_set_clipboard", hostile_args)
+        decision = client.propose("helm_set_clipboard", hostile_args)
         self.assertEqual(decision["status"], "DENY")
         self.assertEqual(decision["reason_code"], REASON_CANARY_DETECTED)
         self.assertEqual(supervisor.state, STATE_LOCKED)
@@ -220,11 +220,11 @@ class TestBatch17Supervisor(unittest.TestCase):
         client.hello()
 
         # Read clipboard marks session tainted
-        decision = client.propose("homie_get_clipboard", {}, caller_id="test_worker_session")
+        decision = client.propose("helm_get_clipboard", {}, caller_id="test_worker_session")
         self.assertIn(decision["status"], ["ALLOW", "DENY"])
 
         # Subsequent sensitive write requires human step-up
-        decision2 = client.propose("homie_snap_window", {"app_name": "notepad"}, caller_id="test_worker_session")
+        decision2 = client.propose("helm_snap_window", {"app_name": "notepad"}, caller_id="test_worker_session")
         self.assertEqual(decision2["status"], "NEEDS_HUMAN")
         self.assertIn("STEP_UP_REQUIRED", decision2["reason"])
 
@@ -238,7 +238,7 @@ class TestBatch17Supervisor(unittest.TestCase):
         client.connect()
         client.hello()
 
-        decision = client.propose("homie_set_clipboard", {"text": "hello from shadow"})
+        decision = client.propose("helm_set_clipboard", {"text": "hello from shadow"})
         self.assertEqual(decision["status"], "SHADOW")
         self.assertIn("SHADOW_SIMULATION", decision["result"])
 
@@ -247,8 +247,8 @@ class TestBatch17Supervisor(unittest.TestCase):
 
     def test_out_of_process_named_pipe_ipc(self):
         """Verifies end-to-end Windows Named Pipe IPC communication between supervisor and worker."""
-        from homie_supervisor import NamedPipeSupervisorServer, NamedPipeSupervisorClient
-        pipe_name = rf"\\.\pipe\test_homie_pipe_{os.getpid()}_{int(time.time()*1000)}"
+        from helm_supervisor import NamedPipeSupervisorServer, NamedPipeSupervisorClient
+        pipe_name = rf"\\.\pipe\test_helm_pipe_{os.getpid()}_{int(time.time()*1000)}"
         
         supervisor = PolicySupervisor()
         server = NamedPipeSupervisorServer(supervisor, pipe_name=pipe_name)
@@ -268,7 +268,7 @@ class TestBatch17Supervisor(unittest.TestCase):
             self.assertEqual(pong["status"], "PONG")
 
             # 3. PROPOSE action frame
-            decision = client.propose("homie_get_vitals", {})
+            decision = client.propose("helm_get_vitals", {})
             self.assertEqual(decision["status"], "ALLOW")
             self.assertEqual(decision["reason_code"], REASON_OK)
             self.assertIn("ram_pct", decision["result"])

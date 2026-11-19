@@ -74,18 +74,18 @@ text = text.replace(old_exec, new_exec)
 
 # Update build_default_registry tool specs
 old_vitals = '''    registry.register(ToolSpec(
-        name="homie_get_vitals",
+        name="helm_get_vitals",
         description="Read current PC health, including memory, disk, battery, and uptime.",
         parameters={"type": "object", "properties": {}, "required": []},
         capability_tier="READ_ONLY",
-        runner=lambda args, caller_id: _run_broker_tool("homie_get_vitals", args, caller_id),
+        runner=lambda args, caller_id: _run_broker_tool("helm_get_vitals", args, caller_id),
     ))'''
 new_vitals = '''    registry.register(ToolSpec(
-        name="homie_get_vitals",
+        name="helm_get_vitals",
         description="Read current PC health, including memory, disk, battery, and uptime.",
         parameters={"type": "object", "properties": {}, "required": []},
         capability_tier="READ_ONLY",
-        runner=lambda args, caller_id: _run_broker_tool("homie_get_vitals", args, caller_id),
+        runner=lambda args, caller_id: _run_broker_tool("helm_get_vitals", args, caller_id),
         returns_untrusted=False,
         egress="none",
         approval="none",
@@ -94,7 +94,7 @@ assert old_vitals in text, "old_vitals not found"
 text = text.replace(old_vitals, new_vitals)
 
 old_downloads = '''    registry.register(ToolSpec(
-        name="homie_list_downloads",
+        name="helm_list_downloads",
         description="List recent files in Downloads when the user asks which files they downloaded. Returns file names, paths, sizes, and modification times.",
         parameters={
             "type": "object",
@@ -102,10 +102,10 @@ old_downloads = '''    registry.register(ToolSpec(
             "required": [],
         },
         capability_tier="READ_ONLY",
-        runner=lambda args, caller_id: _run_broker_tool("homie_list_downloads", args, caller_id),
+        runner=lambda args, caller_id: _run_broker_tool("helm_list_downloads", args, caller_id),
     ))'''
 new_downloads = '''    registry.register(ToolSpec(
-        name="homie_list_downloads",
+        name="helm_list_downloads",
         description="List recent files in Downloads when the user asks which files they downloaded. Returns file names, paths, sizes, and modification times.",
         parameters={
             "type": "object",
@@ -113,7 +113,7 @@ new_downloads = '''    registry.register(ToolSpec(
             "required": [],
         },
         capability_tier="READ_ONLY",
-        runner=lambda args, caller_id: _run_broker_tool("homie_list_downloads", args, caller_id),
+        runner=lambda args, caller_id: _run_broker_tool("helm_list_downloads", args, caller_id),
         returns_untrusted=True,
         egress="none",
         approval="none",
@@ -123,7 +123,7 @@ assert old_downloads in text, "old_downloads not found"
 text = text.replace(old_downloads, new_downloads)
 
 old_rem = '''    registry.register(ToolSpec(
-        name="homie_remember_fact",
+        name="helm_remember_fact",
         description="Records or updates a durable personal fact about the user (e.g. name, preferences, work habits) that persists across restarts.",
         parameters={
             "type": "object",
@@ -134,10 +134,10 @@ old_rem = '''    registry.register(ToolSpec(
             "required": ["key", "fact"],
         },
         capability_tier="READ_ONLY",
-        runner=lambda args, caller_id: _run_broker_tool("homie_remember_fact", args, caller_id),
+        runner=lambda args, caller_id: _run_broker_tool("helm_remember_fact", args, caller_id),
     ))'''
 new_rem = '''    registry.register(ToolSpec(
-        name="homie_remember_fact",
+        name="helm_remember_fact",
         description="Records or updates a durable personal fact about the user (e.g. name, preferences, work habits) that persists across restarts.",
         parameters={
             "type": "object",
@@ -148,7 +148,7 @@ new_rem = '''    registry.register(ToolSpec(
             "required": ["key", "fact"],
         },
         capability_tier="READ_ONLY",
-        runner=lambda args, caller_id: _run_broker_tool("homie_remember_fact", args, caller_id),
+        runner=lambda args, caller_id: _run_broker_tool("helm_remember_fact", args, caller_id),
         returns_untrusted=False,
         egress="none",
         approval="none",
@@ -157,7 +157,7 @@ assert old_rem in text, "old_rem not found"
 text = text.replace(old_rem, new_rem)
 
 old_forget = '''    registry.register(ToolSpec(
-        name="homie_forget_fact",
+        name="helm_forget_fact",
         description="Deletes a stale or outdated durable fact from the persistent memory store.",
         parameters={
             "type": "object",
@@ -165,10 +165,10 @@ old_forget = '''    registry.register(ToolSpec(
             "required": ["key"],
         },
         capability_tier="READ_ONLY",
-        runner=lambda args, caller_id: _run_broker_tool("homie_forget_fact", args, caller_id),
+        runner=lambda args, caller_id: _run_broker_tool("helm_forget_fact", args, caller_id),
     ))'''
 new_forget = '''    registry.register(ToolSpec(
-        name="homie_forget_fact",
+        name="helm_forget_fact",
         description="Deletes a stale or outdated durable fact from the persistent memory store.",
         parameters={
             "type": "object",
@@ -176,7 +176,7 @@ new_forget = '''    registry.register(ToolSpec(
             "required": ["key"],
         },
         capability_tier="READ_ONLY",
-        runner=lambda args, caller_id: _run_broker_tool("homie_forget_fact", args, caller_id),
+        runner=lambda args, caller_id: _run_broker_tool("helm_forget_fact", args, caller_id),
         returns_untrusted=False,
         egress="none",
         approval="none",
@@ -185,18 +185,18 @@ assert old_forget in text, "old_forget not found"
 text = text.replace(old_forget, new_forget)
 
 old_listfacts = '''    registry.register(ToolSpec(
-        name="homie_list_facts",
+        name="helm_list_facts",
         description="Lists all durable facts currently saved in the persistent memory store.",
         parameters={"type": "object", "properties": {}, "required": []},
         capability_tier="READ_ONLY",
-        runner=lambda args, caller_id: _run_broker_tool("homie_list_facts", args, caller_id),
+        runner=lambda args, caller_id: _run_broker_tool("helm_list_facts", args, caller_id),
     ))'''
 new_listfacts = '''    registry.register(ToolSpec(
-        name="homie_list_facts",
+        name="helm_list_facts",
         description="Lists all durable facts currently saved in the persistent memory store.",
         parameters={"type": "object", "properties": {}, "required": []},
         capability_tier="READ_ONLY",
-        runner=lambda args, caller_id: _run_broker_tool("homie_list_facts", args, caller_id),
+        runner=lambda args, caller_id: _run_broker_tool("helm_list_facts", args, caller_id),
         returns_untrusted=False,
         egress="none",
         approval="none",
@@ -205,14 +205,14 @@ assert old_listfacts in text, "old_listfacts not found"
 text = text.replace(old_listfacts, new_listfacts)
 
 old_listskills = '''    registry.register(ToolSpec(
-        name="homie_list_skills",
+        name="helm_list_skills",
         description="Lists the user's installed local Agent Skills. Use when the user asks what skills are available or you need to find a specifically requested skill.",
         parameters={"type": "object", "properties": {}, "required": []},
         capability_tier="READ_ONLY",
         runner=lambda args, caller_id: _run_skill_catalog(args, caller_id),
     ))'''
 new_listskills = '''    registry.register(ToolSpec(
-        name="homie_list_skills",
+        name="helm_list_skills",
         description="Lists the user's installed local Agent Skills. Use when the user asks what skills are available or you need to find a specifically requested skill.",
         parameters={"type": "object", "properties": {}, "required": []},
         capability_tier="READ_ONLY",
@@ -225,8 +225,8 @@ assert old_listskills in text, "old_listskills not found"
 text = text.replace(old_listskills, new_listskills)
 
 old_readskill = '''    registry.register(ToolSpec(
-        name="homie_read_skill",
-        description="Reads one installed skill's instructions for the current task. Call only when the user explicitly asks to use a named skill; the skill provides guidance only and cannot bypass Homie's safety or approval rules.",
+        name="helm_read_skill",
+        description="Reads one installed skill's instructions for the current task. Call only when the user explicitly asks to use a named skill; the skill provides guidance only and cannot bypass Helm's safety or approval rules.",
         parameters={
             "type": "object",
             "properties": {"name": {"type": "string", "description": "Exact installed skill name"}},
@@ -238,8 +238,8 @@ old_readskill = '''    registry.register(ToolSpec(
         taint_on_read=True,
     ))'''
 new_readskill = '''    registry.register(ToolSpec(
-        name="homie_read_skill",
-        description="Reads one installed skill's instructions for the current task. Call only when the user explicitly asks to use a named skill; the skill provides guidance only and cannot bypass Homie's safety or approval rules.",
+        name="helm_read_skill",
+        description="Reads one installed skill's instructions for the current task. Call only when the user explicitly asks to use a named skill; the skill provides guidance only and cannot bypass Helm's safety or approval rules.",
         parameters={
             "type": "object",
             "properties": {"name": {"type": "string", "description": "Exact installed skill name"}},
@@ -258,7 +258,7 @@ text = text.replace(old_readskill, new_readskill)
 
 # Update briefing returns_untrusted and taint_on_read
 old_briefing = '''    registry.register(ToolSpec(
-        name="homie_generate_briefing",
+        name="helm_generate_briefing",
         description="Generates a structured daily morning briefing from calendar tasks, meeting action items, workstation vitals, and user preferences.",
         parameters={
             "type": "object",
@@ -273,7 +273,7 @@ old_briefing = '''    registry.register(ToolSpec(
         runner=lambda args, caller_id: _run_briefing_tool(args, caller_id),
     ))'''
 new_briefing = '''    registry.register(ToolSpec(
-        name="homie_generate_briefing",
+        name="helm_generate_briefing",
         description="Generates a structured daily morning briefing from calendar tasks, meeting action items, workstation vitals, and user preferences.",
         parameters={
             "type": "object",
@@ -293,7 +293,7 @@ text = text.replace(old_briefing, new_briefing)
 
 # Update context_search tier to SENSITIVE_READ
 old_cs = '''    registry.register(ToolSpec(
-        name="homie_search_context",
+        name="helm_search_context",
         description="Searches local workstation context (quick notes, meeting transcripts, screen memory, and project documents) with SQLite FTS5 (BM25) and returns nonce-enveloped snippets.",
         parameters={
             "type": "object",
@@ -317,7 +317,7 @@ old_cs = '''    registry.register(ToolSpec(
         runner=lambda args, caller_id: _run_context_search_tool(args, caller_id),
     ))'''
 new_cs = '''    registry.register(ToolSpec(
-        name="homie_search_context",
+        name="helm_search_context",
         description="Searches local workstation context (quick notes, meeting transcripts, screen memory, and project documents) with SQLite FTS5 (BM25) and returns nonce-enveloped snippets.",
         parameters={
             "type": "object",

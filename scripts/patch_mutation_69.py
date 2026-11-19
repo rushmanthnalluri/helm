@@ -1,4 +1,4 @@
-with open("homie_supervisor.py", "rb") as f:
+with open("helm_supervisor.py", "rb") as f:
     c = f.read().decode("utf-8")
 
 crlf = "\r\n" in c
@@ -58,7 +58,7 @@ cn = cn.replace(old_sqlite_call, new_sqlite_call, 1)
 if crlf:
     cn = cn.replace("\n", "\r\n")
 
-with open("homie_supervisor.py", "wb") as f:
+with open("helm_supervisor.py", "wb") as f:
     f.write(cn.encode("utf-8"))
 
-print("Successfully patched homie_supervisor.py for Mutation 69.")
+print("Successfully patched helm_supervisor.py for Mutation 69.")

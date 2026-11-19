@@ -4,7 +4,7 @@ Provides a safe, cryptographically authenticated recovery mechanism when the Pol
 transitions to STATE_LOCKED (e.g. dirty boot, crash-loop threshold exceeded, or kill switch engagement):
 - Rejects booleans and unbound bearer tokens. Requires SignedActionApproval from paired hardware device.
 - Inspects and surfaces the exact root cause of lockout and unresolved action intents.
-- Orderly purges dirty bits (homie_supervisor_dirty.flag) and resets crash history.
+- Orderly purges dirty bits (helm_supervisor_dirty.flag) and resets crash history.
 - Disengages emergency kill switch with preserve_taint enforcement (prevents unverified taint laundering).
 - Re-arms the supervisor into operational STATE_ARMED and bumps the session epoch.
 - Records the recovery event and authorizing device identity to the HMAC-SHA256 audit ledger.
@@ -22,13 +22,13 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-import homie_supervisor
+import helm_supervisor
 import kill_switch
 import taint_tracker
 import agent_audit_ledger
 import phone_approval_portal
 
-logger = logging.getLogger("homie.locked_recovery")
+logger = logging.getLogger("helm.locked_recovery")
 
 REQUIRED_CONFIRMATION = "CONFIRM-RECOVERY"
 
@@ -36,16 +36,16 @@ REQUIRED_CONFIRMATION = "CONFIRM-RECOVERY"
 def inspect_lockout_cause() -> Dict[str, Any]:
     """Diagnoses the current lockout status and underlying root causes."""
     status = {
-        "is_dirty_flag_present": os.path.exists(homie_supervisor.DIRTY_FLAG_PATH),
+        "is_dirty_flag_present": os.path.exists(helm_supervisor.DIRTY_FLAG_PATH),
         "is_kill_switch_active": kill_switch.is_kill_switch_active(),
         "kill_switch_reason": kill_switch.get_kill_switch_status().get("reason", ""),
         "crash_count_recent": 0,
         "recent_crash_timestamps": []
     }
 
-    if os.path.exists(homie_supervisor.CRASH_HISTORY_PATH):
+    if os.path.exists(helm_supervisor.CRASH_HISTORY_PATH):
         try:
-            with open(homie_supervisor.CRASH_HISTORY_PATH, "r", encoding="utf-8") as f:
+            with open(helm_supervisor.CRASH_HISTORY_PATH, "r", encoding="utf-8") as f:
                 crashes = json.load(f)
                 status["recent_crash_timestamps"] = crashes
                 status["crash_count_recent"] = len(crashes)
@@ -87,7 +87,7 @@ def recover_from_locked_state(
 
     expected_payload_hash = compute_recovery_payload_hash(clean_conf)
     app_ok, app_msg = phone_approval_portal.verify_action_approval(
-        approval, "homie_supervisor_recovery", expected_payload_hash
+        approval, "helm_supervisor_recovery", expected_payload_hash
     )
     if not app_ok:
         msg = f"Recovery rejected: Action approval verification failed: {app_msg}"
@@ -107,17 +107,17 @@ def recover_from_locked_state(
             pass
 
     # 3. Clean dirty boot marker
-    if os.path.exists(homie_supervisor.DIRTY_FLAG_PATH):
+    if os.path.exists(helm_supervisor.DIRTY_FLAG_PATH):
         try:
-            os.remove(homie_supervisor.DIRTY_FLAG_PATH)
+            os.remove(helm_supervisor.DIRTY_FLAG_PATH)
             actions_taken.append("Removed dirty flag file")
         except Exception as e:
             logger.error("Could not remove dirty flag: %s", e)
 
     # 4. Reset crash loop history after surfacing root cause
-    if os.path.exists(homie_supervisor.CRASH_HISTORY_PATH):
+    if os.path.exists(helm_supervisor.CRASH_HISTORY_PATH):
         try:
-            os.remove(homie_supervisor.CRASH_HISTORY_PATH)
+            os.remove(helm_supervisor.CRASH_HISTORY_PATH)
             actions_taken.append(f"Reset crash-loop history (past count: {diag_before.get('crash_count_recent', 0)})")
         except Exception as e:
             logger.error("Could not remove crash history: %s", e)
@@ -137,7 +137,7 @@ def recover_from_locked_state(
     # 7. Re-arm supervisor instance and bump session epoch
     if supervisor_instance:
         supervisor_instance.session_epoch = int(time.time())
-        supervisor_instance.state = homie_supervisor.STATE_ARMED
+        supervisor_instance.state = helm_supervisor.STATE_ARMED
         supervisor_instance.lock_reason = ""
         actions_taken.append(f"Transitioned supervisor state to ARMED (bumped epoch: {supervisor_instance.session_epoch})")
 
@@ -153,7 +153,7 @@ def recover_from_locked_state(
     try:
         agent_audit_ledger.record_agent_action(
             f"approval_{approval.get('device_id', 'phone')}",
-            "homie_supervisor_recovery",
+            "helm_supervisor_recovery",
             "ELEVATED_CONFIRM",
             {
                 "unresolved_intents_count": len(unresolved_intents),
@@ -173,7 +173,7 @@ def recover_from_locked_state(
 def interactive_cli_recovery(approval_provider_func=None):
     """Interactive command-line tool for local workstation operator recovery."""
     print("=" * 65)
-    print("=== HOMIE WORKSTATION SUPERVISOR LOCKOUT RECOVERY ===")
+    print("=== HELM WORKSTATION SUPERVISOR LOCKOUT RECOVERY ===")
     print("=" * 65)
     diag = inspect_lockout_cause()
     print("Current Workstation Diagnostics:")

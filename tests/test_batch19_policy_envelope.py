@@ -33,7 +33,7 @@ class TestBatch19PolicyEnvelope(unittest.TestCase):
         self.env = PolicyEnvelope(
             envelope_id="env_unit_test_01",
             allowed_process_images=["notepad.exe", "calc.exe"],
-            allowed_action_types=["homie_type_text", "homie_click_coords", "homie_snap_window"],
+            allowed_action_types=["helm_type_text", "helm_click_coords", "helm_snap_window"],
             step_budget=3,
             keystroke_cap=50,
             expiry=time.time() + 120.0,
@@ -59,22 +59,22 @@ class TestBatch19PolicyEnvelope(unittest.TestCase):
         self.env.activate_with_signature(sig)
 
         # Step 1: OK
-        ok1, res1 = self.env.check_and_consume("homie_click_coords", {"x": 50, "y": 50}, "notepad.exe", self.epoch)
+        ok1, res1 = self.env.check_and_consume("helm_click_coords", {"x": 50, "y": 50}, "notepad.exe", self.epoch)
         self.assertTrue(ok1)
         self.assertEqual(self.env.steps_consumed, 1)
 
         # Step 2: OK
-        ok2, res2 = self.env.check_and_consume("homie_snap_window", {"app_name": "notepad"}, "notepad.exe", self.epoch)
+        ok2, res2 = self.env.check_and_consume("helm_snap_window", {"app_name": "notepad"}, "notepad.exe", self.epoch)
         self.assertTrue(ok2)
         self.assertEqual(self.env.steps_consumed, 2)
 
         # Step 3: OK (Reaches limit)
-        ok3, res3 = self.env.check_and_consume("homie_click_coords", {"x": 60, "y": 60}, "notepad.exe", self.epoch)
+        ok3, res3 = self.env.check_and_consume("helm_click_coords", {"x": 60, "y": 60}, "notepad.exe", self.epoch)
         self.assertTrue(ok3)
         self.assertEqual(self.env.steps_consumed, 3)
 
         # Step 4: HARD DENIAL
-        ok4, res4 = self.env.check_and_consume("homie_click_coords", {"x": 70, "y": 70}, "notepad.exe", self.epoch)
+        ok4, res4 = self.env.check_and_consume("helm_click_coords", {"x": 70, "y": 70}, "notepad.exe", self.epoch)
         self.assertFalse(ok4)
         self.assertIn("Step budget exceeded", res4)
 
@@ -85,12 +85,12 @@ class TestBatch19PolicyEnvelope(unittest.TestCase):
         self.env.activate_with_signature(sig)
 
         # Type 30 chars (under 50 cap): OK
-        ok1, _ = self.env.check_and_consume("homie_type_text", {"text": "A" * 30}, "notepad.exe", self.epoch)
+        ok1, _ = self.env.check_and_consume("helm_type_text", {"text": "A" * 30}, "notepad.exe", self.epoch)
         self.assertTrue(ok1)
         self.assertEqual(self.env.keystrokes_consumed, 30)
 
         # Type 25 more chars (total 55 > 50 cap): HARD DENY
-        ok2, res2 = self.env.check_and_consume("homie_type_text", {"text": "B" * 25}, "notepad.exe", self.epoch)
+        ok2, res2 = self.env.check_and_consume("helm_type_text", {"text": "B" * 25}, "notepad.exe", self.epoch)
         self.assertFalse(ok2)
         self.assertIn("Keystroke cap exceeded", res2)
 
@@ -101,7 +101,7 @@ class TestBatch19PolicyEnvelope(unittest.TestCase):
         self.env.activate_with_signature(sig)
 
         # Attempt to target powershell.exe: DENY
-        ok, res = self.env.check_and_consume("homie_click_coords", {"x": 10, "y": 10}, "powershell.exe", self.epoch)
+        ok, res = self.env.check_and_consume("helm_click_coords", {"x": 10, "y": 10}, "powershell.exe", self.epoch)
         self.assertFalse(ok)
         self.assertIn("Target process 'powershell.exe' not in envelope", res)
 
@@ -111,7 +111,7 @@ class TestBatch19PolicyEnvelope(unittest.TestCase):
         env_with_del = PolicyEnvelope(
             envelope_id="env_del",
             allowed_process_images=["notepad.exe"],
-            allowed_action_types=["homie_type_text", "homie_delete_file"],
+            allowed_action_types=["helm_type_text", "helm_delete_file"],
             step_budget=10,
             keystroke_cap=100,
             expiry=time.time() + 100,
@@ -121,8 +121,8 @@ class TestBatch19PolicyEnvelope(unittest.TestCase):
         sig = self.sign_test_challenge(self.phone_priv, ch["canonical_hash"])
         env_with_del.activate_with_signature(sig)
 
-        # homie_delete_file must be denied by envelope policy because it requires explicit step-up!
-        ok, res = env_with_del.check_and_consume("homie_delete_file", {"path": "test.txt"}, "notepad.exe", self.epoch)
+        # helm_delete_file must be denied by envelope policy because it requires explicit step-up!
+        ok, res = env_with_del.check_and_consume("helm_delete_file", {"path": "test.txt"}, "notepad.exe", self.epoch)
         self.assertFalse(ok)
         self.assertIn("requires per-step step-up human approval", res)
 
@@ -133,7 +133,7 @@ class TestBatch19PolicyEnvelope(unittest.TestCase):
         self.env.activate_with_signature(sig)
 
         # Mismatched taint epoch
-        ok, res = self.env.check_and_consume("homie_click_coords", {"x": 10, "y": 10}, "notepad.exe", self.epoch + 1)
+        ok, res = self.env.check_and_consume("helm_click_coords", {"x": 10, "y": 10}, "notepad.exe", self.epoch + 1)
         self.assertFalse(ok)
         self.assertIn("Taint epoch mismatch", res)
         self.assertFalse(self.env.is_active)
@@ -145,7 +145,7 @@ class TestBatch19PolicyEnvelope(unittest.TestCase):
                 PolicyEnvelope(
                     envelope_id="bad_env",
                     allowed_process_images=[prohibited],
-                    allowed_action_types=["homie_type_text"],
+                    allowed_action_types=["helm_type_text"],
                     step_budget=5,
                     keystroke_cap=50,
                     expiry=time.time() + 100,
@@ -157,7 +157,7 @@ class TestBatch19PolicyEnvelope(unittest.TestCase):
         browser_env = PolicyEnvelope(
             envelope_id="browser_env",
             allowed_process_images=["chrome.exe"],
-            allowed_action_types=["homie_click_coords", "homie_type_text"],
+            allowed_action_types=["helm_click_coords", "helm_type_text"],
             step_budget=5,
             keystroke_cap=100,
             expiry=time.time() + 100,
@@ -170,13 +170,13 @@ class TestBatch19PolicyEnvelope(unittest.TestCase):
 
         # 1. Allowed domain navigation: OK
         ok1, _ = browser_env.check_and_consume(
-            "homie_click_coords", {"x": 100, "y": 100}, "chrome.exe", self.epoch, current_domain="docs.python.org"
+            "helm_click_coords", {"x": 100, "y": 100}, "chrome.exe", self.epoch, current_domain="docs.python.org"
         )
         self.assertTrue(ok1)
 
         # 2. Out-of-scope domain escape (e.g. webmail): HARD DENY
         ok2, res2 = browser_env.check_and_consume(
-            "homie_click_coords", {"x": 100, "y": 100}, "chrome.exe", self.epoch, current_domain="mail.google.com"
+            "helm_click_coords", {"x": 100, "y": 100}, "chrome.exe", self.epoch, current_domain="mail.google.com"
         )
         self.assertFalse(ok2)
         self.assertIn("outside envelope domain scope", res2)
@@ -189,14 +189,14 @@ class TestBatch19PolicyEnvelope(unittest.TestCase):
 
         # 1. Button labeled "Continue" or "Agree" (disguised checkout/submission): DENY
         ok1, res1 = self.env.check_and_consume(
-            "homie_click_coords", {"element_name": "Continue to Purchase", "x": 10, "y": 10}, "notepad.exe", self.epoch
+            "helm_click_coords", {"element_name": "Continue to Purchase", "x": 10, "y": 10}, "notepad.exe", self.epoch
         )
         self.assertFalse(ok1)
         self.assertIn("Semantic high-risk control detected", res1)
 
         # 2. Typing text ending with Enter (\n) to trigger form submit: DENY
         ok2, res2 = self.env.check_and_consume(
-            "homie_type_text", {"text": "password123\n"}, "notepad.exe", self.epoch
+            "helm_type_text", {"text": "password123\n"}, "notepad.exe", self.epoch
         )
         self.assertFalse(ok2)
         self.assertIn("Enter-to-submit", res2)

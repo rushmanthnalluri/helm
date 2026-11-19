@@ -6,8 +6,8 @@ import unittest
 from unittest.mock import MagicMock, Mock, patch
 
 import agent_tools
-import homie_cdp
-from homie_cdp import CDPBridge, launch_chrome_debug
+import helm_cdp
+from helm_cdp import CDPBridge, launch_chrome_debug
 
 
 class FakeWebSocket:
@@ -176,13 +176,13 @@ class TestCDPBridge(unittest.TestCase):
     def test_get_page_text(self):
         """Verify get_page_text queries document.body.innerText."""
         responses = {
-            "Runtime.evaluate": {"result": {"type": "string", "value": "Welcome to Homie Workstation"}},
+            "Runtime.evaluate": {"result": {"type": "string", "value": "Welcome to Helm Workstation"}},
         }
         fake_ws = FakeWebSocket(responses=responses)
         self.bridge._ws = fake_ws
 
         text = self.bridge.get_page_text()
-        self.assertEqual(text, "Welcome to Homie Workstation")
+        self.assertEqual(text, "Welcome to Helm Workstation")
 
     def test_screenshot(self):
         """Verify screenshot decodes base64 payload from Page.captureScreenshot."""

@@ -1,7 +1,7 @@
 """rails_audit.py - Tier 6 Visible Audit Trail and Running Cost / Token Tally.
 
 Maintains:
-1. A plain inspectable audit log (homie_audit.log) recording:
+1. A plain inspectable audit log (helm_audit.log) recording:
    - Tool execution events with arguments and outcomes.
    - Heartbeat alerts and notices surfaced.
    - Confirmation requests, approvals, and denials.
@@ -21,11 +21,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import rails_config
 
-logger = logging.getLogger("homie.rails_audit")
+logger = logging.getLogger("helm.rails_audit")
 
 
 def get_audit_dir() -> Path:
-    base = os.environ.get("HOMIE_DIR") or (Path.home() / ".config" / "homie")
+    base = os.environ.get("HELM_DIR") or (Path.home() / ".config" / "helm")
     return Path(base).resolve()
 
 
@@ -34,8 +34,8 @@ class RailsAuditTracker:
 
     def __init__(self, log_path: Optional[Path | str] = None, state_path: Optional[Path | str] = None):
         audit_dir = get_audit_dir()
-        self.log_path = Path(log_path).resolve() if log_path else (audit_dir / "homie_audit.log")
-        self.state_path = Path(state_path).resolve() if state_path else (audit_dir / "homie_cost_state.json")
+        self.log_path = Path(log_path).resolve() if log_path else (audit_dir / "helm_audit.log")
+        self.state_path = Path(state_path).resolve() if state_path else (audit_dir / "helm_cost_state.json")
         self._lock = threading.RLock()
         self._total_input_tokens = 0
         self._total_output_tokens = 0

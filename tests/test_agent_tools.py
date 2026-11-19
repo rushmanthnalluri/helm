@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from agent_tools import ToolRegistry, ToolSpec, build_default_registry
 import action_broker
-import homie_supervisor
+import helm_supervisor
 
 
 def spec(runner, timeout=1.0, tier="READ_ONLY", returns_untrusted=False, egress="none", approval="none"):
@@ -33,7 +33,7 @@ def spec(runner, timeout=1.0, tier="READ_ONLY", returns_untrusted=False, egress=
 
 
 class TestAgentTools(unittest.TestCase):
-    @patch("homie_supervisor.get_allowed_tools_map", return_value={"sample_read": "READ_ONLY"})
+    @patch("helm_supervisor.get_allowed_tools_map", return_value={"sample_read": "READ_ONLY"})
     def test_arguments_validate_before_runner(self, _policy):
         calls = []
         registry = ToolRegistry()
@@ -57,7 +57,7 @@ class TestAgentTools(unittest.TestCase):
             registry.register(spec(lambda args, caller_id: None, tier="WRITE_EXEC"))
         self.assertFalse(registry.execute("send_chat_message", {"message": "hello"})["ok"])
 
-    @patch("homie_supervisor.get_allowed_tools_map", return_value={"sample_read": "READ_ONLY"})
+    @patch("helm_supervisor.get_allowed_tools_map", return_value={"sample_read": "READ_ONLY"})
     def test_timeout_returns_structured_failure(self, _policy):
         registry = ToolRegistry()
         registry.register(spec(lambda args, caller_id: time.sleep(0.05), timeout=0.001))
@@ -66,35 +66,35 @@ class TestAgentTools(unittest.TestCase):
         self.assertIn("timed out", result["error"])
 
     @patch("action_broker.execute_action", return_value=(True, "Success", {"ram_pct": 42, "active_window": "Private title"}))
-    @patch("homie_supervisor.get_allowed_tools_map", return_value={
-        "homie_get_vitals": "READ_ONLY", "homie_list_downloads": "READ_ONLY"
+    @patch("helm_supervisor.get_allowed_tools_map", return_value={
+        "helm_get_vitals": "READ_ONLY", "helm_list_downloads": "READ_ONLY"
     })
     def test_default_registry_routes_read_only_action_through_broker(self, _policy, execute_action):
         registry = build_default_registry()
-        result = registry.execute("homie_get_vitals", {})
+        result = registry.execute("helm_get_vitals", {})
         self.assertEqual(result, {"ok": True, "data": {"ram_pct": 42}})
-        execute_action.assert_called_once_with("homie_get_vitals", {}, caller_id="ai_text_agent")
+        execute_action.assert_called_once_with("helm_get_vitals", {}, caller_id="ai_text_agent")
 
     def test_tool_schemas_are_bounded_and_descriptive(self):
         registry = build_default_registry()
         schema = {tool["function"]["name"]: tool["function"] for tool in registry.schemas()}
         expected_core = {
-            "homie_get_vitals",
-            "homie_list_downloads",
-            "homie_remember_fact",
-            "homie_forget_fact",
-            "homie_list_facts",
-            "homie_list_skills",
-            "homie_read_skill",
-            "homie_generate_briefing",
-            "homie_search_context",
+            "helm_get_vitals",
+            "helm_list_downloads",
+            "helm_remember_fact",
+            "helm_forget_fact",
+            "helm_list_facts",
+            "helm_list_skills",
+            "helm_read_skill",
+            "helm_generate_briefing",
+            "helm_search_context",
         }
         self.assertTrue(expected_core.issubset(set(schema)))
-        self.assertIn("recent files", schema["homie_list_downloads"]["description"])
-        self.assertEqual(schema["homie_list_downloads"]["parameters"]["properties"]["limit"]["maximum"], 10)
+        self.assertIn("recent files", schema["helm_list_downloads"]["description"])
+        self.assertEqual(schema["helm_list_downloads"]["parameters"]["properties"]["limit"]["maximum"], 10)
 
     def test_close_cleans_only_an_unlocked_broker(self):
-        supervisor = SimpleNamespace(state=homie_supervisor.STATE_ARMED)
+        supervisor = SimpleNamespace(state=helm_supervisor.STATE_ARMED)
         supervisor.clean_shutdown = Mock()
         broker = SimpleNamespace(supervisor=supervisor)
         registry = ToolRegistry()
@@ -103,7 +103,7 @@ class TestAgentTools(unittest.TestCase):
             supervisor.clean_shutdown.assert_called_once_with()
             self.assertIsNone(action_broker._GLOBAL_BROKER)
 
-        locked_supervisor = SimpleNamespace(state=homie_supervisor.STATE_LOCKED)
+        locked_supervisor = SimpleNamespace(state=helm_supervisor.STATE_LOCKED)
         locked_supervisor.clean_shutdown = Mock()
         locked_broker = SimpleNamespace(supervisor=locked_supervisor)
         locked_registry = ToolRegistry()
@@ -177,13 +177,13 @@ class TestAgentTools(unittest.TestCase):
             self.assertGreater(tool.max_output_chars, 0)
 
         # Context search is SENSITIVE_READ with taint
-        cs = registry._tools["homie_search_context"]
+        cs = registry._tools["helm_search_context"]
         self.assertEqual(cs.capability_tier, "SENSITIVE_READ")
         self.assertTrue(cs.returns_untrusted)
         self.assertTrue(cs.taint_on_read)
 
         # Briefing tool carries taint
-        briefing = registry._tools["homie_generate_briefing"]
+        briefing = registry._tools["helm_generate_briefing"]
         self.assertTrue(briefing.returns_untrusted)
         self.assertTrue(briefing.taint_on_read)
 

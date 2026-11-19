@@ -25,7 +25,7 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 import phone_approval_portal
-import homie_supervisor
+import helm_supervisor
 import phone_gateway
 import taint_tracker
 from tests.phone_testing_keys import (
@@ -72,7 +72,7 @@ class TestBatch29SecurityHardening(unittest.TestCase):
         }
         ch = phone_approval_portal.generate_approval_challenge(
             step_up_id="step_xss_001",
-            tool_name="homie_agent_type",
+            tool_name="helm_agent_type",
             arguments=malicious_args,
             session_id="sess_xss",
             taint_epoch=0,
@@ -92,7 +92,7 @@ class TestBatch29SecurityHardening(unittest.TestCase):
         """Vector 2: Attacker cannot jump counter to a huge value because counter is bound in the signed challenge."""
         ch = phone_approval_portal.generate_approval_challenge(
             step_up_id="step_poison_001",
-            tool_name="homie_snap_window",
+            tool_name="helm_snap_window",
             arguments={"app_name": "calc.exe"},
             session_id="sess_poison",
             taint_epoch=0,
@@ -112,7 +112,7 @@ class TestBatch29SecurityHardening(unittest.TestCase):
         """Vector 3: Pending challenges require valid authentication; unauthenticated bad signatures DO NOT cancel challenge."""
         ch = phone_approval_portal.generate_approval_challenge(
             step_up_id="step_unauth_001",
-            tool_name="homie_get_clipboard",
+            tool_name="helm_get_clipboard",
             arguments={},
             session_id="sess_unauth",
             taint_epoch=0,
@@ -150,12 +150,12 @@ class TestBatch29SecurityHardening(unittest.TestCase):
         """Vector 4: Concurrent threads attempting to replay the same action approval nonce must have exactly one success."""
         payload_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         approval = mint_test_action_approval(
-            self.phone_priv, "homie_apply_update", payload_hash, device_id="primary_phone", nonce="unique_race_nonce_123456"
+            self.phone_priv, "helm_apply_update", payload_hash, device_id="primary_phone", nonce="unique_race_nonce_123456"
         )
 
         results = []
         def worker():
-            ok, _ = phone_approval_portal.verify_action_approval(approval, "homie_apply_update", payload_hash)
+            ok, _ = phone_approval_portal.verify_action_approval(approval, "helm_apply_update", payload_hash)
             results.append(ok)
 
         threads = [threading.Thread(target=worker) for _ in range(10)]
@@ -195,15 +195,15 @@ class TestBatch29SecurityHardening(unittest.TestCase):
 
     def test_7_supervisor_derives_identity_and_computes_args_hash(self):
         """Vector 7: Supervisor ignores worker-supplied args_hash and caller_id spoofing."""
-        supervisor = homie_supervisor.PolicySupervisor()
-        supervisor.state = homie_supervisor.STATE_ARMED
+        supervisor = helm_supervisor.PolicySupervisor()
+        supervisor.state = helm_supervisor.STATE_ARMED
         import heartbeat_lease
         supervisor.lease_token, _ = heartbeat_lease.acquire_lease("supervisor_worker", duration=10.0)
         supervisor.last_heartbeat_time = time.time()
 
         spoofed_payload = {
             "req_id": "req_spoof_1",
-            "tool": "homie_get_vitals",
+            "tool": "helm_get_vitals",
             "args": {},
             "caller_id": "admin_spoofed",  # Attacker tries to spoof admin caller ID
             "args_hash": "bogus_fake_args_hash"  # Attacker tries to inject precomputed hash
@@ -211,17 +211,17 @@ class TestBatch29SecurityHardening(unittest.TestCase):
 
         # Supervisor must execute and compute args_hash internally
         reply_bytes = supervisor._handle_propose(spoofed_payload, seq=10)
-        ver, mtype, s_seq, payload, consumed = homie_supervisor.BinaryFrameCodec.decode_frame(reply_bytes)
+        ver, mtype, s_seq, payload, consumed = helm_supervisor.BinaryFrameCodec.decode_frame(reply_bytes)
         self.assertEqual(payload["status"], "ALLOW")
         supervisor.clean_shutdown()
 
     def test_8_mandatory_sequence_number_rejection_of_fallback(self):
         """Vector 8: Fallbacks removed; seq is strictly required and non-positive seq is denied."""
-        supervisor = homie_supervisor.PolicySupervisor()
-        supervisor.state = homie_supervisor.STATE_ARMED
+        supervisor = helm_supervisor.PolicySupervisor()
+        supervisor.state = helm_supervisor.STATE_ARMED
 
         with self.assertRaises(ValueError) as cm:
-            supervisor.actuator.execute_actuator("homie_snap_window", {}, "worker", seq=None)
+            supervisor.actuator.execute_actuator("helm_snap_window", {}, "worker", seq=None)
         self.assertIn("seq is strictly required", str(cm.exception))
 
         supervisor.clean_shutdown()

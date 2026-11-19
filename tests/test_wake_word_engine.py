@@ -34,7 +34,7 @@ class FakeLocalVoice:
     _loading_model = False
 
     def transcribe_local(self, audio, beam_size=1):
-        return "Hey Homie, what time is it?"
+        return "Hey Helm, what time is it?"
 
 
 class TestWakeWordEngine(unittest.TestCase):
@@ -51,7 +51,7 @@ class TestWakeWordEngine(unittest.TestCase):
             woke.set()
 
         detector = wake_word_engine.WakeWordDetector(
-            wake_word="Homie",
+            wake_word="Helm",
             voice_engine=FakeLocalVoice(),
             on_wake_callback=on_wake,
         )
@@ -75,15 +75,15 @@ class TestWakeWordEngine(unittest.TestCase):
 
     def test_partial_word_does_not_trigger_wake(self):
         detector = wake_word_engine.WakeWordDetector()
-        self.assertFalse(detector.process_audio_chunk(b"", "The homies are here"))
+        self.assertFalse(detector.process_audio_chunk(b"", "The helms are here"))
 
     def test_desktop_wake_handoff_routes_words_after_name_to_voice_turn(self):
-        instance = app.HomieApp.__new__(app.HomieApp)
+        instance = app.HelmApp.__new__(app.HelmApp)
         instance.prefs = {"wakeWord": True}
         instance._wake_word_enabled = True
         instance.paused = False
         instance.wake_word_detector = Mock()
-        instance.wake_word_detector.last_transcript = "Hey Homie, what time is it?"
+        instance.wake_word_detector.last_transcript = "Hey Helm, what time is it?"
         instance.wake_word_detector.command_after_wake_word.return_value = "what time is it?"
         instance.show_window = Mock()
         instance.submit_user_turn = Mock()

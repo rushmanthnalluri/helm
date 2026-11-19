@@ -170,9 +170,9 @@ class TestVoiceInject(unittest.TestCase):
         with patch("voice_inject._set_clipboard_win32") as mock_clip, \
              patch("voice_inject._send_ctrl_v_sendinput") as mock_send, \
              patch("voice_inject.win32gui.GetForegroundWindow", return_value=12345):
-            success = inject_text_at_caret("Hello from Homie!")
+            success = inject_text_at_caret("Hello from Helm!")
             self.assertTrue(success)
-            mock_clip.assert_called_once_with("Hello from Homie!")
+            mock_clip.assert_called_once_with("Hello from Helm!")
             mock_send.assert_called_once()
 
     def test_fallback_paste_when_direct_fails(self):

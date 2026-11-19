@@ -42,8 +42,8 @@ from webauthn_verifier import (
 
 class TestWebAuthnVerifier(unittest.TestCase):
     def setUp(self):
-        self.rp_id = "approval.homie.internal"
-        self.origin = "https://approval.homie.internal"
+        self.rp_id = "approval.helm.internal"
+        self.origin = "https://approval.helm.internal"
         self.rp = RelyingParty(
             rp_id=self.rp_id,
             origins=frozenset({self.origin}),

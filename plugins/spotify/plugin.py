@@ -1,4 +1,4 @@
-"""Spotify Media Controller Plugin for Homie.
+"""Spotify Media Controller Plugin for Helm.
 
 Provides real playback control, track search, and playback status using the spotipy library.
 """
@@ -9,7 +9,7 @@ import os
 import logging
 from typing import Any, Dict, Optional
 
-logger = logging.getLogger("homie.plugins.spotify")
+logger = logging.getLogger("helm.plugins.spotify")
 
 try:
     import spotipy

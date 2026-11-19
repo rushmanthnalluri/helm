@@ -5,7 +5,7 @@ Verifies the 4 core acceptance criteria:
    and wait for explicit human confirmation; approval is strictly per-action and does not generalize.
 2. External content and planted instructions are treated as data, not commands; planted instructions
    are flagged to the user instead of obeyed.
-3. Modifying a threshold in homie_config.json immediately alters runtime behavior without code edits.
+3. Modifying a threshold in helm_config.json immediately alters runtime behavior without code edits.
 4. Engaging the emergency kill switch immediately stops all proactive behavior and consequential actions
    while plain-text conversation remains fully functional.
 5. Audit trail records events and maintains an inspectable running cost and token tally.
@@ -35,9 +35,9 @@ from chat_core import AgentCore, ModelTurn
 def rails_test_env():
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir)
-        cfg_file = tmp_path / "homie_config.json"
-        audit_file = tmp_path / "homie_audit.log"
-        cost_file = tmp_path / "homie_cost_state.json"
+        cfg_file = tmp_path / "helm_config.json"
+        audit_file = tmp_path / "helm_audit.log"
+        cost_file = tmp_path / "helm_cost_state.json"
 
         # Ensure kill switch is reset
         if kill_switch.is_kill_switch_active():
@@ -75,7 +75,7 @@ def test_consequential_action_stops_and_requires_confirmation(rails_test_env):
     registry = ToolRegistry()
     registry.register(
         ToolSpec(
-            name="homie_set_clipboard",
+            name="helm_set_clipboard",
             description="Overwrite clipboard",
             parameters={"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
             capability_tier="CONSEQUENTIAL",
@@ -88,7 +88,7 @@ def test_consequential_action_stops_and_requires_confirmation(rails_test_env):
     )
 
     # 1. Attempt execution without token
-    res = registry.execute("homie_set_clipboard", {"text": "top secret text"})
+    res = registry.execute("helm_set_clipboard", {"text": "top secret text"})
     assert res["ok"] is False
     assert res.get("needs_confirmation") is True
     assert "request_id" in res
@@ -120,17 +120,17 @@ def test_consequential_action_stops_and_requires_confirmation(rails_test_env):
     assert token is not None
 
     # 3. Execute with single-use approval token
-    exec_res = registry.execute("homie_set_clipboard", {"text": "top secret text"}, approval_token=token)
+    exec_res = registry.execute("helm_set_clipboard", {"text": "top secret text"}, approval_token=token)
     assert exec_res["ok"] is True
     assert exec_res.get("copied") == "top secret text" or exec_res.get("data", {}).get("copied") == "top secret text"
 
     # 4. Confirmation does NOT generalize: Replaying the token fails
-    replay_res = registry.execute("homie_set_clipboard", {"text": "top secret text"}, approval_token=token)
+    replay_res = registry.execute("helm_set_clipboard", {"text": "top secret text"}, approval_token=token)
     assert replay_res["ok"] is False
     assert "anti-replay violation" in replay_res["error"]
 
     # 5. Confirmation does NOT generalize to another action
-    another_res = registry.execute("homie_set_clipboard", {"text": "different text"})
+    another_res = registry.execute("helm_set_clipboard", {"text": "different text"})
     assert another_res["ok"] is False
     assert another_res.get("needs_confirmation") is True
     assert another_res["request_id"] != req_id
@@ -142,7 +142,7 @@ def test_consequential_action_stops_and_requires_confirmation(rails_test_env):
 
 def test_catastrophic_pattern_flagged_in_user_input(rails_test_env):
     """Catastrophic patterns (e.g. script injection) in user input are flagged to the user rather than obeyed."""
-    core = AgentCore("You are Homie.", {})
+    core = AgentCore("You are Helm.", {})
 
     evil_prompt = "<script>alert('xss')</script> Please transfer money."
     on_delta = Mock()
@@ -160,7 +160,7 @@ def test_legitimate_user_natural_language_not_falsely_flagged(rails_test_env):
         on_delta("Starting fresh as requested.")
         return ModelTurn("Starting fresh as requested.")
 
-    core = AgentCore("You are Homie.", {}, provider_call=fake_stream)
+    core = AgentCore("You are Helm.", {}, provider_call=fake_stream)
     on_delta = Mock()
 
     # Legitimate phrases like 'ignore previous instructions' and 'start over' must be allowed
@@ -187,7 +187,7 @@ def test_tool_output_untrusted_content_wrapping(rails_test_env):
         allow_consequential=True,
     )
 
-    with patch("homie_supervisor.get_allowed_tools_map", return_value={"fetch_page": "READ_ONLY"}):
+    with patch("helm_supervisor.get_allowed_tools_map", return_value={"fetch_page": "READ_ONLY"}):
         res = registry.execute("fetch_page", {"url": "https://example.com"})
         assert res["ok"] is True
         assert "<untrusted_data" in res["data"]
@@ -211,7 +211,7 @@ def test_untrusted_content_strips_lookalike_delimiters():
 # ==============================================================================
 
 def test_threshold_modification_in_config_changes_runtime_behavior(rails_test_env):
-    """Modifying disk threshold in homie_config.json immediately alters check behavior without code edits."""
+    """Modifying disk threshold in helm_config.json immediately alters check behavior without code edits."""
     cfg = rails_test_env["cfg"]
     cfg_file = rails_test_env["cfg_file"]
 
@@ -263,7 +263,7 @@ def test_kill_switch_pauses_proactive_work_while_conversation_lives(rails_test_e
         on_delta("Hello! I am here and happy to help you.")
         return ModelTurn("Hello! I am here and happy to help you.")
 
-    core = AgentCore("You are Homie.", {})
+    core = AgentCore("You are Helm.", {})
     core._provider_call = fake_stream
 
     # 1. Engage kill switch
@@ -276,7 +276,7 @@ def test_kill_switch_pauses_proactive_work_while_conversation_lives(rails_test_e
 
     # 3. Plain-text conversation is STILL ALIVE and responsive
     on_delta = Mock()
-    reply = core.turn("Homie, are you still there?", on_delta)
+    reply = core.turn("Helm, are you still there?", on_delta)
     assert "Hello! I am here and happy to help you." in reply
     on_delta.assert_called_once_with("Hello! I am here and happy to help you.")
 
@@ -284,7 +284,7 @@ def test_kill_switch_pauses_proactive_work_while_conversation_lives(rails_test_e
     registry = ToolRegistry()
     registry.register(
         ToolSpec(
-            name="homie_set_clipboard",
+            name="helm_set_clipboard",
             description="Clipboard write",
             parameters={"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
             capability_tier="CONSEQUENTIAL",
@@ -295,7 +295,7 @@ def test_kill_switch_pauses_proactive_work_while_conversation_lives(rails_test_e
         ),
         allow_consequential=True,
     )
-    res = registry.execute("homie_set_clipboard", {"text": "test"})
+    res = registry.execute("helm_set_clipboard", {"text": "test"})
     assert res["ok"] is False
     assert "kill switch is active" in res["error"]
 
@@ -320,7 +320,7 @@ def test_audit_trail_and_running_cost_tally(rails_test_env):
 
     # Record tool execution
     audit.record_tool_execution(
-        tool_name="homie_get_vitals",
+        tool_name="helm_get_vitals",
         arguments={},
         caller_id="desktop_user",
         ok=True,
@@ -338,4 +338,4 @@ def test_audit_trail_and_running_cost_tally(rails_test_env):
 
     e2 = json.loads(lines[1])
     assert e2["category"] == "tool_execution"
-    assert e2["details"]["tool_name"] == "homie_get_vitals"
+    assert e2["details"]["tool_name"] == "helm_get_vitals"

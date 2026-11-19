@@ -9,8 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import grounding_tools
 import agent_tools
-import homie_vla_agent
-from homie_vla_agent import UIElementMark, HomieVLAAgent
+import helm_vla_agent
+from helm_vla_agent import UIElementMark, HelmVLAAgent
 
 
 class TestGroundingTools(unittest.TestCase):
@@ -45,7 +45,7 @@ class TestGroundingTools(unittest.TestCase):
             is_enabled=True,
             raw_id="txtPassword"
         )
-        vla = homie_vla_agent.get_vla_agent()
+        vla = helm_vla_agent.get_vla_agent()
         with patch.object(vla, "find_element", return_value=fake_mark):
             res = grounding_tools.grounded_type("Password", "secret123")
             self.assertFalse(res["ok"])
@@ -62,7 +62,7 @@ class TestGroundingTools(unittest.TestCase):
             is_enabled=True,
             raw_id="txtSearch"
         )
-        vla = homie_vla_agent.get_vla_agent()
+        vla = helm_vla_agent.get_vla_agent()
         with patch.object(vla, "find_element", return_value=fake_mark):
             res = grounding_tools.grounded_type("Search", "powershell.exe -enc ...")
             self.assertFalse(res["ok"])
@@ -81,9 +81,9 @@ class TestGroundingTools(unittest.TestCase):
         self.assertIn("text", schemas["grounded_type"]["parameters"]["properties"])
         self.assertIn("window_title", schemas["get_screen_elements"]["parameters"]["properties"])
 
-    def test_homie_vla_agent_alias_and_methods(self):
-        self.assertIs(homie_vla_agent.HomieVLAAgent, homie_vla_agent.VLAClosedLoopAgent)
-        vla = homie_vla_agent.get_vla_agent()
+    def test_helm_vla_agent_alias_and_methods(self):
+        self.assertIs(helm_vla_agent.HelmVLAAgent, helm_vla_agent.VLAClosedLoopAgent)
+        vla = helm_vla_agent.get_vla_agent()
         self.assertTrue(hasattr(vla, "find_element"))
         self.assertTrue(hasattr(vla, "grounded_click"))
         self.assertTrue(hasattr(vla, "grounded_type"))

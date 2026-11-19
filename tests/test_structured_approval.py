@@ -1,7 +1,7 @@
 """tests/test_structured_approval.py - Unit tests for Canonical Structured Approvals."""
 
 import unittest
-from homie_structured_approval import (
+from helm_structured_approval import (
     compute_canonical_approval_hash,
     verify_phone_hash_rebuild,
     build_send_approval_object,
@@ -128,9 +128,9 @@ class TestStructuredApprovals(unittest.TestCase):
         from cryptography.hazmat.primitives.asymmetric import ec
         from cryptography.hazmat.primitives import hashes
         import webauthn_verifier as wv
-        from homie_structured_approval import verify_webauthn_transaction_approval
+        from helm_structured_approval import verify_webauthn_transaction_approval
 
-        rp = wv.RelyingParty(rp_id="approval.homie.internal", origins=frozenset({"https://approval.homie.internal"}))
+        rp = wv.RelyingParty(rp_id="approval.helm.internal", origins=frozenset({"https://approval.helm.internal"}))
         store = wv.ChallengeStore()
         device_id = "phone_pixel_9"
 
@@ -151,7 +151,7 @@ class TestStructuredApprovals(unittest.TestCase):
 
         plan_obj = build_plan_approval_object(
             plan_id="plan_webauthn_001",
-            steps_summary=[{"id": "s1", "tool": "homie_agent_type", "text": "hello"}],
+            steps_summary=[{"id": "s1", "tool": "helm_agent_type", "text": "hello"}],
             scope_domains=["corp.internal"],
             scope_apps=["notepad.exe"],
             budget_max_steps=1,
@@ -170,10 +170,10 @@ class TestStructuredApprovals(unittest.TestCase):
         cd_bytes = json.dumps({
             "type": "webauthn.get",
             "challenge": wv.b64u_encode(challenge),
-            "origin": "https://approval.homie.internal"
+            "origin": "https://approval.helm.internal"
         }).encode("utf-8")
         flags = wv.FLAG_UP | wv.FLAG_UV
-        auth_data = hashlib.sha256(b"approval.homie.internal").digest() + bytes([flags]) + struct.pack(">I", 1)
+        auth_data = hashlib.sha256(b"approval.helm.internal").digest() + bytes([flags]) + struct.pack(">I", 1)
         sig = priv.sign(auth_data + hashlib.sha256(cd_bytes).digest(), ec.ECDSA(hashes.SHA256()))
 
         assertion_resp = {

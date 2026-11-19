@@ -1,6 +1,6 @@
 """rails_config.py - Tier 6 Centralized Policy and Runtime Configuration.
 
-Provides a unified, human-editable configuration file (homie_config.json)
+Provides a unified, human-editable configuration file (helm_config.json)
 with automatic hot-reloading (mtime checks):
 - Model parameters (provider, model name, temperature, tokens).
 - Quiet hours (enabled, start_hour, end_hour).
@@ -19,56 +19,56 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-logger = logging.getLogger("homie.rails_config")
+logger = logging.getLogger("helm.rails_config")
 
 # Immutable compiled-in consequential safety floor: tools that modify system state, files, or facts
 # and strictly require human confirmation before execution.
 COMPILED_IN_CONSEQUENTIAL_TOOLS: frozenset[str] = frozenset({
-    "homie_set_clipboard",
-    "homie_launch_app",
-    "homie_send_chat",
-    "homie_close_app",
-    "homie_kill_process",
-    "homie_safe_command",
-    "homie_agent_click",
-    "homie_agent_type",
-    "homie_agent_mouse_move",
-    "homie_send_hotkey",
-    "homie_execute_cmd",
-    "homie_delete_file",
-    "homie_remember_fact",
-    "homie_forget_fact",
-    "homie_remote_trackpad",
+    "helm_set_clipboard",
+    "helm_launch_app",
+    "helm_send_chat",
+    "helm_close_app",
+    "helm_kill_process",
+    "helm_safe_command",
+    "helm_agent_click",
+    "helm_agent_type",
+    "helm_agent_mouse_move",
+    "helm_send_hotkey",
+    "helm_execute_cmd",
+    "helm_delete_file",
+    "helm_remember_fact",
+    "helm_forget_fact",
+    "helm_remote_trackpad",
 })
 
 # Sensitive read tools: read private user context; incur taint propagation and rate limits
 # but do NOT require disruptive per-action human confirmation dialogs.
 COMPILED_IN_SENSITIVE_READS: frozenset[str] = frozenset({
-    "homie_capture_screen",
-    "homie_get_clipboard",
-    "homie_read_screen_memory",
+    "helm_capture_screen",
+    "helm_get_clipboard",
+    "helm_read_screen_memory",
 })
 
 # Reversible UI/media controls: low risk, can be easily undone or adjusted.
 COMPILED_IN_REVERSIBLE_TOOLS: frozenset[str] = frozenset({
-    "homie_control_media",
-    "homie_place_window",
-    "homie_play_youtube",
-    "homie_snap_window",
+    "helm_control_media",
+    "helm_place_window",
+    "helm_play_youtube",
+    "helm_snap_window",
 })
 
 # Safe passive read-only tools:
 COMPILED_IN_READ_ONLY_TOOLS: frozenset[str] = frozenset({
-    "homie_get_vitals",
-    "homie_list_downloads",
-    "homie_list_facts",
-    "homie_get_meeting_notes",
-    "homie_assistant_timeline",
-    "homie_get_top_processes",
-    "homie_list_windows",
+    "helm_get_vitals",
+    "helm_list_downloads",
+    "helm_list_facts",
+    "helm_get_meeting_notes",
+    "helm_assistant_timeline",
+    "helm_get_top_processes",
+    "helm_list_windows",
 })
 
-# Full set of compiled-in classified tools: every tool in homie_supervisor must belong here!
+# Full set of compiled-in classified tools: every tool in helm_supervisor must belong here!
 ALL_CLASSIFIED_TOOLS: frozenset[str] = (
     COMPILED_IN_CONSEQUENTIAL_TOOLS
     | COMPILED_IN_SENSITIVE_READS
@@ -96,16 +96,16 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     "safety": {
         "require_confirmation": [
-            "homie_set_clipboard",
-            "homie_launch_app",
-            "homie_send_chat",
-            "homie_close_app",
-            "homie_kill_process",
-            "homie_safe_command",
-            "homie_agent_click",
-            "homie_agent_type",
-            "homie_agent_mouse_move",
-            "homie_send_hotkey",
+            "helm_set_clipboard",
+            "helm_launch_app",
+            "helm_send_chat",
+            "helm_close_app",
+            "helm_kill_process",
+            "helm_safe_command",
+            "helm_agent_click",
+            "helm_agent_type",
+            "helm_agent_mouse_move",
+            "helm_send_hotkey",
         ],
         "untrusted_content_tags": True,
         "block_instruction_injection": True,
@@ -119,14 +119,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 
 
 def get_default_config_path() -> Path:
-    """Returns the canonical path for homie_config.json."""
-    custom = os.environ.get("HOMIE_CONFIG_PATH")
+    """Returns the canonical path for helm_config.json."""
+    custom = os.environ.get("HELM_CONFIG_PATH")
     if custom:
         return Path(custom).resolve()
-    base_dir = os.environ.get("HOMIE_DIR")
+    base_dir = os.environ.get("HELM_DIR")
     if base_dir:
-        return (Path(base_dir) / "homie_config.json").resolve()
-    return (Path.home() / ".config" / "homie" / "homie_config.json").resolve()
+        return (Path(base_dir) / "helm_config.json").resolve()
+    return (Path.home() / ".config" / "helm" / "helm_config.json").resolve()
 
 
 class RailsConfig:
@@ -207,8 +207,8 @@ class RailsConfig:
         """
         from action_broker import ActionBroker
         canonical = ActionBroker.LEGACY_TOOL_MAP.get(tool_name, tool_name)
-        if not canonical.startswith("homie_"):
-            canonical_cand = f"homie_{canonical}"
+        if not canonical.startswith("helm_"):
+            canonical_cand = f"helm_{canonical}"
             if canonical_cand in COMPILED_IN_CONSEQUENTIAL_TOOLS:
                 canonical = canonical_cand
 

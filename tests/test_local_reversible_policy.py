@@ -20,7 +20,7 @@ class TestLocalReversiblePolicy(unittest.TestCase):
     def test_local_user_can_request_allowlisted_reversible_desktop_action(self):
         for caller in ("desktop_user", "desktop_voice"):
             allowed, needs_step_up, _ = taint_tracker.check_action_privilege(
-                caller, "REVERSIBLE", "homie_play_youtube", {"query": "Telugu songs"}
+                caller, "REVERSIBLE", "helm_play_youtube", {"query": "Telugu songs"}
             )
             self.assertTrue(allowed)
             self.assertFalse(needs_step_up)
@@ -28,8 +28,8 @@ class TestLocalReversiblePolicy(unittest.TestCase):
     def test_unknown_or_nonlocal_actions_still_need_step_up(self):
         cases = (
             ("desktop_user", "REVERSIBLE", "arbitrary_action"),
-            ("ai_text_agent", "REVERSIBLE", "homie_play_youtube"),
-            ("desktop_user", "WRITE_EXEC", "homie_set_clipboard"),
+            ("ai_text_agent", "REVERSIBLE", "helm_play_youtube"),
+            ("desktop_user", "WRITE_EXEC", "helm_set_clipboard"),
         )
         for caller, tier, tool in cases:
             with self.subTest(caller=caller, tier=tier, tool=tool):

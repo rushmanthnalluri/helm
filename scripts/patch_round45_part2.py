@@ -2,8 +2,8 @@ import os
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# 2. Update homie_supervisor.py with PID create_time validation
-sup_file = os.path.join(BASE_DIR, "homie_supervisor.py")
+# 2. Update helm_supervisor.py with PID create_time validation
+sup_file = os.path.join(BASE_DIR, "helm_supervisor.py")
 with open(sup_file, "r", encoding="utf-8") as f:
     sup = f.read()
 
@@ -96,4 +96,4 @@ sup = sup.replace(target_handle_chk, replacement_handle_chk, 1)
 
 with open(sup_file, "w", encoding="utf-8") as f:
     f.write(sup)
-print("Updated homie_supervisor.py with create_time verification successfully")
+print("Updated helm_supervisor.py with create_time verification successfully")

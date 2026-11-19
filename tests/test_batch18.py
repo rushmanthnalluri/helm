@@ -1,5 +1,5 @@
 """Unit, integration, and security tests for Batch 18A:
-Homie Worker Process Confinement, Job Object Sandboxing, and Supervisor LLM Proxy.
+Helm Worker Process Confinement, Job Object Sandboxing, and Supervisor LLM Proxy.
 """
 
 import os
@@ -13,8 +13,8 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-import homie_supervisor
-from homie_supervisor import (
+import helm_supervisor
+from helm_supervisor import (
     PolicySupervisor, SupervisorClient, BinaryFrameCodec,
     MSG_PROXY_LLM, MSG_DATA, MSG_ERROR
 )
@@ -31,7 +31,7 @@ import shadow_mode
 class TestBatch18Confinement(unittest.TestCase):
 
     def setUp(self):
-        os.environ["HOMIE_TEST_ENV"] = "1"
+        os.environ["HELM_TEST_ENV"] = "1"
         taint_tracker.clear_all_taints()
         kill_switch._KILL_SWITCH_ACTIVE = False
         kill_switch._ENGAGED_REASON = ""

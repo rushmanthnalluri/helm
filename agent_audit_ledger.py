@@ -1,4 +1,4 @@
-"""Homie Agent Audit Ledger.
+"""Helm Agent Audit Ledger.
 Provides an immutable, tamper-evident append-only cryptographic ledger (hash-chained)
 tracking every tool execution across MCP clients, Telegram, Phone Gateway, and Voice:
 - Records timestamp, caller identity, tool name, arguments hash, capability tier, decision
@@ -21,7 +21,7 @@ if BASE_DIR not in sys.path:
 import db_utils
 import hmac
 
-logger = logging.getLogger("homie.audit_ledger")
+logger = logging.getLogger("helm.audit_ledger")
 GENESIS_HASH = "0" * 64
 
 _LEDGER_KEY_CACHE = None
@@ -32,12 +32,12 @@ def get_ledger_secret_key():
     if _LEDGER_KEY_CACHE:
         return _LEDGER_KEY_CACHE
 
-    env_key = os.environ.get("HOMIE_LEDGER_SECRET")
+    env_key = os.environ.get("HELM_LEDGER_SECRET")
     if env_key:
         _LEDGER_KEY_CACHE = env_key.encode("utf-8")
         return _LEDGER_KEY_CACHE
 
-    key_file = os.path.join(BASE_DIR, ".homie_ledger_hmac.key")
+    key_file = os.path.join(BASE_DIR, ".helm_ledger_hmac.key")
     if os.path.exists(key_file):
         try:
             with open(key_file, "rb") as f:
@@ -54,7 +54,7 @@ def get_ledger_secret_key():
             f.write(new_key)
         _LEDGER_KEY_CACHE = new_key
     except Exception:
-        _LEDGER_KEY_CACHE = b"homie_default_audit_ledger_hmac_key"
+        _LEDGER_KEY_CACHE = b"helm_default_audit_ledger_hmac_key"
 
     return _LEDGER_KEY_CACHE
 

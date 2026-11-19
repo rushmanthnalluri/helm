@@ -1,4 +1,4 @@
-"""Telegram Remote Bridge for Homie.
+"""Telegram Remote Bridge for Helm.
 Enables calling/messaging your Windows PC from Telegram on your phone for 100% free.
 Supports voice notes (walkie-talkie style), text prompts, live screen captures,
 and Windows PC automation controls.
@@ -19,7 +19,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-import homie
+import helm
 import windows_tools
 import action_broker
 
@@ -51,8 +51,8 @@ def get_whisper_model():
     global _SHARED_WHISPER
     if _SHARED_WHISPER is None:
         from faster_whisper import WhisperModel
-        whisper_dir = os.path.join(homie.CONFIG_DIR, 'whisper')
-        prefs = homie.get_prefs()
+        whisper_dir = os.path.join(helm.CONFIG_DIR, 'whisper')
+        prefs = helm.get_prefs()
         model_name = prefs.get('whisperModel', 'small')
         # Load high-accuracy model with fallback to base/tiny
         for m in (model_name, "small", "base", "tiny"):
@@ -102,7 +102,7 @@ def reserve_upload_path(directory, file_name):
 
 class TelegramBridge:
     def __init__(self, token=None, allowed_users=None):
-        self.prefs = homie.get_prefs()
+        self.prefs = helm.get_prefs()
         self.token = token or os.environ.get('TELEGRAM_BOT_TOKEN') or self.prefs.get('telegramToken', '')
         self.allowed_users = allowed_users if allowed_users is not None else self.prefs.get('telegramAllowedUsers', [])
         # Ensure allowed_users are integers/strings
@@ -317,8 +317,8 @@ class TelegramBridge:
                 if not res:
                     f.seek(0)
                     files = {'audio': f}
-                    data['title'] = 'Homie Spoken Reply'
-                    data['performer'] = 'Homie'
+                    data['title'] = 'Helm Spoken Reply'
+                    data['performer'] = 'Helm'
                     res = self._api_call('sendAudio', data=data, files=files, timeout=30)
                 return res
         except Exception as e:
@@ -330,20 +330,20 @@ class TelegramBridge:
         self.answer_callback_query(callback_query_id)
 
         if data == 'action_play_pause':
-            ok, msg, _ = action_broker.execute_action('homie_control_media', {'action': 'play_pause'}, caller_id='telegram_remote')
+            ok, msg, _ = action_broker.execute_action('helm_control_media', {'action': 'play_pause'}, caller_id='telegram_remote')
             self.send_message(chat_id, f"🎵 {msg}")
 
         elif data == 'action_next':
-            ok, msg, _ = action_broker.execute_action('homie_control_media', {'action': 'next'}, caller_id='telegram_remote')
+            ok, msg, _ = action_broker.execute_action('helm_control_media', {'action': 'next'}, caller_id='telegram_remote')
             self.send_message(chat_id, f"🎵 {msg}")
 
         elif data == 'action_mute':
-            ok, msg, _ = action_broker.execute_action('homie_control_media', {'action': 'mute'}, caller_id='telegram_remote')
+            ok, msg, _ = action_broker.execute_action('helm_control_media', {'action': 'mute'}, caller_id='telegram_remote')
             self.send_message(chat_id, f"🎵 {msg}")
 
         elif data == 'action_screen':
             self.send_message(chat_id, "📸 Capturing desktop...")
-            ok, msg, res = action_broker.execute_action('homie_capture_screen', {}, caller_id='telegram_remote')
+            ok, msg, res = action_broker.execute_action('helm_capture_screen', {}, caller_id='telegram_remote')
             screens = re.findall(r'([A-Za-z]:\\[^\s,]+\.png)', str(res)) if ok else []
             if screens:
                 for idx, sc in enumerate(screens):
@@ -353,7 +353,7 @@ class TelegramBridge:
 
         elif data == 'action_inspect':
             self.send_message(chat_id, "📸 Capturing desktop and analyzing...")
-            ok, msg, res = action_broker.execute_action('homie_capture_screen', {}, caller_id='telegram_remote')
+            ok, msg, res = action_broker.execute_action('helm_capture_screen', {}, caller_id='telegram_remote')
             screens = re.findall(r'([A-Za-z]:\\[^\s,]+\.png)', str(res)) if ok else []
             if screens and os.path.exists(screens[0]):
                 self.send_photo(chat_id, screens[0], caption="🖥️ Current Screen")
@@ -364,7 +364,7 @@ class TelegramBridge:
                 self.send_message(chat_id, f"Could not capture screen: {msg}")
 
         elif data == 'action_vitals':
-            ok, msg, res = action_broker.execute_action('homie_get_vitals', {}, caller_id='telegram_remote')
+            ok, msg, res = action_broker.execute_action('helm_get_vitals', {}, caller_id='telegram_remote')
             try:
                 v = json.loads(res) if ok and isinstance(res, str) else (res if isinstance(res, dict) else {})
             except Exception:
@@ -381,18 +381,18 @@ class TelegramBridge:
             self.send_message(chat_id, msg)
 
         elif data == 'action_clip_read':
-            ok, msg, clip = action_broker.execute_action('homie_get_clipboard', {}, caller_id='telegram_remote')
+            ok, msg, clip = action_broker.execute_action('helm_get_clipboard', {}, caller_id='telegram_remote')
             if ok and clip and str(clip).strip() != "(Clipboard is empty)":
                 self.send_message(chat_id, f"📋 **PC Clipboard**:\n```\n{str(clip)[:3000]}\n```")
             else:
                 self.send_message(chat_id, "📋 PC Clipboard is currently empty.")
 
         elif data == 'action_clip_analyze':
-            analysis = homie.analyze_clipboard()
+            analysis = helm.analyze_clipboard()
             self.send_message(chat_id, analysis)
 
         elif data == 'action_downloads':
-            ok, msg, res = action_broker.execute_action('homie_list_downloads', {'limit': 8}, caller_id='telegram_remote')
+            ok, msg, res = action_broker.execute_action('helm_list_downloads', {'limit': 8}, caller_id='telegram_remote')
             try:
                 dl = json.loads(res) if ok and isinstance(res, str) else (res if isinstance(res, list) else [])
             except Exception:
@@ -415,7 +415,7 @@ class TelegramBridge:
             self.send_message(chat_id, "🔒 PC locked successfully.")
 
         elif data == 'action_macro_list':
-            macros = homie.get_macros()
+            macros = helm.get_macros()
             buttons = []
             for name in list(macros.keys())[:8]:
                 buttons.append([{"text": f"▶️ {name.capitalize()}", "callback_data": f"run_macro_{name}"}])
@@ -428,7 +428,7 @@ class TelegramBridge:
         elif data.startswith('act_pill_'):
             action_id = data[9:]
             import action_pill
-            ok_c, msg_c, clip = action_broker.execute_action('homie_get_clipboard', {}, caller_id='telegram_remote')
+            ok_c, msg_c, clip = action_broker.execute_action('helm_get_clipboard', {}, caller_id='telegram_remote')
             clip_text = str(clip) if ok_c and clip and str(clip).strip() != "(Clipboard is empty)" else ""
             ok, msg = action_pill.execute_action(action_id, clip_text)
             prefix = "✓" if ok else "⚠️"
@@ -484,7 +484,7 @@ class TelegramBridge:
 
         elif data.startswith('run_macro_'):
             macro_name = data[10:]
-            ok, msg = homie.execute_macro(macro_name)
+            ok, msg = helm.execute_macro(macro_name)
             self.send_message(chat_id, f"📜 {msg}")
 
         elif data.startswith('kill_pid_'):
@@ -503,13 +503,13 @@ class TelegramBridge:
             act = item['action']
             payload = item['payload']
             if act == 'close_app':
-                ok, msg, _ = action_broker.execute_action('homie_close_app', {'app_name': payload}, caller_id='telegram_remote')
+                ok, msg, _ = action_broker.execute_action('helm_close_app', {'app_name': payload}, caller_id='telegram_remote')
                 self.send_message(chat_id, f"🛑 {msg}")
             elif act == 'kill_pid':
-                ok, msg, _ = action_broker.execute_action('homie_kill_process', {'pid': payload}, caller_id='telegram_remote')
+                ok, msg, _ = action_broker.execute_action('helm_kill_process', {'pid': payload}, caller_id='telegram_remote')
                 self.send_message(chat_id, f"🛑 {msg}")
             elif act == 'run_cmd':
-                ok, msg, out = action_broker.execute_action('homie_safe_command', {'command': payload}, caller_id='telegram_remote')
+                ok, msg, out = action_broker.execute_action('helm_safe_command', {'command': payload}, caller_id='telegram_remote')
                 self.send_message(chat_id, f"⚡ **Executed**:\n```\n{out or msg}\n```")
 
         elif data.startswith('cancel_action_'):
@@ -523,7 +523,7 @@ class TelegramBridge:
         while self.running:
             try:
                 if self.allowed_users:
-                    ok, msg, res = action_broker.execute_action('homie_get_vitals', {}, caller_id='telegram_remote')
+                    ok, msg, res = action_broker.execute_action('helm_get_vitals', {}, caller_id='telegram_remote')
                     try:
                         v = json.loads(res) if ok and isinstance(res, str) else (res if isinstance(res, dict) else {})
                     except Exception:
@@ -639,11 +639,11 @@ class TelegramBridge:
             if self.allowed_users:
                 reply = "🔒 This PC is already paired. Manage its Telegram allowlist from the PC."
             elif not code:
-                reply = "🔒 Pairing requires a local code. In Homie's tray menu, choose ‘Copy Telegram pairing command’ and paste it here."
+                reply = "🔒 Pairing requires a local code. In Helm's tray menu, choose ‘Copy Telegram pairing command’ and paste it here."
             elif self._pairing_code is None or time.time() >= self._pairing_code_expires_at:
                 self._pairing_code = self._new_pairing_code()
                 self._pairing_code_expires_at = time.time() + PAIRING_CODE_TTL_SECONDS
-                reply = "⌛ That pairing code expired. Copy the current command from Homie's tray menu and try again."
+                reply = "⌛ That pairing code expired. Copy the current command from Helm's tray menu and try again."
             else:
                 now = time.monotonic()
                 recent_failures = [
@@ -666,16 +666,16 @@ class TelegramBridge:
                     reply = f"⛔ Pairing code is incorrect. Attempts remaining in this minute: {remaining}."
                 else:
                     try:
-                        homie.save_pref('telegramAllowedUsers', [uid_str])
+                        helm.save_pref('telegramAllowedUsers', [uid_str])
                     except Exception:
-                        reply = "⚠️ Homie could not save the pairing. Try again from the private chat."
+                        reply = "⚠️ Helm could not save the pairing. Try again from the private chat."
                     else:
                         self.allowed_users = [uid_str]
                         self.prefs['telegramAllowedUsers'] = self.allowed_users
                         self._pairing_code = None
                         self._pairing_code_expires_at = 0
                         self._pairing_failures.clear()
-                        reply = "✅ This private Telegram account is now paired with Homie. Send /start to see the controls."
+                        reply = "✅ This private Telegram account is now paired with Helm. Send /start to see the controls."
 
         self.send_message(chat_id, reply)
         return reply.startswith("✅")
@@ -696,7 +696,7 @@ class TelegramBridge:
 
         if cmd in ('/start', '/help'):
             msg = (
-                "👋 **Hello! I'm Homie on your PC.**\n\n"
+                "👋 **Hello! I'm Helm on your PC.**\n\n"
                 "You can talk to me like a walkie-talkie or send commands from anywhere:\n\n"
                 "🎙️ **Voice Notes**: Hold mic button, speak, and release!\n"
                 "🎛️ `/panel` - Interactive 1-tap control buttons\n"
@@ -736,13 +736,13 @@ class TelegramBridge:
         if cmd == '/panel':
             self.send_message(
                 chat_id,
-                "🎛️ **Homie Remote Control Panel**\nTap any button below for 1-tap PC control:",
+                "🎛️ **Helm Remote Control Panel**\nTap any button below for 1-tap PC control:",
                 reply_markup=self.get_control_panel_markup()
             )
             return
 
         if cmd in ('/smartclip', '/copilot'):
-            ok_c, msg_c, clip = action_broker.execute_action('homie_get_clipboard', {}, caller_id='telegram_remote')
+            ok_c, msg_c, clip = action_broker.execute_action('helm_get_clipboard', {}, caller_id='telegram_remote')
             clip_text = str(clip) if ok_c and clip and str(clip).strip() != "(Clipboard is empty)" else ""
             if not clip_text or not clip_text.strip():
                 self.send_message(chat_id, "📋 Clipboard is currently empty.")
@@ -750,7 +750,7 @@ class TelegramBridge:
             import clipboard_classifier
             import action_pill
             cls = clipboard_classifier.classify_clipboard_content(clip_text)
-            analysis = homie.analyze_clipboard(clip_text)
+            analysis = helm.analyze_clipboard(clip_text)
             acts = action_pill.get_actions_for_classification(cls)
             buttons = []
             if acts:
@@ -828,11 +828,11 @@ class TelegramBridge:
             sub = args[0].lower() if args else ""
             if sub in ('on', 'true', 'enable'):
                 self.prefs['notificationMirror'] = True
-                homie.save_pref('notificationMirror', True)
+                helm.save_pref('notificationMirror', True)
                 self.send_message(chat_id, "🔔 **Windows Notification Mirroring**: ON\nIncoming toast alerts will be forwarded directly to your phone.")
             elif sub in ('off', 'false', 'disable'):
                 self.prefs['notificationMirror'] = False
-                homie.save_pref('notificationMirror', False)
+                helm.save_pref('notificationMirror', False)
                 self.send_message(chat_id, "🔕 **Windows Notification Mirroring**: OFF")
             else:
                 curr = "ON" if self.prefs.get('notificationMirror', True) else "OFF"
@@ -865,7 +865,7 @@ class TelegramBridge:
             call_url = f"http://{ip}:5055/call"
             remote_url = f"http://{ip}:5055/remote"
             msg = (
-                "📞 **Homie Live Voice Call & Touchpad**\n\n"
+                "📞 **Helm Live Voice Call & Touchpad**\n\n"
                 f"• 🎙️ **Call Your PC (Duplex Voice)**:\n{call_url}\n\n"
                 f"• 📱 **Wireless Trackpad & Deck**:\n{remote_url}\n\n"
                 "• ☎️ **Telephone (Twilio Webhook)**: `/voice`\n\n"
@@ -1018,10 +1018,10 @@ class TelegramBridge:
         if cmd in ('/macros', '/macro'):
             if args and cmd == '/macro':
                 macro_name = args[0]
-                ok, msg = homie.execute_macro(macro_name)
+                ok, msg = helm.execute_macro(macro_name)
                 self.send_message(chat_id, f"📜 {msg}")
                 return
-            macros = homie.get_macros()
+            macros = helm.get_macros()
             buttons = []
             for name in list(macros.keys())[:8]:
                 buttons.append([{"text": f"▶️ Run {name.capitalize()}", "callback_data": f"run_macro_{name}"}])
@@ -1034,13 +1034,13 @@ class TelegramBridge:
             if not target:
                 self.send_message(chat_id, "Usage: `/play <song or video name>` (e.g. `/play telugu music`)")
                 return
-            ok, msg, _ = action_broker.execute_action('homie_play_youtube', {'query': target}, caller_id='telegram_remote')
+            ok, msg, _ = action_broker.execute_action('helm_play_youtube', {'query': target}, caller_id='telegram_remote')
             self.send_message(chat_id, f"▶️ {msg}")
             return
 
         if cmd in ('/screen', '/screens', '/screenshot'):
             self.send_message(chat_id, "📸 Capturing desktop...")
-            ok, msg, res = action_broker.execute_action('homie_capture_screen', {}, caller_id='telegram_remote')
+            ok, msg, res = action_broker.execute_action('helm_capture_screen', {}, caller_id='telegram_remote')
             screens = re.findall(r'([A-Za-z]:\\[^\s,]+\.png)', str(res)) if ok else []
             if screens:
                 for idx, sc in enumerate(screens):
@@ -1051,7 +1051,7 @@ class TelegramBridge:
             return
 
         if cmd == '/lock':
-            ok, msg, _ = action_broker.execute_action('homie_lock_workstation', {}, caller_id='telegram_remote')
+            ok, msg, _ = action_broker.execute_action('helm_lock_workstation', {}, caller_id='telegram_remote')
             self.send_message(chat_id, f"🔒 {msg or 'Workstation locked successfully.'}")
             return
 
@@ -1060,14 +1060,14 @@ class TelegramBridge:
                 action = args[0] if args else "play_pause"
             else:
                 action = cmd.lstrip('/')
-            ok, msg, _ = action_broker.execute_action('homie_control_media', {'action': action}, caller_id='telegram_remote')
+            ok, msg, _ = action_broker.execute_action('helm_control_media', {'action': action}, caller_id='telegram_remote')
             self.send_message(chat_id, f"🎵 {msg}")
             return
 
         if cmd == '/snap':
             where = args[0] if args else "full"
             app = args[1] if len(args) > 1 else ""
-            ok, msg, _ = action_broker.execute_action('homie_place_window', {'app_name': app, 'position': where}, caller_id='telegram_remote')
+            ok, msg, _ = action_broker.execute_action('helm_place_window', {'app_name': app, 'position': where}, caller_id='telegram_remote')
             self.send_message(chat_id, f"🪟 {msg}")
             return
 
@@ -1076,7 +1076,7 @@ class TelegramBridge:
             if not target:
                 self.send_message(chat_id, "Usage: `/open <app_name>`")
                 return
-            ok, msg, _ = action_broker.execute_action('homie_launch_app', {'target': target}, caller_id='telegram_remote')
+            ok, msg, _ = action_broker.execute_action('helm_launch_app', {'target': target}, caller_id='telegram_remote')
             self.send_message(chat_id, f"🚀 {msg}")
             return
 
@@ -1089,12 +1089,12 @@ class TelegramBridge:
             if cmd in ('/kill', '/terminate') or 'force' in text.lower():
                 self.request_confirmation(chat_id, f"Terminate process '{target}'", "close_app", target)
                 return
-            ok, msg, _ = action_broker.execute_action('homie_close_app', {'app_name': target}, caller_id='telegram_remote')
+            ok, msg, _ = action_broker.execute_action('helm_close_app', {'app_name': target}, caller_id='telegram_remote')
             self.send_message(chat_id, f"🛑 {msg}")
             return
 
         if cmd in ('/top', '/ps', '/processes'):
-            ok, msg, res = action_broker.execute_action('homie_get_top_processes', {'limit': 8}, caller_id='telegram_remote')
+            ok, msg, res = action_broker.execute_action('helm_get_top_processes', {'limit': 8}, caller_id='telegram_remote')
             try:
                 procs = json.loads(res) if ok and isinstance(res, str) else (res if isinstance(res, list) else [])
             except Exception:
@@ -1160,11 +1160,11 @@ class TelegramBridge:
             arg = args[0].lower() if args else ""
             if arg in ('on', 'enable', 'true'):
                 self.prefs['voiceReplies'] = True
-                homie.save_pref('voiceReplies', True)
-                self.send_message(chat_id, "🎙️ Voice replies enabled! Homie will speak back.")
+                helm.save_pref('voiceReplies', True)
+                self.send_message(chat_id, "🎙️ Voice replies enabled! Helm will speak back.")
             elif arg in ('off', 'disable', 'false'):
                 self.prefs['voiceReplies'] = False
-                homie.save_pref('voiceReplies', False)
+                helm.save_pref('voiceReplies', False)
                 self.send_message(chat_id, "🔇 Voice replies disabled (text only).")
             else:
                 curr = "ON" if self.prefs.get('voiceReplies', False) else "OFF"
@@ -1172,7 +1172,7 @@ class TelegramBridge:
             return
 
         if cmd in ('/status', '/pc', '/vitals', '/health'):
-            ok, msg, res = action_broker.execute_action('homie_get_vitals', {}, caller_id='telegram_remote')
+            ok, msg, res = action_broker.execute_action('helm_get_vitals', {}, caller_id='telegram_remote')
             try:
                 v = json.loads(res) if ok and isinstance(res, str) else (res if isinstance(res, dict) else {})
             except Exception:
@@ -1196,10 +1196,10 @@ class TelegramBridge:
         if cmd in ('/clip', '/clipboard'):
             if args:
                 to_copy = " ".join(args)
-                ok, msg, _ = action_broker.execute_action('homie_set_clipboard', {'text': to_copy}, caller_id='telegram_remote')
+                ok, msg, _ = action_broker.execute_action('helm_set_clipboard', {'text': to_copy}, caller_id='telegram_remote')
                 self.send_message(chat_id, f"📋 {msg}")
             else:
-                ok, msg, clip = action_broker.execute_action('homie_get_clipboard', {}, caller_id='telegram_remote')
+                ok, msg, clip = action_broker.execute_action('helm_get_clipboard', {}, caller_id='telegram_remote')
                 if ok and clip and str(clip).strip() != "(Clipboard is empty)":
                     self.send_message(chat_id, f"📋 **PC Clipboard**:\n```\n{str(clip)[:3000]}\n```")
                 else:
@@ -1212,7 +1212,7 @@ class TelegramBridge:
                 self.send_message(chat_id, "Usage: `/cmd <windows command>` (e.g. `/cmd git status` or `/cmd ipconfig`)")
                 return
             self.send_message(chat_id, f"⚡ Executing: `{command}`...")
-            ok, msg, out = action_broker.execute_action('homie_safe_command', {'command': command}, caller_id='telegram_remote')
+            ok, msg, out = action_broker.execute_action('helm_safe_command', {'command': command}, caller_id='telegram_remote')
             prefix = "✓" if ok else "⚠️"
             self.send_message(chat_id, f"{prefix} **Output**:\n```\n{out or msg}\n```")
             return
@@ -1242,7 +1242,7 @@ class TelegramBridge:
             return
 
         if cmd in ('/downloads', '/dl'):
-            ok, msg, res = action_broker.execute_action('homie_list_downloads', {'limit': 10}, caller_id='telegram_remote')
+            ok, msg, res = action_broker.execute_action('helm_list_downloads', {'limit': 10}, caller_id='telegram_remote')
             try:
                 dl = json.loads(res) if ok and isinstance(res, str) else (res if isinstance(res, list) else [])
             except Exception:
@@ -1257,7 +1257,7 @@ class TelegramBridge:
         if cmd == '/inspect':
             question = " ".join(args) or "What is currently on the screen?"
             self.send_message(chat_id, f"📸 Capturing desktop and analyzing: \"{question}\"...")
-            ok, msg, res = action_broker.execute_action('homie_capture_screen', {}, caller_id='telegram_remote')
+            ok, msg, res = action_broker.execute_action('helm_capture_screen', {}, caller_id='telegram_remote')
             screens = re.findall(r'([A-Za-z]:\\[^\s,]+\.png)', str(res)) if ok else []
             if screens and os.path.exists(screens[0]):
                 self.send_photo(chat_id, screens[0], caption="🖥️ Current Screen")
@@ -1269,12 +1269,12 @@ class TelegramBridge:
             return
 
         if cmd in ('/rules', '/memory'):
-            rules = homie.get_rules()
+            rules = helm.get_rules()
             if not rules:
-                self.send_message(chat_id, "🧠 No rules stored yet. Use `/remember <rule>` to teach Homie facts or habits.")
+                self.send_message(chat_id, "🧠 No rules stored yet. Use `/remember <rule>` to teach Helm facts or habits.")
             else:
                 formatted = "\n".join(f"• {r}" for r in rules)
-                self.send_message(chat_id, f"🧠 **Homie Long-Term Memory**:\n{formatted}")
+                self.send_message(chat_id, f"🧠 **Helm Long-Term Memory**:\n{formatted}")
             return
 
         if cmd == '/remember':
@@ -1282,7 +1282,7 @@ class TelegramBridge:
             if not rule:
                 self.send_message(chat_id, "Usage: `/remember <rule or fact>`")
                 return
-            msg = homie.add_rule(rule)
+            msg = helm.add_rule(rule)
             self.send_message(chat_id, f"🧠 {msg}")
             return
 
@@ -1291,7 +1291,7 @@ class TelegramBridge:
             if not words:
                 self.send_message(chat_id, "Usage: `/forget <words>`")
                 return
-            msg = homie.remove_rule(words)
+            msg = helm.remove_rule(words)
             self.send_message(chat_id, f"🧠 {msg}")
             return
 
@@ -1307,17 +1307,17 @@ class TelegramBridge:
             else:
                 recipient = args[1] if len(args) > 2 else ""
                 message = " ".join(args[2:]) if len(args) > 2 else args[1]
-            ok, res, _ = action_broker.execute_action('homie_send_chat', {'app': app, 'recipient': recipient, 'message': message}, caller_id='telegram_remote')
+            ok, res, _ = action_broker.execute_action('helm_send_chat', {'app': app, 'recipient': recipient, 'message': message}, caller_id='telegram_remote')
             self.send_message(chat_id, f"💬 {res}")
             return
 
-        # Regular prompt -> Run through Homie
-        self.process_homie_task(chat_id, text)
+        # Regular prompt -> Run through Helm
+        self.process_helm_task(chat_id, text)
 
-    def process_homie_task(self, chat_id, text):
+    def process_helm_task(self, chat_id, text):
         """Runs the query through instant local commands or AI."""
         # 1. Fast local command check
-        handled, fast_msg = homie.try_fast_command(text, caller_id="telegram_remote")
+        handled, fast_msg = helm.try_fast_command(text, caller_id="telegram_remote")
         if handled:
             self.send_message(chat_id, f"✓ {fast_msg}")
             return
@@ -1329,7 +1329,7 @@ class TelegramBridge:
         def on_step(line):
             steps.append(line)
 
-        result = homie.run_ai(text, step_callback=on_step)
+        result = helm.run_ai(text, step_callback=on_step)
         
         reply = ""
         if steps:
@@ -1371,7 +1371,7 @@ class TelegramBridge:
 
                 print(f"[Telegram] Transcribed voice note from {chat_id}: \"{transcript}\"", flush=True)
                 self.send_message(chat_id, f"🗣️ *Heard:* \"{transcript}\"")
-                self.process_homie_task(chat_id, transcript)
+                self.process_helm_task(chat_id, transcript)
         except Exception as e:
             print(f"[Telegram] Voice note processing error: {e}", flush=True)
             self.send_message(chat_id, f"Transcription error: {e}")
@@ -1440,7 +1440,7 @@ class TelegramBridge:
                         self.send_message(chat_id, "🔍 *Analyzing uploaded code/log file...*")
                         import ai_engine
                         prompt = f"Analyze this uploaded file content. Summarize its purpose, and identify any errors, bugs, or anomalies clearly:\n\n```\n{content}\n```"
-                        prefs = homie.get_prefs()
+                        prefs = helm.get_prefs()
                         analysis = ai_engine.run_query(prompt, prefs)
                         self.send_message(chat_id, f"📊 **File Analysis**:\n\n{analysis}")
                 except Exception:
@@ -1495,14 +1495,14 @@ class TelegramBridge:
                     # Security Verification
                     if not self.is_user_authorized(user_id, chat_id):
                         if chat.get('type') != 'private':
-                            self.send_message(chat_id, "🔒 Please use Homie's private chat to control this PC.")
+                            self.send_message(chat_id, "🔒 Please use Helm's private chat to control this PC.")
                             continue
                         text = msg.get('text', '')
                         command = text.strip().split(maxsplit=1)[0].split('@', 1)[0].lower() if text.strip() else ''
                         if command == '/pair':
                             self.handle_pairing_message(user_id, chat_id, text)
                         else:
-                            self.send_message(chat_id, "🔒 This account is not paired. Use Homie's local tray menu to copy a one-time pairing command.")
+                            self.send_message(chat_id, "🔒 This account is not paired. Use Helm's local tray menu to copy a one-time pairing command.")
                         continue
 
                     # Voice Note from Phone
@@ -1576,11 +1576,11 @@ def main():
     bridge = TelegramBridge(token=token)
     if not bridge.token:
         print("=" * 60)
-        print("  Homie Telegram Remote Control Setup")
+        print("  Helm Telegram Remote Control Setup")
         print("=" * 60)
         print("1. Open Telegram on your phone and search for: @BotFather")
         print("2. Send: /newbot")
-        print("3. Give your bot a name (e.g. 'MyHomieBot') and a username")
+        print("3. Give your bot a name (e.g. 'MyHelmBot') and a username")
         print("4. Copy the API Token (e.g. 123456789:ABC-DEF...)")
         print("5. Set your token via:")
         print("   setx TELEGRAM_BOT_TOKEN \"your_token_here\"")

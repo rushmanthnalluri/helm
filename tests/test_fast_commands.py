@@ -1,24 +1,24 @@
-"""Unit tests for Homie fast instant local commands."""
+"""Unit tests for Helm fast instant local commands."""
 import unittest
 import sys
 import os
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-import homie
+import helm
 
 class TestFastCommands(unittest.TestCase):
     def test_time_command(self):
-        handled, msg = homie.try_fast_command("what time is it")
+        handled, msg = helm.try_fast_command("what time is it")
         self.assertTrue(handled)
         self.assertIn("The time is", msg)
 
     def test_date_command(self):
-        handled, msg = homie.try_fast_command("what is today's date")
+        handled, msg = helm.try_fast_command("what is today's date")
         self.assertTrue(handled)
         self.assertIn("Today is", msg)
 
     def test_media_command(self):
-        handled, msg = homie.try_fast_command("pause music")
+        handled, msg = helm.try_fast_command("pause music")
         self.assertTrue(handled)
         self.assertIn("Triggered media key", msg)
 
@@ -26,65 +26,65 @@ class TestFastCommands(unittest.TestCase):
         import unittest.mock as mock
         with mock.patch("windows_tools.subprocess.Popen"), mock.patch("webbrowser.open"):
             # 1. "open youtube and play the loose songs"
-            handled, msg = homie.try_fast_command("open youtube and play the loose songs")
+            handled, msg = helm.try_fast_command("open youtube and play the loose songs")
             self.assertTrue(handled)
             self.assertIn("YouTube", msg)
             self.assertIn("the loose songs", msg)
 
             # 2. "Isaid open yt and play songs" (with prefix)
-            handled, msg = homie.try_fast_command("Isaid open yt and play songs")
+            handled, msg = helm.try_fast_command("Isaid open yt and play songs")
             self.assertTrue(handled)
             self.assertIn("YouTube", msg)
 
             # 3. "open youtube"
-            handled, msg = homie.try_fast_command("open youtube")
+            handled, msg = helm.try_fast_command("open youtube")
             self.assertTrue(handled)
             self.assertIn("YouTube", msg)
 
             # 4. "play loose songs on youtube"
-            handled, msg = homie.try_fast_command("play loose songs on youtube")
+            handled, msg = helm.try_fast_command("play loose songs on youtube")
             self.assertTrue(handled)
             self.assertIn("YouTube", msg)
 
     def test_pc_vitals_command(self):
-        handled, msg = homie.try_fast_command("pc status")
+        handled, msg = helm.try_fast_command("pc status")
         self.assertTrue(handled)
         self.assertIn("PC Health Snapshot", msg)
         self.assertIn("RAM:", msg)
 
     def test_messaging_command_handling(self):
         # Verify messaging commands are caught by fast parser
-        handled, msg = homie.try_fast_command("open whatsapp and say hello to Rusman")
+        handled, msg = helm.try_fast_command("open whatsapp and say hello to Rusman")
         self.assertTrue(handled)
         self.assertIn("WhatsApp", msg)
 
     def test_clipboard_and_downloads_fast_commands(self):
         # 1. Clipboard
-        handled, msg = homie.try_fast_command("what's in my clipboard")
+        handled, msg = helm.try_fast_command("what's in my clipboard")
         self.assertTrue(handled)
         self.assertIn("Clipboard", msg)
 
         # 2. Smart Clipboard analysis
-        url_analysis = homie.analyze_clipboard("https://github.com/SaarthurR/atticus-mac")
+        url_analysis = helm.analyze_clipboard("https://github.com/SaarthurR/atticus-mac")
         self.assertIn("URL Detected", url_analysis)
         self.assertIn("github.com", url_analysis)
 
-        json_analysis = homie.analyze_clipboard('{"name": "Homie", "version": 2}')
+        json_analysis = helm.analyze_clipboard('{"name": "Helm", "version": 2}')
         self.assertIn("Valid JSON Detected", json_analysis)
 
         # 3. Macro execution
-        homie.save_macro("unit_test_macro", [{"action": "media", "action": "mute"}])
-        handled, msg = homie.try_fast_command("run macro unit_test_macro")
+        helm.save_macro("unit_test_macro", [{"action": "media", "action": "mute"}])
+        handled, msg = helm.try_fast_command("run macro unit_test_macro")
         self.assertTrue(handled)
         self.assertIn("unit_test_macro", msg)
 
         # 4. Downloads
-        handled, msg = homie.try_fast_command("recent downloads")
+        handled, msg = helm.try_fast_command("recent downloads")
         self.assertTrue(handled)
         self.assertTrue("Downloads" in msg or "empty" in msg)
 
     def test_non_fast_command_delegates_to_ai(self):
-        handled, msg = homie.try_fast_command("explain quantum computing in detail")
+        handled, msg = helm.try_fast_command("explain quantum computing in detail")
         self.assertFalse(handled)
         self.assertEqual(msg, "")
 

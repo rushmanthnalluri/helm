@@ -10,7 +10,7 @@ import unittest
 import quick_notes
 import workspace_manager
 import tray_hud
-import homie
+import helm
 
 class TestBatch5Features(unittest.TestCase):
     def setUp(self):
@@ -137,13 +137,13 @@ class TestBatch5Features(unittest.TestCase):
 
     def test_fast_commands_batch5(self):
         # 1. Take note
-        handled, msg = homie.try_fast_command("take note buy groceries for dinner")
+        handled, msg = helm.try_fast_command("take note buy groceries for dinner")
         self.assertTrue(handled)
         self.assertIn("Saved note", msg)
         self.assertIn("buy groceries", msg)
 
         # 2. Show notes
-        handled2, msg2 = homie.try_fast_command("show notes")
+        handled2, msg2 = helm.try_fast_command("show notes")
         self.assertTrue(handled2)
         self.assertIn("Scratchpad Notes", msg2)
 

@@ -22,9 +22,9 @@ The following files must **NOT** remain in the repository root or be committed t
 
 | File | Purpose |
 |------|---------|
-| `.homie_vault.key` | Crypto vault encryption key |
-| `.homie_session.token` | Active session token |
-| `.homie_ledger_hmac.key` | Audit ledger HMAC signing key |
+| `.helm_vault.key` | Crypto vault encryption key |
+| `.helm_session.token` | Active session token |
+| `.helm_ledger_hmac.key` | Audit ledger HMAC signing key |
 
 > [!CAUTION]
 > Ensure all three files above are listed in `.gitignore` to prevent accidental commits.
@@ -34,15 +34,15 @@ The following files must **NOT** remain in the repository root or be committed t
 In production deployments, these files must be stored in the Windows user's protected app data directory:
 
 ```
-%LOCALAPPDATA%\Homie\keys\
+%LOCALAPPDATA%\Helm\keys\
 ```
 
 Full paths:
 
 ```
-C:\Users\<username>\AppData\Local\Homie\keys\.homie_vault.key
-C:\Users\<username>\AppData\Local\Homie\keys\.homie_session.token
-C:\Users\<username>\AppData\Local\Homie\keys\.homie_ledger_hmac.key
+C:\Users\<username>\AppData\Local\Helm\keys\.helm_vault.key
+C:\Users\<username>\AppData\Local\Helm\keys\.helm_session.token
+C:\Users\<username>\AppData\Local\Helm\keys\.helm_ledger_hmac.key
 ```
 
 This directory is per-user, not synced by default (not included in roaming profiles), and is outside the project tree.
@@ -51,7 +51,7 @@ This directory is per-user, not synced by default (not included in roaming profi
 
 ## Security Architecture Overview
 
-Homie uses a **defense-in-depth** architecture with multiple independent, kernel-enforced layers. No single layer is relied upon alone.
+Helm uses a **defense-in-depth** architecture with multiple independent, kernel-enforced layers. No single layer is relied upon alone.
 
 ### Layer 1 — Process Isolation (Worker Confinement)
 
@@ -114,7 +114,7 @@ WebAuthn assertions are additionally protected by an **anti-TOCTOU DOM mutation 
 
 ### Layer 7 — Network Protection
 
-- **`homie_ssrf.py`**: HTTP fetch requests are validated before dispatch; loopback addresses, link-local ranges, and cloud metadata endpoints (e.g., `169.254.169.254`) are blocked.
+- **`helm_ssrf.py`**: HTTP fetch requests are validated before dispatch; loopback addresses, link-local ranges, and cloud metadata endpoints (e.g., `169.254.169.254`) are blocked.
 - **AppContainer zero-network**: Worker-level network calls are blocked at the kernel before SSRF filtering is even reached (defense in depth).
 
 ### Layer 8 — Input Integrity
@@ -147,7 +147,7 @@ WebAuthn assertions are additionally protected by an **anti-TOCTOU DOM mutation 
 | **Ed25519** | WebAuthn assertions (Gate 1), update manifest signatures |
 | **ES256 (ECDSA P-256 + SHA-256)** | WebAuthn assertions (Gate 1), alternative to Ed25519 |
 | **SHA-256** | WebAuthn challenge binding (hash of canonical approval), audit ledger hash chain |
-| **HMAC-SHA-256** | Audit ledger per-entry message authentication (keyed with `.homie_ledger_hmac.key`) |
+| **HMAC-SHA-256** | Audit ledger per-entry message authentication (keyed with `.helm_ledger_hmac.key`) |
 | **AES (vault)** | Symmetric encryption of secrets at rest via `crypto_vault.py` |
 
 > [!NOTE]
@@ -167,7 +167,7 @@ WebAuthn assertions are additionally protected by an **anti-TOCTOU DOM mutation 
 - Replay attacks on IPC and WebAuthn (monotonic counters, sign-counter rollback protection)
 - Synthetic keystroke injection (WH_KEYBOARD_LL filter)
 - Malicious software updates (Ed25519 signed manifests + rollback protection)
-- Lateral movement via SSRF (homie_ssrf.py + AppContainer)
+- Lateral movement via SSRF (helm_ssrf.py + AppContainer)
 - Secrets exposure (owner-only DACLs, encrypted vault, gitignore)
 
 ### Explicit Non-Guarantees (Out of Scope)

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Homie</title>
+  <title>Helm</title>
   <style>
     :root { color-scheme: dark; font-family: "Segoe UI", system-ui, sans-serif; color: #f4f5f7; background: #111318; }
     * { box-sizing: border-box; }
@@ -70,18 +70,18 @@
 </head>
 <body>
   <header>
-    <div class="brand"><div class="mark">H</div><div class="brand-copy"><strong>Homie</strong><span id="status">Ready</span></div></div>
+    <div class="brand"><div class="mark">H</div><div class="brand-copy"><strong>Helm</strong><span id="status">Ready</span></div></div>
     <div class="head-actions">
       <button id="safe" class="icon-button" type="button" aria-pressed="false" title="Toggle safe mode">Safe mode</button>
-      <button id="minimize" class="icon-button" type="button" title="Minimize Homie" aria-label="Minimize Homie"><svg viewBox="0 0 16 16"><path d="M3 8h10"/></svg></button>
+      <button id="minimize" class="icon-button" type="button" title="Minimize Helm" aria-label="Minimize Helm"><svg viewBox="0 0 16 16"><path d="M3 8h10"/></svg></button>
     </div>
   </header>
   <main id="messages" aria-live="polite">
-    <section id="welcome"><div><div class="welcome-mark">✦</div><h1>Hi, I’m Homie.</h1><p>Type a message below, or hold Ctrl + Alt + Space to talk. I’ll show your transcript and reply here.</p></div></section>
+    <section id="welcome"><div><div class="welcome-mark">✦</div><h1>Hi, I’m Helm.</h1><p>Type a message below, or hold Ctrl + Alt + Space to talk. I’ll show your transcript and reply here.</p></div></section>
   </main>
   <div id="composer-wrap">
     <div id="composer">
-      <textarea id="ask" rows="1" placeholder="Message Homie…" aria-label="Message Homie"></textarea>
+      <textarea id="ask" rows="1" placeholder="Message Helm…" aria-label="Message Helm"></textarea>
       <button id="mic" type="button" title="Start or stop talking" aria-label="Start or stop talking"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></svg></button>
       <button id="send" type="button" title="Send message" aria-label="Send message"><svg viewBox="0 0 24 24"><path d="M4 12 20 4l-5 16-3-6-8-2Z"/><path d="m12 14 8-10"/></svg></button>
     </div>
@@ -97,7 +97,7 @@
       function post(message) {
         const api = window.pywebview?.api;
         if (api?.post) api.post(message);
-        else toast('Homie is still starting. Try again in a moment.');
+        else toast('Helm is still starting. Try again in a moment.');
       }
       function setStatus(text, kind = '') {
         status.textContent = text || 'Ready';

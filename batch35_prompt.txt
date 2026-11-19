@@ -6,22 +6,22 @@ Here is the complete Batch 35 implementation, directly addressing and resolving 
 
 Exact command: `git grep -n "generate_console_recovery_token\|record_approved_action\|try_fast_command"`
 ```
-app.py:207:            handled, fast_msg = homie.try_fast_command(text, caller_id=caller_id)
-homie.py:295:def try_fast_command(text, caller_id="desktop_user"):
-homie.py:959:        recovery_token = phone_approval_portal.generate_console_recovery_token(ttl_seconds=300.0)
-homie.py:963:            new_rec_token = phone_approval_portal.generate_console_recovery_token(ttl_seconds=300.0)
-homie.py:1005:        handled, msg = try_fast_command(text)
-homie.py:1025:    handled, fast_msg = try_fast_command(task)
-homie_supervisor.py:223:def record_approved_action(caller_id: str, tool: str, args_hash: str, taint_epoch: int, ttl: float = 120.0):
-homie_supervisor.py:227:        sup.record_approved_action(caller_id, tool, args_hash, taint_epoch, ttl=ttl)
-homie_supervisor.py:465:    def record_approved_action(self, caller_id: str, tool: str, args_hash: str, taint_epoch: int, ttl: float = 120.0):
+app.py:207:            handled, fast_msg = helm.try_fast_command(text, caller_id=caller_id)
+helm.py:295:def try_fast_command(text, caller_id="desktop_user"):
+helm.py:959:        recovery_token = phone_approval_portal.generate_console_recovery_token(ttl_seconds=300.0)
+helm.py:963:            new_rec_token = phone_approval_portal.generate_console_recovery_token(ttl_seconds=300.0)
+helm.py:1005:        handled, msg = try_fast_command(text)
+helm.py:1025:    handled, fast_msg = try_fast_command(task)
+helm_supervisor.py:223:def record_approved_action(caller_id: str, tool: str, args_hash: str, taint_epoch: int, ttl: float = 120.0):
+helm_supervisor.py:227:        sup.record_approved_action(caller_id, tool, args_hash, taint_epoch, ttl=ttl)
+helm_supervisor.py:465:    def record_approved_action(self, caller_id: str, tool: str, args_hash: str, taint_epoch: int, ttl: float = 120.0):
 phone_approval_portal.py:63:def generate_console_recovery_token(ttl_seconds: float = 300.0) -> str:
-phone_approval_portal.py:722:        homie_supervisor.record_approved_action(
-phone_gateway.py:206:        handled, msg = homie.try_fast_command(speech, caller_id="phone_gateway")
-scripts/run_mutation_tests.py:474:        "target": "        homie_supervisor.record_approved_action(\n            caller_id=target_caller,\n            tool=expected_action,\n            args_hash=str(expected_payload_hash).lower(),\n            taint_epoch=approval_epoch,\n            ttl=min(remaining_ttl, 120.0)\n        )",
-telegram_bridge.py:1320:        handled, fast_msg = homie.try_fast_command(text, caller_id="telegram_remote")
-tests/test_batch11.py:108:        handled, msg = homie.try_fast_command("taint status")
-tests/test_batch11.py:112:        handled2, msg2 = homie.try_fast_command("emergency stop")
+phone_approval_portal.py:722:        helm_supervisor.record_approved_action(
+phone_gateway.py:206:        handled, msg = helm.try_fast_command(speech, caller_id="phone_gateway")
+scripts/run_mutation_tests.py:474:        "target": "        helm_supervisor.record_approved_action(\n            caller_id=target_caller,\n            tool=expected_action,\n            args_hash=str(expected_payload_hash).lower(),\n            taint_epoch=approval_epoch,\n            ttl=min(remaining_ttl, 120.0)\n        )",
+telegram_bridge.py:1320:        handled, fast_msg = helm.try_fast_command(text, caller_id="telegram_remote")
+tests/test_batch11.py:108:        handled, msg = helm.try_fast_command("taint status")
+tests/test_batch11.py:112:        handled2, msg2 = helm.try_fast_command("emergency stop")
 tests/test_batch18_phone_portal.py:40:        tok = phone_approval_portal.generate_console_recovery_token()
 tests/test_batch18_phone_portal.py:57:        tok = phone_approval_portal.generate_console_recovery_token()
 tests/test_batch29_security_hardening.py:45:        tok = phone_approval_portal.generate_console_recovery_token()
@@ -32,21 +32,21 @@ tests/test_batch30_security_hardening.py:220:        tok = phone_approval_portal
 tests/test_batch30_security_hardening.py:237:        tok2 = phone_approval_portal.generate_console_recovery_token()
 tests/test_batch31_security_hardening.py:200:        recovery_token = phone_approval_portal.generate_console_recovery_token()
 tests/test_batch31_security_hardening.py:232:        tok = phone_approval_portal.generate_console_recovery_token()
-tests/test_batch31_security_hardening.py:350:        supervisor.record_approved_action("worker", "homie_set_clipboard", args_hash, epoch)
+tests/test_batch31_security_hardening.py:350:        supervisor.record_approved_action("worker", "helm_set_clipboard", args_hash, epoch)
 tests/test_batch32_security_hardening.py:6:5. Production caller for start_local_enrollment via try_fast_command and app API.
 tests/test_batch32_security_hardening.py:75:        tok = phone_approval_portal.generate_console_recovery_token()
 tests/test_batch32_security_hardening.py:120:        rec_tok = phone_approval_portal.generate_console_recovery_token()
-tests/test_batch32_security_hardening.py:206:        handled, msg = homie.try_fast_command("pair phone")
-tests/test_batch32_security_hardening.py:320:        supervisor.record_approved_action("worker_1", "homie_set_clipboard", args_hash, taint_epoch=2, ttl=60.0)
+tests/test_batch32_security_hardening.py:206:        handled, msg = helm.try_fast_command("pair phone")
+tests/test_batch32_security_hardening.py:320:        supervisor.record_approved_action("worker_1", "helm_set_clipboard", args_hash, taint_epoch=2, ttl=60.0)
 tests/test_batch33_security_hardening.py:7:6. Ambient/voice try_fast_command does not trigger pairing ceremony; restricted to physical console/hotkey.
-tests/test_batch33_security_hardening.py:195:        handled, msg = homie.try_fast_command("pair phone")
-tests/test_batch35_security_hardening.py:15:   - phone_approval_portal.verify_action_approval relays to homie_supervisor.record_approved_action.
+tests/test_batch33_security_hardening.py:195:        handled, msg = helm.try_fast_command("pair phone")
+tests/test_batch35_security_hardening.py:15:   - phone_approval_portal.verify_action_approval relays to helm_supervisor.record_approved_action.
 tests/test_batch35_security_hardening.py:18:5. Directive 5: Production Console Callers for generate_console_recovery_token:
-tests/test_batch35_security_hardening.py:19:   - homie.py CLI commands (--pairing-unlock, --recover-device) call generate_console_recovery_token.
-tests/test_batch35_security_hardening.py:182:        """Directive 4: verify_action_approval relays directly to homie_supervisor.record_approved_action."""
+tests/test_batch35_security_hardening.py:19:   - helm.py CLI commands (--pairing-unlock, --recover-device) call generate_console_recovery_token.
+tests/test_batch35_security_hardening.py:182:        """Directive 4: verify_action_approval relays directly to helm_supervisor.record_approved_action."""
 tests/test_batch35_security_hardening.py:239:                    with patch.object(phone_approval_portal, 'generate_console_recovery_token', wraps=phone_approval_portal.generate_console_recovery_token) as mock_gen:
-tests/test_entry_point_enumeration.py:10:3. Desktop Assistant Fast Command Dispatcher (homie.py: try_fast_command)
-tests/test_entry_point_enumeration.py:132:    def test_4_homie_try_fast_command_dispatches_via_broker(self):
+tests/test_entry_point_enumeration.py:10:3. Desktop Assistant Fast Command Dispatcher (helm.py: try_fast_command)
+tests/test_entry_point_enumeration.py:132:    def test_4_helm_try_fast_command_dispatches_via_broker(self):
 ```
 
 #### Production Callers Added & Verified:
@@ -56,8 +56,8 @@ tests/test_entry_point_enumeration.py:132:    def test_4_homie_try_fast_command_
     target_caller = approval.get("caller_id") or "worker"
     remaining_ttl = max(1.0, float(expiry - now))
     try:
-        import homie_supervisor
-        homie_supervisor.record_approved_action(
+        import helm_supervisor
+        helm_supervisor.record_approved_action(
             caller_id=target_caller,
             tool=expected_action,
             args_hash=str(expected_payload_hash).lower(),
@@ -69,7 +69,7 @@ tests/test_entry_point_enumeration.py:132:    def test_4_homie_try_fast_command_
 
     return True, "Approval signature and action binding verified"
 ```
-2. **`generate_console_recovery_token`**: Called in production CLI commands in `homie.py` (`--pairing-unlock` and `--recover-device`). Requires interactive console TTY confirmation (`'CONFIRM-RESET'`); non-interactive fails closed:
+2. **`generate_console_recovery_token`**: Called in production CLI commands in `helm.py` (`--pairing-unlock` and `--recover-device`). Requires interactive console TTY confirmation (`'CONFIRM-RESET'`); non-interactive fails closed:
 ```python
     if cmd in ('--pairing-unlock', 'pairing-unlock', '--recover-device'):
         import phone_approval_portal
@@ -79,23 +79,23 @@ tests/test_entry_point_enumeration.py:132:    def test_4_homie_try_fast_command_
             if sys.stdin.isatty():
                 confirmation = input("Type 'CONFIRM-RESET' to unlock pairing / generate recovery token: ").strip()
                 if confirmation != "CONFIRM-RESET":
-                    print("✗ [HOMIE SECURITY] Operation cancelled: confirmation code mismatch.")
+                    print("✗ [HELM SECURITY] Operation cancelled: confirmation code mismatch.")
                     return
             else:
-                print("✗ [HOMIE SECURITY] Interactive console presence required to unlock pairing.")
+                print("✗ [HELM SECURITY] Interactive console presence required to unlock pairing.")
                 return
         
         recovery_token = phone_approval_portal.generate_console_recovery_token(ttl_seconds=300.0)
         ok, msg = phone_approval_portal.reset_pairing_lockout(recovery_token=recovery_token)
-        print(f"✓ [HOMIE SECURITY] {msg}")
+        print(f"✓ [HELM SECURITY] {msg}")
         if cmd == '--recover-device':
             new_rec_token = phone_approval_portal.generate_console_recovery_token(ttl_seconds=300.0)
-            print(f"✓ [HOMIE SECURITY] Device recovery token (valid 5m): {new_rec_token}")
+            print(f"✓ [HELM SECURITY] Device recovery token (valid 5m): {new_rec_token}")
             print("  Use this recovery token during phone enrollment to restore access.")
         return
 
     if cmd == '--look':
-        ok, msg, res = action_broker.execute_action('homie_capture_screen', {}, caller_id="desktop_user")
+        ok, msg, res = action_broker.execute_action('helm_capture_screen', {}, caller_id="desktop_user")
         files = re.findall(r'([A-Za-z]:\\[^\s,]+\.png)', str(res)) if ok else []
         for f in files:
             print(f)
@@ -104,14 +104,14 @@ tests/test_entry_point_enumeration.py:132:    def test_4_homie_try_fast_command_
     if cmd == '--place':
         app = args[1] if len(args) > 1 else ""
         where = args[2] if len(args) > 2 else "full"
-        ok, msg, _ = action_broker.execute_action('homie_place_window', {'app_name': app, 'position': where}, caller_id="desktop_user")
+        ok, msg, _ = action_broker.execute_action('helm_place_window', {'app_name': app, 'position': where}, caller_id="desktop_user")
         print(msg)
 ```
 3. **`try_fast_command` & Telegram/Phone Complete Mediation**: Mediated strictly through `action_broker.execute_action(..., caller_id="...")`. Every action passes through the kill switch, taint checking, policy envelope, and HMAC audit ledger.
 
 ---
 
-### 2. Complete `_handle_propose` with Try/Finally & Actuator Outcome Commit (`homie_supervisor.py`)
+### 2. Complete `_handle_propose` with Try/Finally & Actuator Outcome Commit (`helm_supervisor.py`)
 
 As requested, here is the full method including step reservation, actuator invocation flag, and single-point finally release (reservation released **ONLY** if actuator was never invoked):
 ```python
@@ -232,7 +232,7 @@ As requested, here is the full method including step reservation, actuator invoc
                 })
 
         # 8. Target Process Image Check (Hardware Grounding) with Millisecond TOCTOU Guard
-        if tool in ["homie_agent_click", "homie_agent_type"]:
+        if tool in ["helm_agent_click", "helm_agent_type"]:
             safe, toctou_reason = worker_confinement.PreInjectionTOCTOUGuard.verify_injection_target()
             if not safe:
                 return self._encode_reply(MSG_DECISION, {
@@ -598,7 +598,7 @@ def canonicalize_keyboard_arguments(arguments: Dict[str, Any]) -> Tuple[bool, bo
 
 Enforced at module load and in tests:
 ```python
-# Pinned Ed25519 publisher public key for official Homie software releases (Rotated Batch 34)
+# Pinned Ed25519 publisher public key for official Helm software releases (Rotated Batch 34)
 PINNED_PUBLISHER_KEY_PEM = """-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAXBYS0+c64gbsT95CnpeMWWQVQkfK7xSjwbld5xs4MGU=
 -----END PUBLIC KEY-----"""
@@ -630,7 +630,7 @@ collected 7 items
 tests/test_entry_point_enumeration.py::TestEntryPointEnumeration::test_1_telegram_callback_entry_points_dispatch_via_broker PASSED [ 14%]
 tests/test_entry_point_enumeration.py::TestEntryPointEnumeration::test_2_telegram_text_command_entry_points_dispatch_via_broker PASSED [ 28%]
 tests/test_entry_point_enumeration.py::TestEntryPointEnumeration::test_3_telegram_admin_kill_dispatches_via_broker PASSED [ 42%]
-tests/test_entry_point_enumeration.py::TestEntryPointEnumeration::test_4_homie_try_fast_command_dispatches_via_broker PASSED [ 57%]
+tests/test_entry_point_enumeration.py::TestEntryPointEnumeration::test_4_helm_try_fast_command_dispatches_via_broker PASSED [ 57%]
 tests/test_entry_point_enumeration.py::TestEntryPointEnumeration::test_5_phone_gateway_vitals_dispatches_via_broker PASSED [ 71%]
 tests/test_entry_point_enumeration.py::TestEntryPointEnumeration::test_6_all_enumerated_entry_points_fail_closed_under_kill_switch PASSED [ 85%]
 tests/test_entry_point_enumeration.py::TestEntryPointEnumeration::test_7_supervisor_propose_enforces_complete_mediation_and_audit_ledger PASSED [100%]
@@ -649,12 +649,12 @@ Command: `python scripts/run_mutation_tests.py`
 ===========================================================================
 Total Security Mutations to Evaluate: 55
 
-[1/55] Testing Mutation: Drop File Owner-Only DACL in homie_confinement.py ... KILLED
-[2/55] Testing Mutation: Drop ActiveProcessLimit from Job Object in homie_confinement.py ... KILLED
-[3/55] Testing Mutation: Remove AppContainer Isolation in homie_confinement.py ... KILLED
-[4/55] Testing Mutation: Bypass Intent Token Verification in homie_supervisor.py ... KILLED
+[1/55] Testing Mutation: Drop File Owner-Only DACL in helm_confinement.py ... KILLED
+[2/55] Testing Mutation: Drop ActiveProcessLimit from Job Object in helm_confinement.py ... KILLED
+[3/55] Testing Mutation: Remove AppContainer Isolation in helm_confinement.py ... KILLED
+[4/55] Testing Mutation: Bypass Intent Token Verification in helm_supervisor.py ... KILLED
 [5/55] Testing Mutation: Bypass Browser Domain Scope Check in policy_envelope.py ... KILLED
-[6/55] Testing Mutation: Drop Synthetic Keystroke Filter in homie_watchdog.py ... KILLED
+[6/55] Testing Mutation: Drop Synthetic Keystroke Filter in helm_watchdog.py ... KILLED
 [7/55] Testing Mutation: Bypass Ed25519 Signature Check in phone_approval_portal.py ... KILLED
 [8/55] Testing Mutation: Bypass Ed25519 Signature Verification in update_verifier.py ... KILLED
 [9/55] Testing Mutation: Bypass Monotonic Version Epoch Rollback Check in update_verifier.py ... KILLED
@@ -685,12 +685,12 @@ Total Security Mutations to Evaluate: 55
 [34/55] Testing Mutation: Bypass Failed Enrollment Attempt Recording in complete_device_enrollment ... KILLED
 [35/55] Testing Mutation: Bypass Console Recovery Token Verification in complete_device_enrollment ... KILLED
 [36/55] Testing Mutation: Bypass OUTCOME_UNKNOWN on Unhandled Actuator Exception ... KILLED
-[37/55] Testing Mutation: Bypass Direct Approval Cache Check in homie_supervisor._handle_propose ... KILLED
+[37/55] Testing Mutation: Bypass Direct Approval Cache Check in helm_supervisor._handle_propose ... KILLED
 [38/55] Testing Mutation: Bypass Revoked All Devices Token Requirement in complete_device_enrollment ... KILLED
 [39/55] Testing Mutation: Bypass Signed Approval Expiration Check in verify_v2_action_approval ... KILLED
-[40/55] Testing Mutation: Fail Open when Worker Fails Client Token Enforcement in homie_mcp.py ... KILLED
+[40/55] Testing Mutation: Fail Open when Worker Fails Client Token Enforcement in helm_mcp.py ... KILLED
 [41/55] Testing Mutation: Bypass Missing Process Image Fail-Closed Check in policy_envelope.py ... KILLED
-[42/55] Testing Mutation: Bypass Intent Ledger Failure State Lock in homie_supervisor.py ... KILLED
+[42/55] Testing Mutation: Bypass Intent Ledger Failure State Lock in helm_supervisor.py ... KILLED
 [43/55] Testing Mutation: Bypass Caller ID Binding in Supervisor Approval Cache ... KILLED
 [44/55] Testing Mutation: Bypass Enter Key Detection in policy_envelope.py ... KILLED
 [45/55] Testing Mutation: Bypass Mandatory Approval Expiry Field Check in verify_action_approval ... KILLED
@@ -702,7 +702,7 @@ Total Security Mutations to Evaluate: 55
 [51/55] Testing Mutation: Bypass Step Budget Consumption on Actuator Invocation / UNKNOWN Outcomes in _handle_propose ... KILLED
 [52/55] Testing Mutation: Bypass Phone Approval Relay to Supervisor Cache in verify_action_approval ... KILLED
 [53/55] Testing Mutation: Bypass Publisher Public Key SPKI DER SHA-256 Fingerprint Check in update_verifier.py ... KILLED
-[54/55] Testing Mutation: Bypass Console Presence Verification in homie.py --pairing-unlock ... KILLED
+[54/55] Testing Mutation: Bypass Console Presence Verification in helm.py --pairing-unlock ... KILLED
 [55/55] Testing Mutation: Bypass ActionBroker Complete Mediation in Telegram Bridge Callback ... KILLED
 
 ===========================================================================

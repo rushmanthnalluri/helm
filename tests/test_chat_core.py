@@ -79,7 +79,7 @@ class TestChatCore(unittest.TestCase):
         chunks = []
         messages = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hey"}]
 
-        result = chat_core.stream_provider_turn(messages, "You are Homie.", {}, [], chunks.append)
+        result = chat_core.stream_provider_turn(messages, "You are Helm.", {}, [], chunks.append)
 
         self.assertEqual(result.text, "Hello there.")
         self.assertEqual(chunks, ["Hello ", "there."])
@@ -123,14 +123,14 @@ class TestChatCore(unittest.TestCase):
             "model": "test-model", "api_key": "secret",
         }
         provider_part = {
-            "functionCall": {"name": "homie_get_vitals", "args": {}},
+            "functionCall": {"name": "helm_get_vitals", "args": {}},
             "thoughtSignature": "signature-placeholder",
         }
         post.return_value = FakeResponse([
             "data: " + json.dumps({"candidates": [{"content": {"parts": [provider_part]}}]}),
         ])
         tools = [{"type": "function", "function": {
-            "name": "homie_get_vitals", "description": "Read PC health.",
+            "name": "helm_get_vitals", "description": "Read PC health.",
             "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
         }}]
 
@@ -148,10 +148,10 @@ class TestChatCore(unittest.TestCase):
                 "arguments": result.tool_calls[0].arguments,
                 "gemini_part": result.tool_calls[0].provider_payload,
             }]},
-            {"role": "tool", "name": "homie_get_vitals", "content": '{"ok":true}'},
+            {"role": "tool", "name": "helm_get_vitals", "content": '{"ok":true}'},
         ])
         self.assertEqual(followup[1]["parts"][0], provider_part)
-        self.assertEqual(followup[2]["parts"][0]["functionResponse"]["name"], "homie_get_vitals")
+        self.assertEqual(followup[2]["parts"][0]["functionResponse"]["name"], "helm_get_vitals")
 
     @patch("chat_core.ai_engine.get_active_provider")
     @patch("chat_core.requests.post")
@@ -173,12 +173,12 @@ class TestChatCore(unittest.TestCase):
             "model": "test-model", "api_key": "secret",
         }
         post.return_value = FakeResponse([
-            b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"homie_list_downloads","arguments":"{\\"limit\\":"}}]}}]}',
+            b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"helm_list_downloads","arguments":"{\\"limit\\":"}}]}}]}',
             b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"3}"}}]}}]}',
             b"data: [DONE]",
         ])
         tools = [{"type": "function", "function": {
-            "name": "homie_list_downloads", "description": "List files.",
+            "name": "helm_list_downloads", "description": "List files.",
             "parameters": {"type": "object", "properties": {"limit": {"type": "integer"}}},
         }}]
 
@@ -188,7 +188,7 @@ class TestChatCore(unittest.TestCase):
 
         self.assertEqual(result.text, "")
         self.assertEqual(result.tool_calls[0].call_id, "call-1")
-        self.assertEqual(result.tool_calls[0].name, "homie_list_downloads")
+        self.assertEqual(result.tool_calls[0].name, "helm_list_downloads")
         self.assertEqual(result.tool_calls[0].arguments, '{"limit":3}')
         self.assertEqual(post.call_args.kwargs["json"]["tools"], tools)
 

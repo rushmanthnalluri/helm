@@ -1,9 +1,9 @@
-"""skill_compiler.py - Workstation Macro Skill Compiler for Homie.
+"""skill_compiler.py - Workstation Macro Skill Compiler for Helm.
 
 Compiles verified multi-step user workflows into cryptographically signed,
 strictly bounded execution macros:
 - Declared target process images (e.g. ["chrome.exe", "code.exe"]).
-- Declared allowable action types (e.g. ["homie_launch_app", "homie_place_window"]).
+- Declared allowable action types (e.g. ["helm_launch_app", "helm_place_window"]).
 - Fixed step budget and parameter boundaries.
 - Cryptographic HMAC-SHA256 macro signature ensuring worker/agent cannot tamper with steps.
 - Executes through ActionBroker within a verified bounded PolicyEnvelope.
@@ -34,9 +34,9 @@ from policy_envelope import PolicyEnvelope
 
 MACRO_NAME_REGEX = re.compile(r"^[a-z0-9_]{1,40}$")
 
-logger = logging.getLogger("homie.skill_compiler")
+logger = logging.getLogger("helm.skill_compiler")
 
-MACRO_REGISTRY_FILE = os.path.join(BASE_DIR, "homie_compiled_macros.json")
+MACRO_REGISTRY_FILE = os.path.join(BASE_DIR, "helm_compiled_macros.json")
 
 # Forbidden macro names that shadow core deterministic fast commands
 FORBIDDEN_MACRO_NAMES = {
@@ -235,7 +235,7 @@ class MacroRegistry:
             return False, "DENY: Compiling workstation macros strictly requires a signed approval object.", {}
 
         app_ok, app_msg = phone_approval_portal.verify_action_approval(
-            approval, "homie_compile_macro", macro_canonical_hash
+            approval, "helm_compile_macro", macro_canonical_hash
         )
         if not app_ok:
             return False, f"DENY: Macro compilation approval verification failed: {app_msg}", {}
@@ -250,7 +250,7 @@ class MacroRegistry:
         try:
             agent_audit_ledger.record_agent_action(
                 f"phone_device_{approval.get('device_id', 'primary_phone')}",
-                "homie_compile_macro",
+                "helm_compile_macro",
                 "ELEVATED_CONFIRM",
                 {"name": clean_name, "steps_count": len(steps)},
                 decision="ALLOW_COMPILED_MACRO"

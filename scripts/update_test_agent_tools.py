@@ -99,13 +99,13 @@ additional_tests = '''
             self.assertGreater(tool.max_output_chars, 0)
 
         # Context search is SENSITIVE_READ with taint
-        cs = registry._tools["homie_search_context"]
+        cs = registry._tools["helm_search_context"]
         self.assertEqual(cs.capability_tier, "SENSITIVE_READ")
         self.assertTrue(cs.returns_untrusted)
         self.assertTrue(cs.taint_on_read)
 
         # Briefing tool carries taint
-        briefing = registry._tools["homie_generate_briefing"]
+        briefing = registry._tools["helm_generate_briefing"]
         self.assertTrue(briefing.returns_untrusted)
         self.assertTrue(briefing.taint_on_read)
 '''

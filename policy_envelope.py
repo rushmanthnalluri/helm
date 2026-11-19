@@ -42,7 +42,7 @@ if BASE_DIR not in sys.path:
 import phone_approval_portal
 import agent_audit_ledger
 
-logger = logging.getLogger("homie.envelope")
+logger = logging.getLogger("helm.envelope")
 
 # Prohibited images that CANNOT be approved in any policy envelope
 PROHIBITED_ENVELOPE_IMAGES: Set[str] = {
@@ -60,7 +60,7 @@ BROWSER_IMAGES: Set[str] = {
 # High-risk action names
 HIGH_RISK_PER_STEP_CLASSES: Set[str] = {
     "send", "delete", "pay", "submit", "install",
-    "homie_execute_cmd", "homie_delete_file"
+    "helm_execute_cmd", "helm_delete_file"
 }
 
 # Semantic keywords indicating high-risk controls (even if labeled "Continue", "Next", etc.)

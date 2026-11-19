@@ -1,8 +1,8 @@
 new_tests = """
     def test_13_hardware_profiler_system_specs_and_gpu_detection(self):
         \"\"\"OpenJarvis Directive: HardwareProfiler accurately profiles RAM, CPU cores, and GPU VRAM.\"\"\"
-        import homie_hardware_profiler
-        profiler = homie_hardware_profiler.HardwareProfiler()
+        import helm_hardware_profiler
+        profiler = helm_hardware_profiler.HardwareProfiler()
         specs = profiler.get_system_specs()
         self.assertGreater(specs["total_ram_gb"], 0)
         self.assertGreater(specs["cpu_cores_logical"], 0)
@@ -11,8 +11,8 @@ new_tests = """
 
     def test_14_hardware_profiler_runtime_recommendation(self):
         \"\"\"OpenJarvis Directive: Recommends local runtime when sufficient GPU VRAM & Ollama available, cloud otherwise.\"\"\"
-        import homie_hardware_profiler
-        profiler = homie_hardware_profiler.HardwareProfiler()
+        import helm_hardware_profiler
+        profiler = helm_hardware_profiler.HardwareProfiler()
 
         # Case A: Ample VRAM (8GB) and Ollama running with llama3
         mock_specs = {
@@ -40,8 +40,8 @@ new_tests = """
 
     def test_15_resource_tracker_cost_and_flops_evaluation(self):
         \"\"\"OpenJarvis Directive: ResourceTracker calculates FLOPs (6*N*P) and token dollar costs.\"\"\"
-        import homie_resource_tracker
-        tracker = homie_resource_tracker.ResourceTracker(daily_budget_usd=10.0)
+        import helm_resource_tracker
+        tracker = helm_resource_tracker.ResourceTracker(daily_budget_usd=10.0)
 
         # 1000 prompt tokens, 500 completion tokens on gemini-2.5-flash
         t = tracker.record_turn(
@@ -59,8 +59,8 @@ new_tests = """
 
     def test_16_resource_tracker_budget_circuit_breaker(self):
         \"\"\"OpenJarvis Directive: Circuit breaker triggers when daily expenditure exceeds configured limit.\"\"\"
-        import homie_resource_tracker
-        tracker = homie_resource_tracker.ResourceTracker(daily_budget_usd=0.001)
+        import helm_resource_tracker
+        tracker = helm_resource_tracker.ResourceTracker(daily_budget_usd=0.001)
 
         # Large turn on claude-3-5-sonnet exceeding $0.001 limit
         t = tracker.record_turn(

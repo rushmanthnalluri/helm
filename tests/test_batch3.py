@@ -19,7 +19,7 @@ from clipboard_classifier import ClipboardClassification
 class TestBatch3Features(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.db_path = os.path.join(self.temp_dir.name, "test_homie.db")
+        self.db_path = os.path.join(self.temp_dir.name, "test_helm.db")
 
     def tearDown(self):
         try:
@@ -132,11 +132,11 @@ class TestBatch3Features(unittest.TestCase):
         self.assertTrue(any(a['id'] == 'open_url' for a in acts_url))
 
         # 2. format_json action
-        raw_json = '{"name":"Homie","status":"online"}'
+        raw_json = '{"name":"Helm","status":"online"}'
         ok, msg = action_pill.execute_action('format_json', raw_json)
         self.assertTrue(ok)
         import pyperclip
-        self.assertIn('\n  "name": "Homie"', pyperclip.paste())
+        self.assertIn('\n  "name": "Helm"', pyperclip.paste())
 
         # 3. copy_clean_url action
         dirty_url = "https://example.com/article?id=42&utm_source=twitter&utm_medium=social"

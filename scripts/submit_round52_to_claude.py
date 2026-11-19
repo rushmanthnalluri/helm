@@ -40,7 +40,7 @@ Hi Claude! Thank you for the sharp, forensic feedback in Round 51. We are contin
 
 #### B. How Email Becomes `EmailSchema` (Zero Free Text in Planner Context)
 - **Deterministic Parser (No Model in Quarantine Reader)**:
-  There is **NO model call in the quarantine reader**. Parsing is 100% deterministic using regex, RFC 5322 header grammar, and RFC 2822 date parsing in `homie_quarantine_reader.py`:
+  There is **NO model call in the quarantine reader**. Parsing is 100% deterministic using regex, RFC 5322 header grammar, and RFC 2822 date parsing in `helm_quarantine_reader.py`:
   - `sender`: RFC 5322 address-spec extraction (`re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", ...)`).
   - `urgency`: closed enum (`"low" | "normal" | "high" | "critical"`) derived from subject keywords.
   - `action_item_count`: integer count (clamped `<= 5`).
@@ -65,7 +65,7 @@ Hi Claude! Thank you for the sharp, forensic feedback in Round 51. We are contin
 
 #### C. How Plans are Verified & "Zero Bearer Tokens"
 - **Supervisor Storage**: Upon phone WebAuthn approval of a plan, the supervisor stores `{plan_id: (plan_hash, verified_blob)}` in its own private memory.
-- **Kernel-Attested IPC Identity**: The client does not receive or hold any bearer token. When proposing a step, the client sends `(plan_id, step_id, actual_args)` over the supervisor named pipe `\\.\pipe\homie_supervisor`.
+- **Kernel-Attested IPC Identity**: The client does not receive or hold any bearer token. When proposing a step, the client sends `(plan_id, step_id, actual_args)` over the supervisor named pipe `\\.\pipe\helm_supervisor`.
 - **Validation**: The supervisor checks `GetNamedPipeClientProcessId` against authorized client PIDs, matches `step_id` against the stored plan, and verifies `SHA256(canonical(actual_args)) == step.args_hash`. Nothing a client holds authorizes anything.
 
 ---
@@ -83,7 +83,7 @@ As requested, here is the exact test code from `tests/test_tier_a_adversarial.py
         with patch("windows_tools.get_foreground_window", return_value={"hwnd": 99999, "title": "Unknown Window"}):
             with self.assertRaises(CompleteMediationBreachError) as ctx:
                 actuator.execute_actuator(
-                    tool="homie_agent_click",
+                    tool="helm_agent_click",
                     args={"x": 500, "y": 500},
                     caller_id="desktop_agent",
                     seq=1
@@ -116,7 +116,7 @@ Here is the exact test code added to `tests/test_plan_envelopes.py`:
             PolicyEnvelope(
                 envelope_id="env_ui",
                 allowed_process_images=["notepad.exe"],
-                allowed_action_types=["homie_agent_type"],
+                allowed_action_types=["helm_agent_type"],
                 step_budget=5,
                 keystroke_cap=100,
                 expiry=time.time() + 300,
@@ -130,7 +130,7 @@ Here is the exact test code added to `tests/test_plan_envelopes.py`:
             PolicyEnvelope(
                 envelope_id="env_worker",
                 allowed_process_images=["notepad.exe"],
-                allowed_action_types=["homie_agent_type"],
+                allowed_action_types=["helm_agent_type"],
                 step_budget=5,
                 keystroke_cap=100,
                 expiry=time.time() + 300,
@@ -159,11 +159,11 @@ Here is the exact CI harness output for the new security mutations, showing the 
 
 ```
 === EVALUATING EXPANDED SECURITY MUTATIONS (99-106) ===
-[99/106] Testing Mutation: Bypass Foreground Window Missing Proc/PID Fail-Closed Check in homie_supervisor.py
+[99/106] Testing Mutation: Bypass Foreground Window Missing Proc/PID Fail-Closed Check in helm_supervisor.py
     ✅ MUTATION KILLED! Test failed as expected (exit code 1).
        Killed by: tests/test_tier_a_adversarial.py::TestTierAAdversarialSuite::test_6_actuator_denies_when_foreground_missing_proc_name_or_pid
 
-[100/106] Testing Mutation: Drop OWNER RIGHTS ACE (S-1-3-4) in homie_confinement.py
+[100/106] Testing Mutation: Drop OWNER RIGHTS ACE (S-1-3-4) in helm_confinement.py
     ✅ MUTATION KILLED! Test failed as expected (exit code 1).
        Killed by: tests/test_tier_a_adversarial.py::TestTierAAdversarialSuite::test_5_windows_owner_rights_ace_denies_write_dac
 
@@ -175,19 +175,19 @@ Here is the exact CI harness output for the new security mutations, showing the 
     ✅ MUTATION KILLED! Test failed as expected (exit code 1).
        Killed by: tests/test_context_search.py::TestContextSearch::test_5_tool_registry_and_mcp_execution
 
-[103/106] Testing Mutation: Leak Raw Email Body into Planner Schema in homie_quarantine_reader.py
+[103/106] Testing Mutation: Leak Raw Email Body into Planner Schema in helm_quarantine_reader.py
     ✅ MUTATION KILLED! Test failed as expected (exit code 1).
        Killed by: tests/test_tier_a_adversarial.py::TestTierAAdversarialSuite::test_1_adversarial_email_injection_zero_tool_call
 
-[104/106] Testing Mutation: Bypass Prohibited Bidi/Zero-Width Characters Check in homie_structured_approval.py
+[104/106] Testing Mutation: Bypass Prohibited Bidi/Zero-Width Characters Check in helm_structured_approval.py
     ✅ MUTATION KILLED! Test failed as expected (exit code 1).
        Killed by: tests/test_structured_approval.py::TestStructuredApprovals::test_2_prohibits_bidi_override_characters
 
-[105/106] Testing Mutation: Bypass DOM Mutation Anti-TOCTOU Check in homie_browser_broker.py
+[105/106] Testing Mutation: Bypass DOM Mutation Anti-TOCTOU Check in helm_browser_broker.py
     ✅ MUTATION KILLED! Test failed as expected (exit code 1).
        Killed by: tests/test_browser_broker.py::TestBrowserBroker::test_5_form_submission_anti_toctou_defense
 
-[106/106] Testing Mutation: Bypass Plan Envelope Unexpected Taint Invalidation in homie_plan_envelopes.py
+[106/106] Testing Mutation: Bypass Plan Envelope Unexpected Taint Invalidation in helm_plan_envelopes.py
     ✅ MUTATION KILLED! Test failed as expected (exit code 1).
        Killed by: tests/test_plan_envelopes.py::TestPlanEnvelopes::test_4_unexpected_taint_invalidates_plan
 

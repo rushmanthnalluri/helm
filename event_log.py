@@ -1,4 +1,4 @@
-"""Shared Event Log for Homie.
+"""Shared Event Log for Helm.
 Stores system events, notifications, vitals alerts, reminders, and user presence
 in a lightweight SQLite database for presence catch-ups and remote briefs.
 """

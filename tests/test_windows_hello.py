@@ -16,14 +16,14 @@ def test_windows_hello_availability_detection():
 
 
 def test_windows_hello_mock_verification_success(monkeypatch):
-    monkeypatch.setenv("HOMIE_MOCK_WINDOWS_HELLO", "1")
+    monkeypatch.setenv("HELM_MOCK_WINDOWS_HELLO", "1")
     res = windows_hello.prompt_windows_hello("Test Prompt")
     assert res["verified"] is True
     assert res["status"] == "verified"
 
 
 def test_windows_hello_mock_verification_rejection(monkeypatch):
-    monkeypatch.setenv("HOMIE_MOCK_WINDOWS_HELLO", "0")
+    monkeypatch.setenv("HELM_MOCK_WINDOWS_HELLO", "0")
     res = windows_hello.prompt_windows_hello("Test Prompt")
     assert res["verified"] is False
     assert res["status"] == "canceled"
@@ -56,11 +56,11 @@ def test_rails_confirmation_windows_hello_tier2_success(monkeypatch):
     import rails_confirmation
     monkeypatch.setattr(rails_confirmation, "PROGRESSIVE_TRUST_ENABLED", True)
     gate = rails_confirmation.ConfirmationGate()
-    # homie_send_email is Tier 2 in trust_tiers
-    req = gate.create_request("homie_send_email", {"to": "alice@example.com", "subject": "Test"})
+    # helm_send_email is Tier 2 in trust_tiers
+    req = gate.create_request("helm_send_email", {"to": "alice@example.com", "subject": "Test"})
     assert req.status == "PENDING"
 
-    monkeypatch.setenv("HOMIE_MOCK_WINDOWS_HELLO", "1")
+    monkeypatch.setenv("HELM_MOCK_WINDOWS_HELLO", "1")
     ok, msg, token = gate.confirm(req.request_id, use_windows_hello=True)
     assert ok is True
     assert token is not None
@@ -73,10 +73,10 @@ def test_rails_confirmation_windows_hello_tier2_rejection(monkeypatch):
     import rails_confirmation
     monkeypatch.setattr(rails_confirmation, "PROGRESSIVE_TRUST_ENABLED", True)
     gate = rails_confirmation.ConfirmationGate()
-    req = gate.create_request("homie_send_email", {"to": "bob@example.com", "subject": "Test"})
+    req = gate.create_request("helm_send_email", {"to": "bob@example.com", "subject": "Test"})
     assert req.status == "PENDING"
 
-    monkeypatch.setenv("HOMIE_MOCK_WINDOWS_HELLO", "0")
+    monkeypatch.setenv("HELM_MOCK_WINDOWS_HELLO", "0")
     ok, msg, token = gate.confirm(req.request_id, use_windows_hello=True)
     assert ok is False
     assert token is None
@@ -89,28 +89,28 @@ def test_rails_confirmation_windows_hello_tier2_rejection(monkeypatch):
 # ==============================================================================
 
 def test_windows_hello_class_is_available(monkeypatch):
-    monkeypatch.setenv("HOMIE_MOCK_WINDOWS_HELLO_AVAILABLE", "1")
+    monkeypatch.setenv("HELM_MOCK_WINDOWS_HELLO_AVAILABLE", "1")
     assert windows_hello.WindowsHello.is_available() is True
-    monkeypatch.setenv("HOMIE_MOCK_WINDOWS_HELLO_AVAILABLE", "0")
+    monkeypatch.setenv("HELM_MOCK_WINDOWS_HELLO_AVAILABLE", "0")
     assert windows_hello.WindowsHello.is_available() is False
 
 
 def test_windows_hello_class_verify_sync_success(monkeypatch):
-    monkeypatch.setenv("HOMIE_MOCK_WINDOWS_HELLO", "1")
+    monkeypatch.setenv("HELM_MOCK_WINDOWS_HELLO", "1")
     assert windows_hello.WindowsHello.verify_sync("Test approval") is True
 
 
 def test_windows_hello_class_verify_sync_failure(monkeypatch):
-    monkeypatch.setenv("HOMIE_MOCK_WINDOWS_HELLO", "0")
+    monkeypatch.setenv("HELM_MOCK_WINDOWS_HELLO", "0")
     assert windows_hello.WindowsHello.verify_sync("Test approval") is False
 
 
 @pytest.mark.asyncio
 async def test_windows_hello_class_verify_async(monkeypatch):
-    monkeypatch.setenv("HOMIE_MOCK_WINDOWS_HELLO", "1")
+    monkeypatch.setenv("HELM_MOCK_WINDOWS_HELLO", "1")
     res = await windows_hello.WindowsHello.verify("Async approval")
     assert res is True
-    monkeypatch.setenv("HOMIE_MOCK_WINDOWS_HELLO", "0")
+    monkeypatch.setenv("HELM_MOCK_WINDOWS_HELLO", "0")
     res = await windows_hello.WindowsHello.verify("Async approval")
     assert res is False
 
@@ -123,7 +123,7 @@ def test_windows_hello_gate_uses_biometrics_when_available(monkeypatch):
     fallback_mock = Mock()
 
     gate = step_up_gate.WindowsHelloGate(fallback_gate=fallback_mock)
-    ok, msg = gate.verify(reason="Approve file modification", tool_name="homie_modify_file")
+    ok, msg = gate.verify(reason="Approve file modification", tool_name="helm_modify_file")
     assert ok is True
     assert "Windows Hello" in msg
     fallback_mock.verify.assert_not_called()
@@ -137,7 +137,7 @@ def test_windows_hello_gate_fallback_to_phone_when_unavailable(monkeypatch):
     fallback_mock.verify.return_value = (True, "Simulated phone WebAuthn push")
 
     gate = step_up_gate.WindowsHelloGate(fallback_gate=fallback_mock)
-    ok, msg = gate.verify(reason="Approve file modification", tool_name="homie_modify_file")
+    ok, msg = gate.verify(reason="Approve file modification", tool_name="helm_modify_file")
     assert ok is True
     assert "Simulated phone WebAuthn push" in msg
     fallback_mock.verify.assert_called_once()
@@ -147,7 +147,7 @@ def test_action_broker_gate_selection_medium_risk_uses_windows_hello(monkeypatch
     import step_up_gate
     import action_broker
     monkeypatch.setattr(windows_hello.WindowsHello, "is_available", classmethod(lambda cls: True))
-    gate = action_broker.select_gate("homie_modify_file")
+    gate = action_broker.select_gate("helm_modify_file")
     assert isinstance(gate, step_up_gate.WindowsHelloGate)
 
 
@@ -155,7 +155,7 @@ def test_action_broker_gate_selection_medium_risk_falls_back_when_unavailable(mo
     import step_up_gate
     import action_broker
     monkeypatch.setattr(windows_hello.WindowsHello, "is_available", classmethod(lambda cls: False))
-    gate = action_broker.select_gate("homie_modify_file")
+    gate = action_broker.select_gate("helm_modify_file")
     assert isinstance(gate, step_up_gate.PhoneWebAuthnGate)
 
 
@@ -164,18 +164,18 @@ def test_action_broker_gate_selection_high_risk_always_phone(monkeypatch):
     import action_broker
     monkeypatch.setattr(windows_hello.WindowsHello, "is_available", classmethod(lambda cls: True))
     # High-risk actions must strictly use PhoneWebAuthnGate even if Windows Hello is available
-    gate_shell = action_broker.select_gate("homie_run_shell")
+    gate_shell = action_broker.select_gate("helm_run_shell")
     assert isinstance(gate_shell, step_up_gate.PhoneWebAuthnGate)
-    gate_kill = action_broker.select_gate("homie_kill_process")
+    gate_kill = action_broker.select_gate("helm_kill_process")
     assert isinstance(gate_kill, step_up_gate.PhoneWebAuthnGate)
-    gate_del = action_broker.select_gate("homie_delete_file")
+    gate_del = action_broker.select_gate("helm_delete_file")
     assert isinstance(gate_del, step_up_gate.PhoneWebAuthnGate)
 
 
 def test_action_broker_gate_selection_low_risk_none():
     import action_broker
-    gate_read = action_broker.select_gate("homie_read_screen")
+    gate_read = action_broker.select_gate("helm_read_screen")
     assert gate_read is None
-    gate_vitals = action_broker.select_gate("homie_get_vitals")
+    gate_vitals = action_broker.select_gate("helm_get_vitals")
     assert gate_vitals is None
 

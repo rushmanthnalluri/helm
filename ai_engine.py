@@ -1,4 +1,4 @@
-"""Universal AI Engine for Homie.
+"""Universal AI Engine for Helm.
 Supports Google AI Studio (Gemini), NVIDIA NIM, Groq, Ollama, and OpenAI-compatible APIs.
 Provides direct multimodal vision and real Windows desktop automation with tool calling.
 """
@@ -303,7 +303,7 @@ def run_gemini(prompt_text, api_key, model='gemini-flash-lite-latest', step_call
     mon_desc = "; ".join(f"{m['name']}: {m['width']}x{m['height']}" for m in monitors)
 
     system_instruction = (
-        "You are Homie, a fast, proactive Windows desktop AI assistant. "
+        "You are Helm, a fast, proactive Windows desktop AI assistant. "
         "The user interacts with you via voice and Telegram from their phone. "
         "CRITICAL INSTRUCTION: You have real tools to perform actions on Windows. "
         "When the user asks you to send a message on WhatsApp or Telegram, open YouTube, play music, open apps, move windows, lock PC, or search, "
@@ -533,7 +533,7 @@ def run_openai_compat(prompt_text, prov, step_callback=None):
     messages = [
         {
             "role": "system",
-            "content": f"You are Homie, a fast Windows desktop AI assistant. Foreground: '{fg_title}'. Keep answers concise."
+            "content": f"You are Helm, a fast Windows desktop AI assistant. Foreground: '{fg_title}'. Keep answers concise."
         },
         {"role": "user", "content": prompt_text}
     ]
@@ -601,8 +601,8 @@ def run_openai_compat(prompt_text, prov, step_callback=None):
 def run_gemini_vision(prompt_text, image_source, api_key=None, step_callback=None):
     """Multimodal Vision inference using Google Gemini 2.5/Flash-Lite models."""
     if not api_key:
-        import homie
-        prefs = homie.get_prefs()
+        import helm
+        prefs = helm.get_prefs()
         api_key = prefs.get('geminiKey') or os.environ.get('GEMINI_API_KEY')
 
     if not api_key:
@@ -640,7 +640,7 @@ def run_gemini_vision(prompt_text, image_source, api_key=None, step_callback=Non
         "systemInstruction": {
             "parts": [{
                 "text": (
-                    "You are Homie Vision, inspecting a screen capture or photo sent by the user from their phone or PC. "
+                    "You are Helm Vision, inspecting a screen capture or photo sent by the user from their phone or PC. "
                     "Be direct, accurate, and concise. Point out key details, errors, or elements clearly."
                 )
             }]
@@ -677,7 +677,7 @@ def run_query(prompt_text, prefs, step_callback=None):
         return (
             f"No API key found for {prov['name']}.\n"
             f"Set it via `setx {PROVIDER_CONFIGS[prov['provider']]['env_key']} your_key` "
-            f"or in ~/.config/homie/settings.json"
+            f"or in ~/.config/helm/settings.json"
         )
 
     if step_callback:

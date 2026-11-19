@@ -7,7 +7,7 @@ Tests verifying Batch 36 architectural hardening directives:
      and reserved_steps is cleanly released to 0.
    - Verifies: Actuator crash consumes step budget (actuator_invoked=True, reserved_steps=0, steps_consumed=1).
 2. Directive 2: Phone Approval Relay to Supervisor Cache & SQLite from verify_device_approval
-   - Verifies: verify_device_approval relays to homie_supervisor.record_approved_action.
+   - Verifies: verify_device_approval relays to helm_supervisor.record_approved_action.
    - Verifies: Cross-process SQLite approved_actions table and in-memory cache populated.
    - Verifies: Supervisor proposal consumes the approval and authorizes action without worker bearer token.
 3. Directive 3: Recovery CLI Hardening & Cross-Process SQLite Persistence
@@ -39,7 +39,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-import homie_supervisor
+import helm_supervisor
 import policy_envelope
 import phone_approval_portal
 import windows_tools
@@ -53,8 +53,8 @@ from tests.phone_testing_keys import generate_test_phone_keypair, sign_enrollmen
 class TestBatch36SecurityHardening(unittest.TestCase):
 
     def setUp(self):
-        os.environ["HOMIE_TEST_ENV"] = "1"
-        os.environ["HOMIE_COMPLETE_MEDIATION"] = "1"
+        os.environ["HELM_TEST_ENV"] = "1"
+        os.environ["HELM_COMPLETE_MEDIATION"] = "1"
         import kill_switch
         kill_switch.disengage_kill_switch("EXPLICIT_HUMAN_CONFIRMATION")
         try:
@@ -67,9 +67,9 @@ class TestBatch36SecurityHardening(unittest.TestCase):
 
     def test_1_envelope_early_exit_paths_guarantee_zero_reserved_steps_and_no_unbound_local(self):
         """Directive 1: Every early return in _handle_propose under active envelope releases reservation without UnboundLocalError."""
-        sup = homie_supervisor.PolicySupervisor()
-        sup.state = homie_supervisor.STATE_ARMED
-        client = homie_supervisor.SupervisorClient(sup)
+        sup = helm_supervisor.PolicySupervisor()
+        sup.state = helm_supervisor.STATE_ARMED
+        client = helm_supervisor.SupervisorClient(sup)
         client.connect()
         client.hello()
 
@@ -77,8 +77,8 @@ class TestBatch36SecurityHardening(unittest.TestCase):
             envelope_id="test_env_early_exits",
             allowed_process_images=["notepad.exe"],
             allowed_action_types=[
-                "homie_agent_type", "homie_send_hotkey", "homie_write_file",
-                "homie_create_file", "homie_agent_click", "homie_set_clipboard"
+                "helm_agent_type", "helm_send_hotkey", "helm_write_file",
+                "helm_create_file", "helm_agent_click", "helm_set_clipboard"
             ],
             step_budget=10,
             keystroke_cap=500,
@@ -93,19 +93,19 @@ class TestBatch36SecurityHardening(unittest.TestCase):
         with patch.object(windows_tools, "get_foreground_window", return_value={"proc_name": "notepad.exe", "hwnd": 1234}):
             # Path A: Taint Denial / NEEDS_HUMAN (Unapproved WRITE_EXEC action when tainted)
             taint_tracker.set_workstation_tainted(True)
-            res_a = client.propose("homie_set_clipboard", {"text": "data"}, caller_id="worker_b36_a")
+            res_a = client.propose("helm_set_clipboard", {"text": "data"}, caller_id="worker_b36_a")
             self.assertIn(res_a.get("status"), ("NEEDS_HUMAN", "DENY"))
             self.assertEqual(env.reserved_steps, 0)
             self.assertEqual(env.steps_consumed, 0)
 
             # Path B: NEEDS_HUMAN (Tainted action requiring step-up, but no token provided)
-            res_b = client.propose("homie_agent_type", {"text": "test"}, caller_id="worker_b36_b")
+            res_b = client.propose("helm_agent_type", {"text": "test"}, caller_id="worker_b36_b")
             self.assertIn(res_b.get("status"), ("NEEDS_HUMAN", "DENY"))
             self.assertEqual(env.reserved_steps, 0)
             self.assertEqual(env.steps_consumed, 0)
 
             # Path C: Invalid Step-Up Token
-            res_c = client.propose("homie_agent_type", {"text": "test"}, caller_id="worker_b36_c", step_up_token="invalid_token_123")
+            res_c = client.propose("helm_agent_type", {"text": "test"}, caller_id="worker_b36_c", step_up_token="invalid_token_123")
             self.assertEqual(res_c.get("status"), "DENY")
             self.assertEqual(env.reserved_steps, 0)
             self.assertEqual(env.steps_consumed, 0)
@@ -116,7 +116,7 @@ class TestBatch36SecurityHardening(unittest.TestCase):
             # Path D: Shadow Mode Active
             shadow_mode.set_shadow_mode(True)
             try:
-                res_d = client.propose("homie_set_clipboard", {"text": "abc"}, caller_id="worker_b36_d")
+                res_d = client.propose("helm_set_clipboard", {"text": "abc"}, caller_id="worker_b36_d")
                 self.assertEqual(res_d.get("status"), "SHADOW")
                 self.assertEqual(env.reserved_steps, 0)
                 self.assertEqual(env.steps_consumed, 0)
@@ -125,23 +125,23 @@ class TestBatch36SecurityHardening(unittest.TestCase):
 
             # Path E: Intent Ledger Failure (Simulate disk/DB failure during INTENT recording)
             with patch.object(agent_audit_ledger, "record_agent_action", side_effect=IOError("Simulated disk error")):
-                res_e = client.propose("homie_set_clipboard", {"text": "abc"}, caller_id="worker_b36_e")
+                res_e = client.propose("helm_set_clipboard", {"text": "abc"}, caller_id="worker_b36_e")
                 self.assertIn(res_e.get("error", "") or res_e.get("status", ""), ("Audit ledger failure: Simulated disk error", "ERROR", "DENY"))
                 self.assertEqual(env.reserved_steps, 0)
                 self.assertEqual(env.steps_consumed, 0)
 
             # Path F: Actuator Crash (Actuator throws exception -> consumes step budget!)
-            sup.state = homie_supervisor.STATE_ARMED
+            sup.state = helm_supervisor.STATE_ARMED
             import kill_switch
             kill_switch.disengage_kill_switch("EXPLICIT_HUMAN_CONFIRMATION")
             with patch.object(sup.actuator, "execute_actuator", side_effect=RuntimeError("Actuator crashed")):
-                res_f = client.propose("homie_set_clipboard", {"text": "abc"}, caller_id="worker_b36_f")
+                res_f = client.propose("helm_set_clipboard", {"text": "abc"}, caller_id="worker_b36_f")
                 self.assertIn("Actuator crashed", res_f.get("result", "") + res_f.get("error", ""))
                 self.assertEqual(env.reserved_steps, 0)
                 self.assertEqual(env.steps_consumed, 1, "Actuator crash must consume envelope step budget")
 
     def test_2_verify_device_approval_relays_to_supervisor_cache_and_db(self):
-        """Directive 2: verify_device_approval relays verified device approvals to homie_supervisor."""
+        """Directive 2: verify_device_approval relays verified device approvals to helm_supervisor."""
         from tests.phone_testing_keys import enroll_test_device, sign_test_challenge
         priv_pem, pub_pem = enroll_test_device("primary_phone")
         phone_approval_portal.clear_active_challenges()
@@ -149,7 +149,7 @@ class TestBatch36SecurityHardening(unittest.TestCase):
         # Create challenge for a tainted tool
         ch = phone_approval_portal.generate_approval_challenge(
             step_up_id="ch_b36_relay",
-            tool_name="homie_set_clipboard",
+            tool_name="helm_set_clipboard",
             arguments={"text": "sensitive_data"},
             session_id="sess_b36",
             taint_epoch=1,
@@ -170,35 +170,35 @@ class TestBatch36SecurityHardening(unittest.TestCase):
         self.assertTrue(app_ok, f"verify_device_approval failed: {app_msg}")
 
         # Assert relay to supervisor approval cache and SQLite
-        sup = homie_supervisor.PolicySupervisor()
+        sup = helm_supervisor.PolicySupervisor()
         args_hash = ch["args_hash"].lower()
         epoch = ch.get("taint_epoch", 0)
 
-        consumed = sup.consume_approved_action("worker_b36_relay", "homie_set_clipboard", args_hash, epoch)
+        consumed = sup.consume_approved_action("worker_b36_relay", "helm_set_clipboard", args_hash, epoch)
         self.assertTrue(consumed, "Supervisor failed to consume approval relayed by verify_device_approval")
 
         # Anti-replay: second consumption must fail
-        consumed_replay = sup.consume_approved_action("worker_b36_relay", "homie_set_clipboard", args_hash, epoch)
+        consumed_replay = sup.consume_approved_action("worker_b36_relay", "helm_set_clipboard", args_hash, epoch)
         self.assertFalse(consumed_replay, "Replay attack succeeded on consumed approval")
 
     def test_3_recovery_cli_non_interactive_fails_closed_and_sqlite_cross_process(self):
         """Directive 3: Recovery CLI fails closed on non-interactive stdin; tokens persist across processes via SQLite."""
-        import homie
+        import helm
 
         # Non-interactive stdin must fail closed
-        with patch.object(sys, "argv", ["homie.py", "--pairing-unlock"]):
+        with patch.object(sys, "argv", ["helm.py", "--pairing-unlock"]):
             with patch.object(sys.stdin, "isatty", return_value=False):
                 with patch("builtins.print") as mock_print:
-                    homie.main()
+                    helm.main()
                     output = " ".join(str(call[0][0]) for call in mock_print.call_args_list if call[0])
                     self.assertIn("Interactive console presence required", output)
 
         # Confirmation mismatch must fail closed
-        with patch.object(sys, "argv", ["homie.py", "--pairing-unlock"]):
+        with patch.object(sys, "argv", ["helm.py", "--pairing-unlock"]):
             with patch.object(sys.stdin, "isatty", return_value=True), patch("ctypes.windll.shell32.IsUserAnAdmin", return_value=1):
                 with patch("builtins.input", return_value="WRONG-CODE"):
                     with patch("builtins.print") as mock_print:
-                        homie.main()
+                        helm.main()
                         output = " ".join(str(call[0][0]) for call in mock_print.call_args_list if call[0])
                         self.assertIn("Operation cancelled", output)
 
@@ -252,30 +252,30 @@ class TestBatch36SecurityHardening(unittest.TestCase):
         self.assertTrue(e_a3, "Literal key='\\n' was not caught as Enter")
 
         # 4. SupervisorActuator directly enforces Ctrl+Alt+P block with NO envelope active
-        sup = homie_supervisor.PolicySupervisor()
-        sup.state = homie_supervisor.STATE_ARMED
+        sup = helm_supervisor.PolicySupervisor()
+        sup.state = helm_supervisor.STATE_ARMED
         actuator = sup.actuator
         sup.envelope = None  # NO envelope active
 
-        intent_token = sup.mint_intent_token("homie_agent_type", {"hotkey": "ctrl+alt+p"}, "worker", 1)
-        with self.assertRaises(homie_supervisor.CompleteMediationBreachError) as ctx:
+        intent_token = sup.mint_intent_token("helm_agent_type", {"hotkey": "ctrl+alt+p"}, "worker", 1)
+        with self.assertRaises(helm_supervisor.CompleteMediationBreachError) as ctx:
             actuator.execute_actuator(
-                "homie_agent_type", {"hotkey": "ctrl+alt+p"}, caller_id="worker", intent_token=intent_token, seq=1
+                "helm_agent_type", {"hotkey": "ctrl+alt+p"}, caller_id="worker", intent_token=intent_token, seq=1
             )
         self.assertIn("Synthetic simulation of physical console pairing hotkey (Ctrl+Alt+P) is strictly prohibited", str(ctx.exception))
 
     def test_5_supervisor_first_foreground_and_uia_domain_scoping(self):
         """Directive 5: Supervisor resolves OS foreground process; never falls back to worker self-attested proc or domain."""
-        sup = homie_supervisor.PolicySupervisor()
-        sup.state = homie_supervisor.STATE_ARMED
-        client = homie_supervisor.SupervisorClient(sup)
+        sup = helm_supervisor.PolicySupervisor()
+        sup.state = helm_supervisor.STATE_ARMED
+        client = helm_supervisor.SupervisorClient(sup)
         client.connect()
         client.hello()
 
         env = policy_envelope.PolicyEnvelope(
             envelope_id="test_env_uia",
             allowed_process_images=["chrome.exe"],
-            allowed_action_types=["homie_agent_click", "homie_agent_type"],
+            allowed_action_types=["helm_agent_click", "helm_agent_type"],
             step_budget=10,
             keystroke_cap=500,
             expiry=time.time() + 300,
@@ -287,7 +287,7 @@ class TestBatch36SecurityHardening(unittest.TestCase):
 
         # 1. When OS foreground is NOT chrome.exe, worker claiming target_process='chrome.exe' is REJECTED
         with patch.object(windows_tools, "get_foreground_window", return_value={"proc_name": "cmd.exe", "hwnd": 1234}):
-            res = client.propose("homie_agent_click", {"target_process": "chrome.exe", "x": 100, "y": 100}, caller_id="worker")
+            res = client.propose("helm_agent_click", {"target_process": "chrome.exe", "x": 100, "y": 100}, caller_id="worker")
             self.assertEqual(res.get("status"), "DENY")
             self.assertIn("not in envelope allowed list", res.get("reason", ""))
 
@@ -295,7 +295,7 @@ class TestBatch36SecurityHardening(unittest.TestCase):
         with patch.object(windows_tools, "get_foreground_window", return_value={"proc_name": "chrome.exe", "hwnd": 1234}):
             with patch.object(windows_tools, "get_browser_active_domain", return_value="attacker.com"):
                 res_spoof = client.propose(
-                    "homie_agent_click",
+                    "helm_agent_click",
                     {"target_process": "chrome.exe", "domain": "internal-bank.local", "x": 100, "y": 100},
                     caller_id="worker"
                 )
@@ -305,16 +305,16 @@ class TestBatch36SecurityHardening(unittest.TestCase):
     def test_6_physical_low_level_keyboard_hook_dispatches_asynchronously(self):
         """Directive 6: WH_KEYBOARD_LL hook tracks physical keys and dispatches pairing asynchronously."""
         import app
-        homie_app = app.HomieApp.__new__(app.HomieApp)
-        homie_app._physical_ctrl_down = False
-        homie_app._physical_alt_down = False
-        homie_app._ll_hook = None
+        helm_app = app.HelmApp.__new__(app.HelmApp)
+        helm_app._physical_ctrl_down = False
+        helm_app._physical_alt_down = False
+        helm_app._ll_hook = None
 
         dispatched = []
         def mock_trigger():
             dispatched.append(time.time())
 
-        homie_app._trigger_pairing_async = mock_trigger
+        helm_app._trigger_pairing_async = mock_trigger
 
         # Mock KBDLLHOOKSTRUCT struct buffer: vkCode=0x11 (Ctrl), scanCode=0, flags=0 (Physical, not injected)
         import ctypes
@@ -330,24 +330,24 @@ class TestBatch36SecurityHardening(unittest.TestCase):
 
         # 1. Physical Ctrl down (WM_KEYDOWN = 0x0100, vkCode = 0x11, flags = 0)
         s_ctrl = MockKBDLLHOOKSTRUCT(0x11, 0, 0, 0, 0)
-        homie_app.handle_keyboard_event(0, 0x0100, ctypes.addressof(s_ctrl))
-        self.assertTrue(homie_app._physical_ctrl_down)
+        helm_app.handle_keyboard_event(0, 0x0100, ctypes.addressof(s_ctrl))
+        self.assertTrue(helm_app._physical_ctrl_down)
 
         # 2. Physical Alt down (WM_SYSKEYDOWN = 0x0104, vkCode = 0x12, flags = 0)
         s_alt = MockKBDLLHOOKSTRUCT(0x12, 0, 0, 0, 0)
-        homie_app.handle_keyboard_event(0, 0x0104, ctypes.addressof(s_alt))
-        self.assertTrue(homie_app._physical_alt_down)
+        helm_app.handle_keyboard_event(0, 0x0104, ctypes.addressof(s_alt))
+        self.assertTrue(helm_app._physical_alt_down)
 
         # 3. Physical P down (WM_KEYDOWN = 0x0100, vkCode = 0x50, flags = 0) -> Triggers pairing dispatch!
         s_p = MockKBDLLHOOKSTRUCT(0x50, 0, 0, 0, 0)
-        homie_app.handle_keyboard_event(0, 0x0100, ctypes.addressof(s_p))
+        helm_app.handle_keyboard_event(0, 0x0100, ctypes.addressof(s_p))
         time.sleep(0.05)  # Allow background thread to execute
         self.assertGreaterEqual(len(dispatched), 1, "Physical Ctrl+Alt+P failed to asynchronously trigger pairing")
 
         # 4. Injected P down (flags = LLKHF_INJECTED = 1) -> Must NOT trigger
         dispatched.clear()
         s_injected = MockKBDLLHOOKSTRUCT(0x50, 0, 1, 0, 0)
-        homie_app.handle_keyboard_event(0, 0x0100, ctypes.addressof(s_injected))
+        helm_app.handle_keyboard_event(0, 0x0100, ctypes.addressof(s_injected))
         time.sleep(0.05)
         self.assertEqual(len(dispatched), 0, "Injected synthetic keystroke triggered pairing dispatch!")
 

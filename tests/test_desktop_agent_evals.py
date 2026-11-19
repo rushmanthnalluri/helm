@@ -59,7 +59,7 @@ class TestDesktopAgentEvals(unittest.TestCase):
         """Evaluates step-up gate notification formatting and resolution."""
         # Test simulated step up callback approval
         taint_tracker.mark_session_tainted("eval_session")
-        allowed, step_up, reason = taint_tracker.check_action_privilege("eval_session", "WRITE_EXEC", "homie_snap_window", {"app_name": "chrome", "position": "left"})
+        allowed, step_up, reason = taint_tracker.check_action_privilege("eval_session", "WRITE_EXEC", "helm_snap_window", {"app_name": "chrome", "position": "left"})
         self.assertFalse(allowed)
         self.assertTrue(step_up)
 

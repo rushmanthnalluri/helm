@@ -1,11 +1,11 @@
-"""assistant_timeline.py - Unified Opt-In Assistant Timeline for Homie.
+"""assistant_timeline.py - Unified Opt-In Assistant Timeline for Helm.
 
 Unifies disparate productivity & recall sources into a single coherent timeline:
 1. Semantic Screen Memory (window focus, OCR timeline)
 2. Focus Tracking (app dwell time & productivity metrics)
 3. Meeting Notes (WASAPI loopback audio transcripts)
 4. Quick Notes (user-recorded reminders & snippets)
-5. Agent Audit Ledger (mediated actions taken by Homie or user)
+5. Agent Audit Ledger (mediated actions taken by Helm or user)
 
 Features:
 - Configurable retention policies (default: 24h) with automated periodic pruning
@@ -34,7 +34,7 @@ import quick_notes
 import semantic_screen_memory
 import agent_audit_ledger
 
-logger = logging.getLogger("homie.timeline")
+logger = logging.getLogger("helm.timeline")
 
 DEFAULT_TIMELINE_CONFIG = {
     "enabled": True,
@@ -51,7 +51,7 @@ _TIMELINE_PRUNER_THREAD = None
 
 
 def get_timeline_config_path() -> Path:
-    cfg_dir = Path.home() / ".config" / "homie"
+    cfg_dir = Path.home() / ".config" / "helm"
     cfg_dir.mkdir(parents=True, exist_ok=True)
     return cfg_dir / "timeline_config.json"
 
@@ -180,7 +180,7 @@ def get_what_did_i_miss_summary(lookback_hours: int = 4) -> str:
     except Exception as e:
         logger.debug("Notes summary error: %s", e)
 
-    # 4. Mediated Actions Executed by Homie
+    # 4. Mediated Actions Executed by Helm
     try:
         entries = agent_audit_ledger.query_audit_entries(limit=10)
         recent_actions = [a for a in entries if a.get("timestamp", 0) >= cutoff and a.get("decision") != "DENY"]

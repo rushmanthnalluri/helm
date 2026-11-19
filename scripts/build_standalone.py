@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""scripts/build_standalone.py - Standalone Distribution Builder for Homie.
+"""scripts/build_standalone.py - Standalone Distribution Builder for Helm.
 
-Compiles Homie into a production-grade standalone Windows binary using PyInstaller:
+Compiles Helm into a production-grade standalone Windows binary using PyInstaller:
 1. Validates presence of core entry points, UI templates, icons, and runtime dependencies.
 2. Checks PyInstaller installation; provides auto-install or clear remediation guidance.
-3. Builds the standalone distribution (onedir or onefile) using homie.spec.
+3. Builds the standalone distribution (onedir or onefile) using helm.spec.
 4. Verifies output binary integrity, assets, and permissions.
 5. Prepares output folder for Inno Setup installer compilation.
 """
@@ -23,11 +23,11 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = BASE_DIR / "scripts"
 DIST_DIR = BASE_DIR / "dist"
 BUILD_DIR = BASE_DIR / "build"
-DEFAULT_SPEC = BASE_DIR / "homie.spec"
+DEFAULT_SPEC = BASE_DIR / "helm.spec"
 
 CRITICAL_ASSETS = [
     BASE_DIR / "app.py",
-    BASE_DIR / "homie.py",
+    BASE_DIR / "helm.py",
     BASE_DIR / "ui" / "chat.html",
     BASE_DIR / "ui" / "omnibar.html",
     BASE_DIR / "ui" / "canvas.html",
@@ -130,7 +130,7 @@ def install_pyinstaller() -> bool:
 def clean_build_artifacts() -> None:
     """Cleans previous build directories."""
     log_info("Cleaning temporary build artifacts...")
-    for target in [BUILD_DIR, DIST_DIR / "Homie"]:
+    for target in [BUILD_DIR, DIST_DIR / "Helm"]:
         if target.exists():
             try:
                 shutil.rmtree(target)
@@ -171,20 +171,20 @@ def execute_pyinstaller_build(spec_path: Path, clean: bool = False) -> bool:
 
 def verify_and_postprocess_distribution() -> bool:
     """Validates the compiled standalone output and copies auxiliary files."""
-    homie_exe = DIST_DIR / "Homie" / "Homie.exe"
-    if not homie_exe.exists():
+    helm_exe = DIST_DIR / "Helm" / "Helm.exe"
+    if not helm_exe.exists():
         # Check single-file output
-        homie_exe = DIST_DIR / "Homie.exe"
+        helm_exe = DIST_DIR / "Helm.exe"
 
-    if not homie_exe.exists():
-        log_error(f"Expected compiled binary not found at: {DIST_DIR / 'Homie' / 'Homie.exe'}")
+    if not helm_exe.exists():
+        log_error(f"Expected compiled binary not found at: {DIST_DIR / 'Helm' / 'Helm.exe'}")
         return False
 
-    size_mb = homie_exe.stat().st_size / (1024 * 1024)
-    log_success(f"Verified standalone binary: {homie_exe} ({size_mb:.2f} MB)")
+    size_mb = helm_exe.stat().st_size / (1024 * 1024)
+    log_success(f"Verified standalone binary: {helm_exe} ({size_mb:.2f} MB)")
 
     # Ensure UI and config exist alongside binary if onedir
-    app_dir = homie_exe.parent
+    app_dir = helm_exe.parent
     if (app_dir / "ui").exists():
         log_success(f"Verified bundled UI directory in: {app_dir / 'ui'}")
     else:
@@ -196,23 +196,23 @@ def verify_and_postprocess_distribution() -> bool:
         log_info("Syncing config directory into distribution folder...")
         shutil.copytree(BASE_DIR / "config", app_dir / "config", dirs_exist_ok=True)
 
-    # Place a README / version marker in dist/Homie
+    # Place a README / version marker in dist/Helm
     version_marker = app_dir / "VERSION"
-    version_marker.write_text("Homie Desktop AI 1.0.0 (Standalone x64)\n", encoding="utf-8")
+    version_marker.write_text("Helm Desktop AI 1.0.0 (Standalone x64)\n", encoding="utf-8")
 
     return True
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Homie Standalone Distribution Packaging Tool",
+        description="Helm Standalone Distribution Packaging Tool",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "--spec",
         type=Path,
         default=DEFAULT_SPEC,
-        help="Path to PyInstaller .spec file (default: homie.spec)",
+        help="Path to PyInstaller .spec file (default: helm.spec)",
     )
     parser.add_argument(
         "--clean",
@@ -238,7 +238,7 @@ def main() -> int:
     args = parser.parse_args()
 
     print("=" * 60)
-    print(f" Homie Standalone Distribution Builder v{args.version}")
+    print(f" Helm Standalone Distribution Builder v{args.version}")
     print("=" * 60)
 
     # 1. Verify Assets
@@ -287,7 +287,7 @@ def main() -> int:
         return 1
 
     log_success("Standalone distribution build completed successfully!")
-    log_info(f"Target location: {DIST_DIR / 'Homie'}")
+    log_info(f"Target location: {DIST_DIR / 'Helm'}")
     return 0
 
 

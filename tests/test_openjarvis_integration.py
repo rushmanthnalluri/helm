@@ -1,4 +1,4 @@
-"""tests/test_openjarvis_integration.py - Acceptance Tests for OpenJarvis Integrations into Homie.
+"""tests/test_openjarvis_integration.py - Acceptance Tests for OpenJarvis Integrations into Helm.
 
 Verifies:
 1. SSRF Protection: blocks cloud metadata endpoints (169.254.169.254, metadata.google.internal).
@@ -26,10 +26,10 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-import homie_ssrf
-import homie_credential_stripper
-import homie_session_compression
-import homie_memory_extractor
+import helm_ssrf
+import helm_credential_stripper
+import helm_session_compression
+import helm_memory_extractor
 import action_broker
 import agent_tools
 import chat_core
@@ -57,42 +57,42 @@ class TestOpenJarvisIntegration(unittest.TestCase):
 
     def test_1_ssrf_blocks_cloud_metadata_endpoints(self):
         """Directive: Cloud metadata services must be unconditionally blocked."""
-        res1 = homie_ssrf.check_ssrf("http://169.254.169.254/latest/meta-data/")
+        res1 = helm_ssrf.check_ssrf("http://169.254.169.254/latest/meta-data/")
         self.assertIsNotNone(res1)
         self.assertIn("Blocked host", res1)
 
-        res2 = homie_ssrf.check_ssrf("http://metadata.google.internal/computeMetadata/v1/")
+        res2 = helm_ssrf.check_ssrf("http://metadata.google.internal/computeMetadata/v1/")
         self.assertIsNotNone(res2)
         self.assertIn("Blocked host", res2)
 
     def test_2_ssrf_blocks_private_and_loopback_cidrs(self):
         """Directive: Private RFC1918 networks and loopback interfaces must be blocked."""
-        self.assertIsNotNone(homie_ssrf.check_ssrf("http://127.0.0.1:8080/admin"))
-        self.assertIsNotNone(homie_ssrf.check_ssrf("http://localhost:5000/api"))
-        self.assertIsNotNone(homie_ssrf.check_ssrf("http://10.0.1.5/dashboard"))
-        self.assertIsNotNone(homie_ssrf.check_ssrf("http://192.168.1.1/router"))
-        self.assertIsNotNone(homie_ssrf.check_ssrf("http://[::1]:8080/metrics"))
+        self.assertIsNotNone(helm_ssrf.check_ssrf("http://127.0.0.1:8080/admin"))
+        self.assertIsNotNone(helm_ssrf.check_ssrf("http://localhost:5000/api"))
+        self.assertIsNotNone(helm_ssrf.check_ssrf("http://10.0.1.5/dashboard"))
+        self.assertIsNotNone(helm_ssrf.check_ssrf("http://192.168.1.1/router"))
+        self.assertIsNotNone(helm_ssrf.check_ssrf("http://[::1]:8080/metrics"))
 
     def test_3_ssrf_blocks_disguised_and_ipv4_mapped_ipv6(self):
         """Directive: Hex, decimal, and IPv4-mapped IPv6 encodings must not bypass SSRF checks."""
-        res_hex = homie_ssrf.check_ssrf("http://0x7f000001/secret")
+        res_hex = helm_ssrf.check_ssrf("http://0x7f000001/secret")
         self.assertIsNotNone(res_hex)
         self.assertIn("private IP", res_hex)
 
-        res_dec = homie_ssrf.check_ssrf("http://2130706433/data")
+        res_dec = helm_ssrf.check_ssrf("http://2130706433/data")
         self.assertIsNotNone(res_dec)
         self.assertIn("private IP", res_dec)
 
-        res_mapped = homie_ssrf.check_ssrf("http://[::ffff:127.0.0.1]/status")
+        res_mapped = helm_ssrf.check_ssrf("http://[::ffff:127.0.0.1]/status")
         self.assertIsNotNone(res_mapped)
         self.assertIn("private IP", res_mapped)
 
     def test_4_action_broker_blocks_action_with_ssrf_url(self):
         """Directive: ActionBroker rejects any tool call containing SSRF target URLs."""
-        with patch.dict(os.environ, {"HOMIE_TEST_ENV": "1"}):
+        with patch.dict(os.environ, {"HELM_TEST_ENV": "1"}):
             broker = action_broker.ActionBroker()
             ok, msg, data = broker.execute_action(
-                "homie_launch_app",
+                "helm_launch_app",
                 {"app_name": "chrome.exe", "url": "http://169.254.169.254/latest/user-data"},
                 caller_id="desktop_user",
             )
@@ -101,7 +101,7 @@ class TestOpenJarvisIntegration(unittest.TestCase):
 
     def test_5_credential_stripper_redacts_api_keys_and_secrets(self):
         """Directive: CredentialStripper redacts sensitive API tokens, AWS keys, and private keys."""
-        stripper = homie_credential_stripper.CredentialStripper()
+        stripper = helm_credential_stripper.CredentialStripper()
 
         sample_text = (
             "Found key sk-abcdef12345678901234567890 and AWS key AKIAIOSFODNN7EXAMPLE "
@@ -135,7 +135,7 @@ class TestOpenJarvisIntegration(unittest.TestCase):
                 approval="none",
             )
         )
-        with patch("homie_supervisor.get_allowed_tools_map", return_value={"leak_secret_tool": "READ_ONLY"}):
+        with patch("helm_supervisor.get_allowed_tools_map", return_value={"leak_secret_tool": "READ_ONLY"}):
             res = registry.execute("leak_secret_tool", {})
             self.assertTrue(res["ok"])
             serialized = json.dumps(res)
@@ -144,7 +144,7 @@ class TestOpenJarvisIntegration(unittest.TestCase):
 
     def test_7_rule_based_context_precompression_and_consolidation(self):
         """Directive: ContextCompressor truncates oversized tool outputs and summarizes older turns."""
-        compressor = homie_session_compression.ContextCompressor(tool_output_max=50, trigger_turns=4, recent_turns=2)
+        compressor = helm_session_compression.ContextCompressor(tool_output_max=50, trigger_turns=4, recent_turns=2)
 
         oversized_output = "X" * 200
         messages = [
@@ -161,7 +161,7 @@ class TestOpenJarvisIntegration(unittest.TestCase):
 
     def test_8_passive_fact_extraction_and_injection_defense(self):
         """Directive: FactExtractor identifies durable user preferences while rejecting prompt injection."""
-        extractor = homie_memory_extractor.FactExtractor()
+        extractor = helm_memory_extractor.FactExtractor()
 
         facts = extractor.extract("My name is Alice and I prefer dark mode theme.")
         self.assertIn(("user_name", "The user's name is Alice."), facts)
@@ -177,7 +177,7 @@ class TestOpenJarvisIntegration(unittest.TestCase):
     def test_9_context_compression_taint_inheritance_and_nonce_wrapping(self):
         """Directive: When any older turn is untrusted by origin metadata, the summary inherits taint and is enclosed in a nonce envelope."""
         taint_tracker.clear_all_taints()
-        compressor = homie_session_compression.ContextCompressor(tool_output_max=50, trigger_turns=3, recent_turns=1)
+        compressor = helm_session_compression.ContextCompressor(tool_output_max=50, trigger_turns=3, recent_turns=1)
 
         # Message with untrusted origin 'web' but without explicit 'tainted: True' flag
         messages = [
@@ -196,7 +196,7 @@ class TestOpenJarvisIntegration(unittest.TestCase):
 
     def test_10_fact_extractor_refuses_extraction_when_tainted_and_proposes_via_gate(self):
         """Directive: FactExtractor strictly refuses extraction when tainted, and submits proposals to confirmation gate."""
-        extractor = homie_memory_extractor.FactExtractor()
+        extractor = helm_memory_extractor.FactExtractor()
 
         # 1. When workstation is tainted, extraction is strictly refused
         taint_tracker.set_workstation_tainted(True)
@@ -207,12 +207,12 @@ class TestOpenJarvisIntegration(unittest.TestCase):
         # 2. Fact proposal creates confirmation request; does not commit to disk directly
         req = extractor.propose_fact_for_approval("user_editor", "The user prefers VS Code.")
         self.assertIsNotNone(req.request_id)
-        self.assertEqual(req.tool_name, "homie_remember_fact")
+        self.assertEqual(req.tool_name, "helm_remember_fact")
         self.assertEqual(self.store.get_fact("user_editor"), None, "Fact must not be committed without approval")
 
     def test_11_ssrf_pinned_fetch_blocks_cloud_metadata(self):
         """Directive: pinned_fetch blocks connection to cloud metadata endpoint atomically."""
-        ok, status, msg = homie_ssrf.pinned_fetch("http://169.254.169.254/latest/meta-data/")
+        ok, status, msg = helm_ssrf.pinned_fetch("http://169.254.169.254/latest/meta-data/")
         self.assertFalse(ok)
         self.assertEqual(status, 403)
         self.assertIn("SSRF Blocked", msg)
@@ -228,7 +228,7 @@ class TestOpenJarvisIntegration(unittest.TestCase):
             (socket.AF_INET, socket.SOCK_STREAM, 6, '', ('10.0.0.1', 80)),
         ]
         with patch('socket.getaddrinfo', return_value=mock_dual_homed):
-            ok, msg, pinned = homie_ssrf.resolve_and_pin_ip('dual-homed.example.com', 80)
+            ok, msg, pinned = helm_ssrf.resolve_and_pin_ip('dual-homed.example.com', 80)
             self.assertFalse(ok, "Must fail closed when any returned A/AAAA record is private")
             self.assertIsNone(pinned)
             self.assertIn("resolved to private or reserved IP", msg)
@@ -237,8 +237,8 @@ class TestOpenJarvisIntegration(unittest.TestCase):
 
     def test_13_hardware_profiler_system_specs_and_gpu_detection(self):
         """OpenJarvis Directive: HardwareProfiler accurately profiles RAM, CPU cores, and GPU VRAM."""
-        import homie_hardware_profiler
-        profiler = homie_hardware_profiler.HardwareProfiler()
+        import helm_hardware_profiler
+        profiler = helm_hardware_profiler.HardwareProfiler()
         specs = profiler.get_system_specs()
         self.assertGreater(specs["total_ram_gb"], 0)
         self.assertGreater(specs["cpu_cores_logical"], 0)
@@ -247,8 +247,8 @@ class TestOpenJarvisIntegration(unittest.TestCase):
 
     def test_14_hardware_profiler_runtime_recommendation(self):
         """OpenJarvis Directive: Recommends local runtime when sufficient GPU VRAM & Ollama available, cloud otherwise."""
-        import homie_hardware_profiler
-        profiler = homie_hardware_profiler.HardwareProfiler()
+        import helm_hardware_profiler
+        profiler = helm_hardware_profiler.HardwareProfiler()
 
         # Case A: Ample VRAM (8GB) and Ollama running with llama3
         mock_specs = {
@@ -276,8 +276,8 @@ class TestOpenJarvisIntegration(unittest.TestCase):
 
     def test_15_resource_tracker_cost_and_flops_evaluation(self):
         """OpenJarvis Directive: ResourceTracker calculates FLOPs (6*N*P) and token dollar costs."""
-        import homie_resource_tracker
-        tracker = homie_resource_tracker.ResourceTracker(daily_budget_usd=10.0)
+        import helm_resource_tracker
+        tracker = helm_resource_tracker.ResourceTracker(daily_budget_usd=10.0)
 
         # 1000 prompt tokens, 500 completion tokens on gemini-2.5-flash
         t = tracker.record_turn(
@@ -295,8 +295,8 @@ class TestOpenJarvisIntegration(unittest.TestCase):
 
     def test_16_resource_tracker_budget_circuit_breaker(self):
         """OpenJarvis Directive: Circuit breaker triggers when daily expenditure exceeds configured limit."""
-        import homie_resource_tracker
-        tracker = homie_resource_tracker.ResourceTracker(daily_budget_usd=0.001)
+        import helm_resource_tracker
+        tracker = helm_resource_tracker.ResourceTracker(daily_budget_usd=0.001)
 
         # Large turn on claude-3-5-sonnet exceeding $0.001 limit
         t = tracker.record_turn(

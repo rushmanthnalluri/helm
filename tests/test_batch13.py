@@ -23,7 +23,7 @@ import crypto_vault
 import client_token_auth
 import taint_tracker
 import step_up_gate
-import homie_mcp
+import helm_mcp
 
 class TestBatch13HardenedDefense(unittest.TestCase):
 
@@ -38,7 +38,7 @@ class TestBatch13HardenedDefense(unittest.TestCase):
     def test_call_with_no_token_denied_when_enforcement_active(self):
         """Verifies call with no token is denied when token enforcement is active."""
         client_token_auth.set_token_enforcement(True)
-        res = homie_mcp.execute_mcp_tool("homie_get_vitals", {}, caller_id="unauth_agent", client_token=None)
+        res = helm_mcp.execute_mcp_tool("helm_get_vitals", {}, caller_id="unauth_agent", client_token=None)
         self.assertIn("Security Gate: Missing client authentication token", res)
 
     def test_false_false_decision_not_executed(self):
@@ -47,7 +47,7 @@ class TestBatch13HardenedDefense(unittest.TestCase):
         orig_check = taint_tracker.check_action_privilege
         try:
             taint_tracker.check_action_privilege = lambda *a, **kw: (False, False, "Explicit policy denial")
-            res = homie_mcp.execute_mcp_tool("homie_snap_window", {"app_name": "notepad", "position": "left"}, caller_id="test_agent")
+            res = helm_mcp.execute_mcp_tool("helm_snap_window", {"app_name": "notepad", "position": "left"}, caller_id="test_agent")
             self.assertIn("Security Gate: Explicit policy denial", res)
         finally:
             taint_tracker.check_action_privilege = orig_check
@@ -61,7 +61,7 @@ class TestBatch13HardenedDefense(unittest.TestCase):
         self.assertTrue(taint_tracker.is_session_tainted("agent_fresh_new_id"))
 
         # Calling WRITE_EXEC tool with fresh caller_id should be intercepted
-        res = homie_mcp.execute_mcp_tool("homie_snap_window", {"app_name": "notepad", "position": "left"}, caller_id="agent_fresh_new_id")
+        res = helm_mcp.execute_mcp_tool("helm_snap_window", {"app_name": "notepad", "position": "left"}, caller_id="agent_fresh_new_id")
         self.assertIn("Security Gate:", res)
         self.assertIn("STEP_UP_REQUIRED", res)
 
@@ -70,7 +70,7 @@ class TestBatch13HardenedDefense(unittest.TestCase):
         taint_tracker.mark_session_tainted("session_tamper")
         # Trigger step-up for benign args
         benign_args = {"text": "allowed text content"}
-        allowed, step_up, reason = taint_tracker.check_action_privilege("session_tamper", "WRITE_EXEC", "homie_set_clipboard", benign_args)
+        allowed, step_up, reason = taint_tracker.check_action_privilege("session_tamper", "WRITE_EXEC", "helm_set_clipboard", benign_args)
         self.assertFalse(allowed)
         self.assertTrue(step_up)
 
@@ -89,7 +89,7 @@ class TestBatch13HardenedDefense(unittest.TestCase):
     def test_step_up_token_single_use_replayed_twice_denied(self):
         """Verifies step-up token is strictly single-use and cannot be replayed."""
         taint_tracker.mark_session_tainted("session_replay")
-        allowed, step_up, reason = taint_tracker.check_action_privilege("session_replay", "WRITE_EXEC", "homie_set_clipboard", {"text": "once"})
+        allowed, step_up, reason = taint_tracker.check_action_privilege("session_replay", "WRITE_EXEC", "helm_set_clipboard", {"text": "once"})
         self.assertTrue(step_up)
 
         import re
@@ -107,21 +107,21 @@ class TestBatch13HardenedDefense(unittest.TestCase):
     def test_click_on_telegram_uac_or_run_denied(self):
         """Verifies synthetic clicks on security dialogs and approval UIs are blocked."""
         # Click targeting Telegram approval button
-        res_tg = homie_mcp.execute_mcp_tool("homie_agent_click", {"x": 500, "y": 600, "element_name": "Telegram ApproveButton"})
+        res_tg = helm_mcp.execute_mcp_tool("helm_agent_click", {"x": 500, "y": 600, "element_name": "Telegram ApproveButton"})
         self.assertIn("Security Gate:", res_tg)
         self.assertIn("prohibited", res_tg.lower())
 
         # Click targeting User Account Control
-        res_uac = homie_mcp.execute_mcp_tool("homie_agent_click", {"x": 400, "y": 500, "element_name": "User Account Control Yes"})
+        res_uac = helm_mcp.execute_mcp_tool("helm_agent_click", {"x": 400, "y": 500, "element_name": "User Account Control Yes"})
         self.assertIn("Security Gate:", res_uac)
 
     def test_type_powershell_or_cmd_denied(self):
         """Verifies synthetic typing of prohibited shell invocations is blocked."""
-        res_ps = homie_mcp.execute_mcp_tool("homie_agent_type", {"text": "powershell -enc AAAA", "element_name": "TerminalInput"})
+        res_ps = helm_mcp.execute_mcp_tool("helm_agent_type", {"text": "powershell -enc AAAA", "element_name": "TerminalInput"})
         self.assertIn("Security Gate:", res_ps)
         self.assertIn("prohibited", res_ps.lower())
 
-        res_cmd = homie_mcp.execute_mcp_tool("homie_agent_type", {"text": "cmd.exe /c calc", "element_name": "RunBox"})
+        res_cmd = helm_mcp.execute_mcp_tool("helm_agent_type", {"text": "cmd.exe /c calc", "element_name": "RunBox"})
         self.assertIn("Security Gate:", res_cmd)
 
     def test_swap_vault_blob_between_two_rows_fails_decryption(self):

@@ -1,4 +1,4 @@
-"""Homie Shadow Mode & Tiered Rate Limiter.
+"""Helm Shadow Mode & Tiered Rate Limiter.
 Provides safe staging and runaway loop protection:
 - Shadow Mode: Simulates and audits would-be privileged actions without mutating OS state.
 - Tiered Rate Limiting: Limits actions per minute to prevent runaway loops or prompt-fatigue DOS.
@@ -13,7 +13,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-logger = logging.getLogger("homie.shadow_mode")
+logger = logging.getLogger("helm.shadow_mode")
 
 _SHADOW_MODE_ACTIVE = False
 _CALL_HISTORY = {}  # caller_id -> [timestamps]

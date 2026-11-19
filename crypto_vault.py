@@ -1,4 +1,4 @@
-"""Homie Cryptographic Vault (Production Hardened AEAD).
+"""Helm Cryptographic Vault (Production Hardened AEAD).
 Provides authenticated encryption for sensitive at-rest data (screen memory, tokens, credentials)
 with domain-separated subkeys, Windows DPAPI key protection, and strict 256-bit key length checks:
 - Standard AEAD: AES-256-GCM (via pycryptodome) with 12-byte random nonces and 16-byte authentication tags
@@ -65,9 +65,9 @@ def derive_subkey(domain: str, master_key: Optional[bytes] = None, length: int =
     """
     mk = master_key if master_key is not None else get_vault_key()
     validate_key_length(mk)
-    salt = b"homie_vault_domain_separation_v1"
+    salt = b"helm_vault_domain_separation_v1"
     prk = hkdf_extract(salt, mk)
-    info = f"homie_vault_subkey:{domain}".encode("utf-8")
+    info = f"helm_vault_subkey:{domain}".encode("utf-8")
     return hkdf_expand(prk, info, length)
 
 
@@ -78,7 +78,7 @@ def get_vault_key() -> bytes:
     if _KEY_CACHE and len(_KEY_CACHE) >= MIN_KEY_LENGTH_BYTES:
         return _KEY_CACHE
 
-    key_file = os.path.join(BASE_DIR, ".homie_vault.key")
+    key_file = os.path.join(BASE_DIR, ".helm_vault.key")
     if os.path.exists(key_file):
         try:
             with open(key_file, "rb") as f:
@@ -96,7 +96,7 @@ def get_vault_key() -> bytes:
                     if len(raw) >= MIN_KEY_LENGTH_BYTES:
                         try:
                             import win32crypt
-                            protected = win32crypt.CryptProtectData(raw, "homie_vault_master_key", None, None, None, 0)
+                            protected = win32crypt.CryptProtectData(raw, "helm_vault_master_key", None, None, None, 0)
                             with open(key_file, "wb") as wf:
                                 wf.write(protected)
                         except Exception:
@@ -116,14 +116,14 @@ def get_vault_key() -> bytes:
         to_write = new_key
         if sys.platform == "win32":
             import win32crypt
-            to_write = win32crypt.CryptProtectData(new_key, "homie_vault_master_key", None, None, None, 0)
+            to_write = win32crypt.CryptProtectData(new_key, "helm_vault_master_key", None, None, None, 0)
 
         with open(key_file, "wb") as f:
             f.write(to_write)
 
         try:
-            import homie_confinement
-            homie_confinement.harden_path(key_file)
+            import helm_confinement
+            helm_confinement.harden_path(key_file)
         except Exception:
             pass
 
@@ -138,16 +138,16 @@ def save_master_key_dpapi(key_bytes: bytes, key_path: Optional[str] = None) -> b
     global _KEY_CACHE
     if len(key_bytes) < MIN_KEY_LENGTH_BYTES:
         raise ValueError(f"Key length must be at least {MIN_KEY_LENGTH_BYTES} bytes")
-    kf = key_path or os.path.join(BASE_DIR, ".homie_vault.key")
+    kf = key_path or os.path.join(BASE_DIR, ".helm_vault.key")
     to_write = key_bytes
     if sys.platform == "win32":
         import win32crypt
-        to_write = win32crypt.CryptProtectData(key_bytes, "homie_vault_master_key", None, None, None, 0)
+        to_write = win32crypt.CryptProtectData(key_bytes, "helm_vault_master_key", None, None, None, 0)
     with open(kf, "wb") as f:
         f.write(to_write)
     try:
-        import homie_confinement
-        homie_confinement.harden_path(kf)
+        import helm_confinement
+        helm_confinement.harden_path(kf)
     except Exception:
         pass
     _KEY_CACHE = key_bytes

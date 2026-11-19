@@ -3,13 +3,13 @@ with open("action_broker.py", "rb") as f:
 
 old_standalone = """        elif standalone_mode:
             # Explicit standalone in-process mode (zero test env flags)
-            self.supervisor = homie_supervisor.PolicySupervisor()"""
+            self.supervisor = helm_supervisor.PolicySupervisor()"""
 
 new_standalone = """        elif standalone_mode:
             # Explicit standalone in-process mode (zero test env flags)
-            self.supervisor = homie_supervisor.PolicySupervisor(enforce_dirty_check=False)"""
+            self.supervisor = helm_supervisor.PolicySupervisor(enforce_dirty_check=False)"""
 
-old_end_of_broker = """        except homie_supervisor.CompleteMediationBreachError as cme:
+old_end_of_broker = """        except helm_supervisor.CompleteMediationBreachError as cme:
             self.supervisor._transition_to_locked(f"Complete mediation violation: {cme}")
             return False, f"Security Gate: {cme}", None
         except Exception as e:
@@ -18,7 +18,7 @@ old_end_of_broker = """        except homie_supervisor.CompleteMediationBreachEr
 
 _GLOBAL_BROKER: Optional[ActionBroker] = None"""
 
-new_end_of_broker = """        except homie_supervisor.CompleteMediationBreachError as cme:
+new_end_of_broker = """        except helm_supervisor.CompleteMediationBreachError as cme:
             self.supervisor._transition_to_locked(f"Complete mediation violation: {cme}")
             return False, f"Security Gate: {cme}", None
         except Exception as e:

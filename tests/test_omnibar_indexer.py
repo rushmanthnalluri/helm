@@ -4,8 +4,8 @@ import os
 import unittest
 from unittest.mock import MagicMock, patch
 
-import homie_omnibar
-from homie_omnibar import (
+import helm_omnibar
+from helm_omnibar import (
     DEFAULT_ACTIONS,
     OmnibarController,
     OmnibarIndexer,

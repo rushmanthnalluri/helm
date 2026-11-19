@@ -57,7 +57,7 @@ class TestAssistantTimelineAndTaskManager(unittest.TestCase):
     def test_assistant_timeline_summary_and_exclusions(self):
         """Verifies timeline summary generation and exclusion list management."""
         # Add a note so timeline has at least one event
-        quick_notes.add_note("Prepare deployment checklist for Homie workstation")
+        quick_notes.add_note("Prepare deployment checklist for Helm workstation")
 
         summary = assistant_timeline.get_what_did_i_miss_summary(lookback_hours=2)
         self.assertIsInstance(summary, str)

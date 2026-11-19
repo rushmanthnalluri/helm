@@ -13,26 +13,26 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-import homie_updater
+import helm_updater
 
 
-class TestHomieUpdater:
+class TestHelmUpdater:
     def test_version_and_availability(self):
-        ver = homie_updater.get_current_version()
+        ver = helm_updater.get_current_version()
         assert isinstance(ver, str)
         assert len(ver) > 0
-        avail = homie_updater.is_velopack_available()
+        avail = helm_updater.is_velopack_available()
         assert isinstance(avail, bool)
 
     def test_check_for_update_stub(self):
-        res = homie_updater.check_for_update("https://fake.url/releases")
+        res = helm_updater.check_for_update("https://fake.url/releases")
         assert res is not None
         assert "current_version" in res
         assert "target_version" in res
         assert "is_available" in res
 
     def test_apply_update_stub(self):
-        res = homie_updater.apply_update()
+        res = helm_updater.apply_update()
         assert res is True
 
     def test_updater_with_mocked_velopack(self):
@@ -48,9 +48,9 @@ class TestHomieUpdater:
         mock_mgr.check_for_updates.return_value = mock_update_info
 
         with patch.dict("sys.modules", {"velopack": mock_vel}):
-            with patch("homie_updater._VELOPACK_AVAILABLE", True), \
-                 patch("homie_updater._UpdateManager", mock_mgr_cls):
-                updater = homie_updater.HomieUpdater(update_url="https://test.update.url")
+            with patch("helm_updater._VELOPACK_AVAILABLE", True), \
+                 patch("helm_updater._UpdateManager", mock_mgr_cls):
+                updater = helm_updater.HelmUpdater(update_url="https://test.update.url")
                 check_res = updater.check_for_update()
                 assert check_res is not None
                 assert check_res["is_available"] is True
@@ -77,7 +77,7 @@ class TestAppxManifest:
                 identity = elem
                 break
         assert identity is not None, "Missing <Identity> tag"
-        assert identity.get("Name") == "Homie.DesktopAI"
+        assert identity.get("Name") == "Helm.DesktopAI"
         assert "CN=" in identity.get("Publisher", "")
         assert identity.get("Version") is not None
         assert identity.get("ProcessorArchitecture") == "x64"
@@ -105,20 +105,20 @@ class TestAppxManifest:
         for elem in manifest_xml.iter():
             if elem.tag.endswith("FileType"):
                 file_types.append(elem.text)
-        assert ".homie" in file_types
+        assert ".helm" in file_types
         assert ".hnote" in file_types
 
 
 class TestWinGetManifest:
     @pytest.fixture
     def winget_yaml(self):
-        path = os.path.join(BASE_DIR, "packaging", "winget", "Homie.yaml")
-        assert os.path.isfile(path), f"Homie.yaml not found at {path}"
+        path = os.path.join(BASE_DIR, "packaging", "winget", "Helm.yaml")
+        assert os.path.isfile(path), f"Helm.yaml not found at {path}"
         with open(path, "r", encoding="utf-8") as f:
             return yaml.safe_load(f)
 
     def test_winget_fields(self, winget_yaml):
-        assert winget_yaml.get("PackageIdentifier") in ["Homie.Homie", "Homie.DesktopAI"]
+        assert winget_yaml.get("PackageIdentifier") in ["Helm.Helm", "Helm.DesktopAI"]
         assert winget_yaml.get("PackageVersion") is not None
         installers = winget_yaml.get("Installers", [])
         assert len(installers) >= 1

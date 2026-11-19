@@ -17,15 +17,15 @@ if BASE_DIR not in sys.path:
 import taint_tracker
 import agent_audit_ledger
 
-logger = logging.getLogger("homie.step_up_gate")
+logger = logging.getLogger("helm.step_up_gate")
 
 def push_step_up_request_to_phone(step_up_id, session_id, tool_name, arguments, source="untrusted_content"):
     """Pushes an interactive confirmation to the user's paired Telegram phone."""
-    if os.environ.get("HOMIE_TEST_ENV") == "1":
+    if os.environ.get("HELM_TEST_ENV") == "1":
         return True, "Test environment: simulated step-up push"
     try:
-        import homie
-        prefs = homie.get_prefs()
+        import helm
+        prefs = helm.get_prefs()
         allowed_users = prefs.get("telegramAllowedUsers", [])
         token = prefs.get("telegramToken", "")
         if not token or not allowed_users:
@@ -68,13 +68,13 @@ def handle_step_up_callback(callback_data, chat_id):
         ok, item, msg = taint_tracker.approve_step_up(step_up_id)
         if ok and item:
             # Execute the approved tool with temporary workstation taint bypass
-            import homie_mcp
+            import helm_mcp
             tool_name = item["tool_name"]
             args = item["arguments"]
             was_ws = taint_tracker.is_workstation_tainted()
             taint_tracker.set_workstation_tainted(False)
             try:
-                res = homie_mcp.execute_mcp_tool(tool_name, args, caller_id=f"approved_{chat_id}")
+                res = helm_mcp.execute_mcp_tool(tool_name, args, caller_id=f"approved_{chat_id}")
             finally:
                 taint_tracker.set_workstation_tainted(was_ws)
             agent_audit_ledger.record_agent_action(f"telegram_approved_{chat_id}", tool_name, "WRITE_EXEC", args, decision="USER_APPROVED")
@@ -98,7 +98,7 @@ class PhoneWebAuthnGate:
 
     def verify(
         self,
-        reason: str = "Homie needs your approval",
+        reason: str = "Helm needs your approval",
         tool_name: str = "desktop_action",
         arguments: Optional[dict] = None,
         session_id: str = "desktop_session",
@@ -107,7 +107,7 @@ class PhoneWebAuthnGate:
         s_id = step_up_id or f"stepup_{int(time.time()*1000)}"
         return push_step_up_request_to_phone(s_id, session_id, tool_name, arguments or {}, source="webauthn_gate")
 
-    def verify_sync(self, reason: str = "Homie needs your approval", **kwargs) -> bool:
+    def verify_sync(self, reason: str = "Helm needs your approval", **kwargs) -> bool:
         ok, _ = self.verify(reason=reason, **kwargs)
         return ok
 
@@ -131,7 +131,7 @@ class WindowsHelloGate:
 
     def verify(
         self,
-        reason: str = "Homie needs your approval",
+        reason: str = "Helm needs your approval",
         tool_name: str = "desktop_action",
         arguments: Optional[dict] = None,
         session_id: str = "desktop_session",
@@ -157,7 +157,7 @@ class WindowsHelloGate:
             step_up_id=step_up_id,
         )
 
-    def verify_sync(self, reason: str = "Homie needs your approval", **kwargs) -> bool:
+    def verify_sync(self, reason: str = "Helm needs your approval", **kwargs) -> bool:
         from windows_hello import WindowsHello
 
         if WindowsHello.is_available():

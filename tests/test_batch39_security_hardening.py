@@ -1,7 +1,7 @@
 """tests/test_batch39_security_hardening.py - Batch 39 Hardening Test Suite.
 
 Verifies:
-1. Point-under-cursor WindowFromPoint self-targeting defense: synthetic clicks on Homie's window/PID fail closed.
+1. Point-under-cursor WindowFromPoint self-targeting defense: synthetic clicks on Helm's window/PID fail closed.
 2. Lone Win-key denial: key="win" or keycode=[91] returns "Win" and is denied.
 3. Chord canonicalization exact token matching: "ctrl+return" never matches "r", and prose fields do not trip chords.
 4. Admin recovery token single-use failure fails closed if unlink fails.
@@ -21,7 +21,7 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 import windows_tools
-import homie_supervisor
+import helm_supervisor
 import phone_approval_portal
 import rails_config
 import rails_confirmation
@@ -32,20 +32,20 @@ import action_broker
 class TestBatch39SecurityHardening(unittest.TestCase):
 
     def test_1_point_under_cursor_windowfrompoint_self_targeting_defense(self):
-        """Directive 1: Synthetic click targeting physical coordinates over Homie's window or PID is blocked."""
-        sup = homie_supervisor.PolicySupervisor()
-        actuator = homie_supervisor.SupervisorActuator(sup)
+        """Directive 1: Synthetic click targeting physical coordinates over Helm's window or PID is blocked."""
+        sup = helm_supervisor.PolicySupervisor()
+        actuator = helm_supervisor.SupervisorActuator(sup)
 
-        # Mock window under point to simulate landing on Homie's assistant window
+        # Mock window under point to simulate landing on Helm's assistant window
         mock_info = {
             "pid": os.getpid(),
             "proc_name": "python.exe",
-            "title": "Homie Assistant"
+            "title": "Helm Assistant"
         }
         with patch.object(windows_tools, "get_window_under_point", return_value=(12345, mock_info)):
-            with self.assertRaises(homie_supervisor.CompleteMediationBreachError) as cm:
+            with self.assertRaises(helm_supervisor.CompleteMediationBreachError) as cm:
                 actuator.execute_actuator(
-                    "homie_agent_click",
+                    "helm_agent_click",
                     {"x": 100, "y": 200},
                     caller_id="worker",
                     seq=1
@@ -65,10 +65,10 @@ class TestBatch39SecurityHardening(unittest.TestCase):
         self.assertEqual(chord2, "Win", "Lone keycode 91 must return 'Win'")
 
         # 3. Lone Win key must be denied by SupervisorActuator
-        sup = homie_supervisor.PolicySupervisor()
-        actuator = homie_supervisor.SupervisorActuator(sup)
-        with self.assertRaises(homie_supervisor.CompleteMediationBreachError) as cm:
-            actuator.execute_actuator("homie_agent_type", {"key": "win"}, caller_id="worker", seq=1)
+        sup = helm_supervisor.PolicySupervisor()
+        actuator = helm_supervisor.SupervisorActuator(sup)
+        with self.assertRaises(helm_supervisor.CompleteMediationBreachError) as cm:
+            actuator.execute_actuator("helm_agent_type", {"key": "win"}, caller_id="worker", seq=1)
         self.assertIn("Win", str(cm.exception))
 
     def test_3_exact_token_matching_without_substring_ambiguity(self):
@@ -114,21 +114,21 @@ class TestBatch39SecurityHardening(unittest.TestCase):
         cfg = rails_config.RailsConfig()
 
         # Consequential tools must be protected
-        self.assertTrue(cfg.is_confirmation_required("homie_set_clipboard"))
-        self.assertTrue(cfg.is_confirmation_required("homie_launch_app"))
+        self.assertTrue(cfg.is_confirmation_required("helm_set_clipboard"))
+        self.assertTrue(cfg.is_confirmation_required("helm_launch_app"))
         self.assertTrue(cfg.is_confirmation_required("launch_app"))  # alias check
 
         # Simulating a hostile disk edit that empties require_confirmation in JSON
         with patch.object(cfg, "_cached_config", {"safety": {"require_confirmation": []}}):
-            self.assertTrue(cfg.is_confirmation_required("homie_set_clipboard"))
-            self.assertTrue(cfg.is_confirmation_required("homie_launch_app"))
+            self.assertTrue(cfg.is_confirmation_required("helm_set_clipboard"))
+            self.assertTrue(cfg.is_confirmation_required("helm_launch_app"))
             self.assertTrue(cfg.is_confirmation_required("launch_app"))
 
     def test_6_human_confirmation_rejects_worker_and_agent_callers(self):
         """Directive 6: ConfirmationGate.confirm() rejects worker and agent callers and requires verified presence."""
         with patch("device_registry.get_enrolled_devices", return_value={}):
             gate = rails_confirmation.ConfirmationGate()
-            req = gate.create_request("homie_set_clipboard", {"text": "secret"})
+            req = gate.create_request("helm_set_clipboard", {"text": "secret"})
 
             # Worker caller must be denied
             ok1, msg1, tok1 = gate.confirm(req.request_id, human_caller_id="worker_compromised")

@@ -1,4 +1,4 @@
-"""Contextual Clipboard Classifier for Homie.
+"""Contextual Clipboard Classifier for Helm.
 Classifies clipboard content by type (Error, URL, Phone, JSON, Code, Plain Text)
 and determines available high-leverage contextual actions.
 """

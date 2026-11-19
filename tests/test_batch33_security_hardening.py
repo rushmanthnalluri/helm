@@ -20,11 +20,11 @@ if BASE_DIR not in sys.path:
 
 import phone_approval_portal
 import policy_envelope
-import homie_supervisor
+import helm_supervisor
 import client_token_auth
 import taint_tracker
 import update_verifier
-import homie
+import helm
 
 from Crypto.Signature import eddsa
 from tests.phone_testing_keys import (
@@ -37,9 +37,9 @@ from tests.phone_testing_keys import (
 
 class TestBatch33SecurityHardening(unittest.TestCase):
     def setUp(self):
-        os.environ["HOMIE_TEST_ENV"] = "1"
-        os.environ["HOMIE_COMPLETE_MEDIATION"] = "1"
-        for f in [".homie_supervisor_dirty.flag", ".homie_enrollment_lockout.json"]:
+        os.environ["HELM_TEST_ENV"] = "1"
+        os.environ["HELM_COMPLETE_MEDIATION"] = "1"
+        for f in [".helm_supervisor_dirty.flag", ".helm_enrollment_lockout.json"]:
             if os.path.exists(f):
                 try: os.remove(f)
                 except Exception: pass
@@ -91,7 +91,7 @@ class TestBatch33SecurityHardening(unittest.TestCase):
             signature="test_sig",
             expiry=time.time() + 300,
             allowed_process_images=["chrome.exe"],
-            allowed_action_types=["homie_agent_type", "homie_send_hotkey"],
+            allowed_action_types=["helm_agent_type", "helm_send_hotkey"],
             step_budget=10,
             keystroke_cap=100,
             allowed_domains=["secure-portal.com"],
@@ -113,7 +113,7 @@ class TestBatch33SecurityHardening(unittest.TestCase):
 
         for idx, args in enumerate(test_cases):
             ok, msg, _ = env.check_boundary(
-                "homie_agent_type", args, "chrome.exe", 1, "secure-portal.com"
+                "helm_agent_type", args, "chrome.exe", 1, "secure-portal.com"
             )
             self.assertFalse(ok, f"Test case {idx} with args {args} should be detected as form submission")
             self.assertIn("enter", msg.lower())
@@ -121,8 +121,8 @@ class TestBatch33SecurityHardening(unittest.TestCase):
     def test_3_envelope_step_reservation_no_leak_on_denial(self):
         """Directive 3: Early denials in supervisor propose release envelope step reservation."""
         import heartbeat_lease
-        supervisor = homie_supervisor.PolicySupervisor()
-        supervisor.state = homie_supervisor.STATE_ARMED
+        supervisor = helm_supervisor.PolicySupervisor()
+        supervisor.state = helm_supervisor.STATE_ARMED
         supervisor.lease_token, _ = heartbeat_lease.acquire_lease("supervisor_worker", duration=30.0)
         supervisor.last_heartbeat_time = time.time()
 
@@ -132,7 +132,7 @@ class TestBatch33SecurityHardening(unittest.TestCase):
             signature="test_sig",
             expiry=time.time() + 300,
             allowed_process_images=["chrome.exe"],
-            allowed_action_types=["homie_agent_type"],
+            allowed_action_types=["helm_agent_type"],
             step_budget=2,
             keystroke_cap=100,
             allowed_domains=["secure-portal.com"],
@@ -146,7 +146,7 @@ class TestBatch33SecurityHardening(unittest.TestCase):
             # Proposal 1 fails taint check (hard DENY)
             with patch("taint_tracker.check_action_privilege", return_value=(False, False, "Taint Denied")):
                 supervisor._handle_propose({
-                    "tool": "homie_agent_type",
+                    "tool": "helm_agent_type",
                     "args": {"text": "hello"}
                 }, seq=1)
 
@@ -157,7 +157,7 @@ class TestBatch33SecurityHardening(unittest.TestCase):
             # Proposal 2 fails step-up token check (NEEDS_HUMAN)
             with patch("taint_tracker.check_action_privilege", return_value=(False, True, "Needs step-up")):
                 supervisor._handle_propose({
-                    "tool": "homie_agent_type",
+                    "tool": "helm_agent_type",
                     "args": {"text": "hello"}
                 }, seq=2)
 
@@ -172,7 +172,7 @@ class TestBatch33SecurityHardening(unittest.TestCase):
             signature="test_sig",
             expiry=time.time() + 300,
             allowed_process_images=["chrome.exe"],
-            allowed_action_types=["homie_browse"],
+            allowed_action_types=["helm_browse"],
             step_budget=5,
             keystroke_cap=100,
             allowed_domains=[],  # EMPTY DOMAINS
@@ -181,7 +181,7 @@ class TestBatch33SecurityHardening(unittest.TestCase):
         env.is_active = True
 
         ok, msg, _ = env.check_boundary(
-            "homie_browse", {"url": "https://evil.com"}, "chrome.exe", 1, "evil.com"
+            "helm_browse", {"url": "https://evil.com"}, "chrome.exe", 1, "evil.com"
         )
         self.assertFalse(ok)
         self.assertIn("explicit non-empty allowed_domains", msg)
@@ -192,7 +192,7 @@ class TestBatch33SecurityHardening(unittest.TestCase):
         phone_approval_portal.set_display_driver(lambda code: captured.append(code) or True)
 
         # Ambient conversational voice trying to trigger pairing must return not handled or denied
-        handled, msg = homie.try_fast_command("pair phone")
+        handled, msg = helm.try_fast_command("pair phone")
         self.assertFalse(handled, "Voice/text fast command must NOT trigger pairing ceremony")
         self.assertEqual(len(captured), 0)
 

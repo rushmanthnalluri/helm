@@ -20,8 +20,8 @@ class TestTelegramBridge(unittest.TestCase):
         self.assertFalse(bridge.is_user_authorized(9999, 9999))
 
     def test_unpaired_bot_requires_local_pairing_code(self):
-        import homie
-        orig_users = homie.get_prefs().get('telegramAllowedUsers', [])
+        import helm
+        orig_users = helm.get_prefs().get('telegramAllowedUsers', [])
         try:
             bridge = TelegramBridge(token="test", allowed_users=[])
             # A Telegram message alone cannot claim an unpaired PC.
@@ -31,7 +31,7 @@ class TestTelegramBridge(unittest.TestCase):
             # All unpaired senders remain blocked until local approval.
             self.assertFalse(bridge.is_user_authorized(7777, 7777))
         finally:
-            homie.save_pref('telegramAllowedUsers', orig_users)
+            helm.save_pref('telegramAllowedUsers', orig_users)
 
     def test_message_chunking(self):
         import unittest.mock as mock
@@ -56,8 +56,8 @@ class TestTelegramBridge(unittest.TestCase):
 
             # 2. /cmd
             replies.clear()
-            bridge.handle_command(1001, "/cmd echo HomieCmdTest")
-            self.assertTrue(any("homiecmdtest" in r.lower() for r in replies))
+            bridge.handle_command(1001, "/cmd echo HelmCmdTest")
+            self.assertTrue(any("helmcmdtest" in r.lower() for r in replies))
 
             # 3. /rules
             replies.clear()

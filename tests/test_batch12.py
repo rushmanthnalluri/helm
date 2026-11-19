@@ -20,7 +20,7 @@ import crypto_vault
 import client_token_auth
 import agent_audit_ledger
 import semantic_screen_memory
-import homie_mcp
+import helm_mcp
 import wake_word_engine
 
 class TestBatch12TrustLayer(unittest.TestCase):
@@ -71,18 +71,18 @@ class TestBatch12TrustLayer(unittest.TestCase):
         """Verifies MCP server enforces client token capability scopes."""
         secret, meta = client_token_auth.create_client_token("claude_read_worker", scopes=["READ_ONLY"])
 
-        # READ_ONLY tool homie_get_vitals should succeed with this token
-        res = homie_mcp.execute_mcp_tool("homie_get_vitals", {}, caller_id="token_agent", client_token=secret)
+        # READ_ONLY tool helm_get_vitals should succeed with this token
+        res = helm_mcp.execute_mcp_tool("helm_get_vitals", {}, caller_id="token_agent", client_token=secret)
         self.assertNotIn("Security Gate: Access denied", res)
 
-        # WRITE_EXEC tool homie_set_clipboard should be rejected
-        res_write = homie_mcp.execute_mcp_tool("homie_set_clipboard", {"text": "hello"}, caller_id="token_agent", client_token=secret)
+        # WRITE_EXEC tool helm_set_clipboard should be rejected
+        res_write = helm_mcp.execute_mcp_tool("helm_set_clipboard", {"text": "hello"}, caller_id="token_agent", client_token=secret)
         self.assertIn("Security Gate: Access denied", res_write)
 
     def test_hmac_ledger_and_remote_anchor_verification(self):
         """Verifies HMAC ledger chain integrity and remote anchor matching."""
         hmac_key = agent_audit_ledger.get_ledger_secret_key()
-        hash1 = agent_audit_ledger.record_agent_action("caller_hmac", "homie_get_vitals", "READ_ONLY", {}, decision="ALLOW", secret_key=hmac_key)
+        hash1 = agent_audit_ledger.record_agent_action("caller_hmac", "helm_get_vitals", "READ_ONLY", {}, decision="ALLOW", secret_key=hmac_key)
         self.assertTrue(bool(hash1))
 
         # Anchor current head
@@ -102,7 +102,7 @@ class TestBatch12TrustLayer(unittest.TestCase):
     def test_screen_memory_encrypted_and_privacy_forget(self):
         """Verifies encrypted storage, keyword search, app exclusion, and instant forget."""
         test_proc = "vscode.exe"
-        test_title = "Homie Architecture Design"
+        test_title = "Helm Architecture Design"
         test_text = "Project secret key: batch12_alpha_omega_99"
 
         # Record encrypted event
@@ -129,7 +129,7 @@ class TestBatch12TrustLayer(unittest.TestCase):
     def test_wake_word_detector_simulation(self):
         """Verifies hands-free wake word detection, RMS calculation, and debounce."""
         wake_events = []
-        detector = wake_word_engine.WakeWordDetector(wake_word="homie", on_wake_callback=lambda ts: wake_events.append(ts))
+        detector = wake_word_engine.WakeWordDetector(wake_word="helm", on_wake_callback=lambda ts: wake_events.append(ts))
 
         # Energy RMS calculation
         pcm = b"\x10\x00" * 100
@@ -137,12 +137,12 @@ class TestBatch12TrustLayer(unittest.TestCase):
         self.assertGreater(energy, 0)
 
         # Trigger wake word
-        matched = detector.simulate_wake_word("hey homie what is my battery status")
+        matched = detector.simulate_wake_word("hey helm what is my battery status")
         self.assertTrue(matched)
         self.assertEqual(len(wake_events), 1)
 
         # Immediate repeat should debounce (return False)
-        immediate_repeat = detector.simulate_wake_word("hey homie repeat")
+        immediate_repeat = detector.simulate_wake_word("hey helm repeat")
         self.assertFalse(immediate_repeat)
 
 if __name__ == "__main__":

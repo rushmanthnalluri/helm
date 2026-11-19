@@ -18,16 +18,16 @@ Here is the exact code, verification outputs, and architectural implementations 
 #### 1. Compiled-in Safety Floor & Fact Tools
 You mandated:
 ```python
-sorted(t for t, tier in homie_supervisor.get_allowed_tools_map().items() if tier != 'READ_ONLY' and t not in rails_config.COMPILED_IN_CONSEQUENTIAL_TOOLS) == []
+sorted(t for t, tier in helm_supervisor.get_allowed_tools_map().items() if tier != 'READ_ONLY' and t not in rails_config.COMPILED_IN_CONSEQUENTIAL_TOOLS) == []
 ```
-- **Implemented Fix**: Upgraded `homie_remember_fact` and `homie_forget_fact` in `homie_mcp.py` to `capabilityTier: "WRITE_EXEC"`.
-- Expanded `rails_config.COMPILED_IN_CONSEQUENTIAL_TOOLS` to include all non-`READ_ONLY` tools (`homie_capture_screen`, `homie_control_media`, `homie_get_clipboard`, `homie_place_window`, `homie_play_youtube`, `homie_read_screen_memory`, `homie_remote_trackpad`, `homie_snap_window`, `homie_remember_fact`, `homie_forget_fact`, `homie_launch_app`).
+- **Implemented Fix**: Upgraded `helm_remember_fact` and `helm_forget_fact` in `helm_mcp.py` to `capabilityTier: "WRITE_EXEC"`.
+- Expanded `rails_config.COMPILED_IN_CONSEQUENTIAL_TOOLS` to include all non-`READ_ONLY` tools (`helm_capture_screen`, `helm_control_media`, `helm_get_clipboard`, `helm_place_window`, `helm_play_youtube`, `helm_read_screen_memory`, `helm_remote_trackpad`, `helm_snap_window`, `helm_remember_fact`, `helm_forget_fact`, `helm_launch_app`).
 - **Verified Result**: `test_1_safety_floor_diff_strictly_empty` passed. The difference set between supervisor non-read-only tools and compiled-in consequential tools is strictly empty (`[]`).
 
 #### 2. Fragile Window Title Check Elimination
-- **Implemented Fix**: Completely removed `"homie" in title` substring checks from `homie_supervisor.py` and `windows_tools.py`.
-- Replaced with canonical OS process image path comparison (`os.path.commonpath([cand, base]) == base`), protected PID registries (`supervisor.protected_pids`), and window property checks (`win32gui.GetProp(hwnd, "HOMIE_PROTECTED_UI")`).
-- **Verified Result**: `test_2_window_title_homie_does_not_falsely_block` passed. Browser tabs with titles like *"Researching homie architecture on GitHub"* are no longer falsely blocked.
+- **Implemented Fix**: Completely removed `"helm" in title` substring checks from `helm_supervisor.py` and `windows_tools.py`.
+- Replaced with canonical OS process image path comparison (`os.path.commonpath([cand, base]) == base`), protected PID registries (`supervisor.protected_pids`), and window property checks (`win32gui.GetProp(hwnd, "HELM_PROTECTED_UI")`).
+- **Verified Result**: `test_2_window_title_helm_does_not_falsely_block` passed. Browser tabs with titles like *"Researching helm architecture on GitHub"* are no longer falsely blocked.
 
 #### 3. Out-of-Process Pipe Protocol Expansion (`MSG_CONFIRM`, `MSG_TAINT_QUERY`, `MSG_REGISTER_UI`)
 - **Protocol Extensions**: Added opcodes 10 (`MSG_CONFIRM`), 11 (`MSG_TAINT_QUERY`), and 12 (`MSG_REGISTER_UI`) to the supervisor Named Pipe protocol.
@@ -45,32 +45,32 @@ sorted(t for t, tier in homie_supervisor.get_allowed_tools_map().items() if tier
 
 ### Part 2: Deep Audit and Integration of OpenJarvis (`open-jarvis/OpenJarvis`)
 
-We conducted an exhaustive architectural scan of the `open-jarvis/OpenJarvis` repository (Stanford / OpenJarvis team, Apache 2.0 local-first AI stack) and synthesized its highest-impact innovations into Homie:
+We conducted an exhaustive architectural scan of the `open-jarvis/OpenJarvis` repository (Stanford / OpenJarvis team, Apache 2.0 local-first AI stack) and synthesized its highest-impact innovations into Helm:
 
-#### 1. Outbound SSRF & Cloud Metadata Protection (`homie_ssrf.py`)
+#### 1. Outbound SSRF & Cloud Metadata Protection (`helm_ssrf.py`)
 - **OpenJarvis Pattern**: `openjarvis.security.ssrf` protects agents against Server-Side Request Forgery targeting local microservices or cloud metadata endpoints.
-- **Homie Implementation**: Created `homie_ssrf.py` and integrated it into `ActionBroker.execute_action()`.
+- **Helm Implementation**: Created `helm_ssrf.py` and integrated it into `ActionBroker.execute_action()`.
   - Unconditionally blocks AWS/GCP/Azure/Alibaba metadata endpoints: `169.254.169.254`, `metadata.google.internal`, `100.100.100.200`.
   - Blocks all private RFC1918 CIDRs: `127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, link-local `169.254.0.0/16`, IPv6 `::1`, and unique-local `fc00::/7`.
   - Blocks disguised IPv4 encodings: hexadecimal (`0x7f000001`), decimal (`2130706433`), octal, and short-dotted forms.
   - Blocks IPv4-mapped IPv6 encodings: `::ffff:127.0.0.1` and `::ffff:169.254.169.254`.
   - Enforces fail-closed DNS resolution: unresolvable hostnames are blocked to prevent DNS rebinding attacks.
 
-#### 2. Automated Secret & Credential Redaction Filter (`homie_credential_stripper.py`)
+#### 2. Automated Secret & Credential Redaction Filter (`helm_credential_stripper.py`)
 - **OpenJarvis Pattern**: `openjarvis.security.credential_stripper` compiles high-performance regex scanners to redact secrets before returning tool outputs or writing traces.
-- **Homie Implementation**: Created `homie_credential_stripper.py` and integrated it into `ToolRegistry.execute()` and `rails_audit.py`.
+- **Helm Implementation**: Created `helm_credential_stripper.py` and integrated it into `ToolRegistry.execute()` and `rails_audit.py`.
   - Automatically scrubs: OpenAI/Anthropic/Gemini keys (`sk-...`), AWS Access Keys (`AKIA...`), GitHub PATs (`ghp_...`, `gho_...`), Slack tokens (`xoxb-...`), Bearer authorization tokens, and PEM private keys (`-----BEGIN RSA PRIVATE KEY-----`).
   - Ensures no secret read from disk or clipboard can leak into the model's message context or persistent audit ledgers.
 
-#### 3. Conversation Context Compression & Sliding-Window Consolidation (`homie_session_compression.py`)
+#### 3. Conversation Context Compression & Sliding-Window Consolidation (`helm_session_compression.py`)
 - **OpenJarvis Pattern**: `openjarvis.sessions.compression` provides `RuleBasedPrecompression` and `SessionConsolidation`.
-- **Homie Implementation**: Created `homie_session_compression.py` and integrated it into `AgentCore.turn()`.
+- **Helm Implementation**: Created `helm_session_compression.py` and integrated it into `AgentCore.turn()`.
   - Zero-latency deterministic precompression: truncates oversized tool outputs (> 2000 chars) with clear truncation markers and deduplicates repetitive error messages without requiring model inference calls.
   - Sliding-window consolidation: when conversations exceed budget, compresses older turns into a structured, untrusted context summary (`[START PRIOR CONTEXT SUMMARY]`) while keeping recent active dialogue turns in full fidelity.
 
-#### 4. Passive Background Fact Extraction (`homie_memory_extractor.py`)
+#### 4. Passive Background Fact Extraction (`helm_memory_extractor.py`)
 - **OpenJarvis Pattern**: `openjarvis.memory.extractor` asynchronously distills durable user facts from dialogue turns.
-- **Homie Implementation**: Created `homie_memory_extractor.py` and integrated it with `AgentCore` and `DurableMemoryStore`.
+- **Helm Implementation**: Created `helm_memory_extractor.py` and integrated it with `AgentCore` and `DurableMemoryStore`.
   - Passively identifies durable personal preferences (e.g. user name, editor preferences, working hours) from user turns.
   - Automatically filters volatile ephemeral chatter (greetings, timestamps).
   - Validates all extracted candidate facts against instruction injection patterns before queuing for storage.

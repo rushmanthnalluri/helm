@@ -68,7 +68,7 @@ def run_live_demonstration():
     print(f"    Session: {session_id} -> Tainted: {is_tainted}, Taint Epoch: {epoch}")
 
     # 4. Agent attempts consequential action: delete temporary quarantine file
-    tool_name = "homie_delete_file"
+    tool_name = "helm_delete_file"
     tool_args = {"path": "C:\\Quarantine\\suspicious_payload.tmp"}
     clean_args = json.dumps(tool_args, sort_keys=True, separators=(',', ':'))
     args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()

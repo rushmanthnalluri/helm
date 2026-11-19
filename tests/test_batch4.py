@@ -10,7 +10,7 @@ import tempfile
 import unittest
 import focus_tracker
 import meeting_notes
-import homie
+import helm
 
 class TestBatch4Features(unittest.TestCase):
     def setUp(self):
@@ -134,12 +134,12 @@ class TestBatch4Features(unittest.TestCase):
 
     def test_fast_commands_integration(self):
         # 1. Focus report
-        handled, msg = homie.try_fast_command("focus report")
+        handled, msg = helm.try_fast_command("focus report")
         self.assertTrue(handled)
         self.assertIn("Focus Report", msg)
 
         # 2. Screen time
-        handled, msg = homie.try_fast_command("what is my screen time")
+        handled, msg = helm.try_fast_command("what is my screen time")
         self.assertTrue(handled)
         self.assertIn("Focus Report", msg)
 

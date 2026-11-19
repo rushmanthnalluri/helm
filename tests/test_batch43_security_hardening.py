@@ -1,8 +1,8 @@
 """tests/test_batch43_security_hardening.py - Batch 43 Security Hardening & Isolation Suite.
 
 Directives Verified:
-1. Safety floor diff is strictly empty: Every non-READ_ONLY tool in homie_supervisor is in COMPILED_IN_CONSEQUENTIAL_TOOLS.
-2. Window title check elimination: Chrome tabs titled "Homie ..." are not falsely blocked as self-targeting.
+1. Safety floor diff is strictly empty: Every non-READ_ONLY tool in helm_supervisor is in COMPILED_IN_CONSEQUENTIAL_TOOLS.
+2. Window title check elimination: Chrome tabs titled "Helm ..." are not falsely blocked as self-targeting.
 3. Device registry failure fail-closed: Corrupted/failing registry denies confirmation rather than falling back.
 4. Browser UIA domain resolution fail-closed: If UIA domain lookup fails in browser window, envelope denies without trusting worker args.
 5. Recovery token single-use via DB record: Unelevated consumers enforce single-use via authoritative database record.
@@ -25,7 +25,7 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 import windows_tools
-import homie_supervisor
+import helm_supervisor
 import phone_approval_portal
 import device_registry
 import rails_config
@@ -43,8 +43,8 @@ from tests.phone_testing_keys import (
 class TestBatch43SecurityHardening(unittest.TestCase):
 
     def setUp(self):
-        os.environ["HOMIE_TEST_ENV"] = "1"
-        for p in [homie_supervisor.DIRTY_FLAG_PATH, homie_supervisor.CRASH_HISTORY_PATH]:
+        os.environ["HELM_TEST_ENV"] = "1"
+        for p in [helm_supervisor.DIRTY_FLAG_PATH, helm_supervisor.CRASH_HISTORY_PATH]:
             if os.path.exists(p):
                 try: os.remove(p)
                 except Exception: pass
@@ -53,7 +53,7 @@ class TestBatch43SecurityHardening(unittest.TestCase):
         device_registry.clear_consumed_nonces_for_testing()
 
     def tearDown(self):
-        for p in [homie_supervisor.DIRTY_FLAG_PATH, homie_supervisor.CRASH_HISTORY_PATH]:
+        for p in [helm_supervisor.DIRTY_FLAG_PATH, helm_supervisor.CRASH_HISTORY_PATH]:
             if os.path.exists(p):
                 try: os.remove(p)
                 except Exception: pass
@@ -63,7 +63,7 @@ class TestBatch43SecurityHardening(unittest.TestCase):
 
     def test_1_safety_floor_diff_strictly_empty(self):
         """Directive 1: Explicitly categorized tool tiers with strict build-time unclassified detection."""
-        m = homie_supervisor.get_allowed_tools_map()
+        m = helm_supervisor.get_allowed_tools_map()
         cfg = rails_config.get_rails_config()
 
         # 1. Every tool in allowed_tools_map MUST be explicitly classified
@@ -80,30 +80,30 @@ class TestBatch43SecurityHardening(unittest.TestCase):
                 self.assertIn(t, rails_config.COMPILED_IN_SENSITIVE_READS)
 
         # 4. Sensitive reads do NOT require per-action human confirmation prompt
-        self.assertFalse(cfg.is_confirmation_required("homie_capture_screen"))
-        self.assertFalse(cfg.is_confirmation_required("homie_get_clipboard"))
-        self.assertFalse(cfg.is_confirmation_required("homie_read_screen_memory"))
+        self.assertFalse(cfg.is_confirmation_required("helm_capture_screen"))
+        self.assertFalse(cfg.is_confirmation_required("helm_get_clipboard"))
+        self.assertFalse(cfg.is_confirmation_required("helm_read_screen_memory"))
 
         # 5. Consequential tools (launch app, remember/forget facts) strictly require confirmation
-        self.assertTrue(cfg.is_confirmation_required("homie_launch_app"))
-        self.assertTrue(cfg.is_confirmation_required("homie_remember_fact"))
-        self.assertTrue(cfg.is_confirmation_required("homie_forget_fact"))
-        self.assertTrue(cfg.is_confirmation_required("homie_http_fetch"))
-        self.assertEqual(m.get("homie_http_fetch"), "WRITE_EXEC")
-        self.assertEqual(m.get("homie_remember_fact"), "WRITE_EXEC")
-        self.assertEqual(m.get("homie_forget_fact"), "WRITE_EXEC")
+        self.assertTrue(cfg.is_confirmation_required("helm_launch_app"))
+        self.assertTrue(cfg.is_confirmation_required("helm_remember_fact"))
+        self.assertTrue(cfg.is_confirmation_required("helm_forget_fact"))
+        self.assertTrue(cfg.is_confirmation_required("helm_http_fetch"))
+        self.assertEqual(m.get("helm_http_fetch"), "WRITE_EXEC")
+        self.assertEqual(m.get("helm_remember_fact"), "WRITE_EXEC")
+        self.assertEqual(m.get("helm_forget_fact"), "WRITE_EXEC")
 
-    def test_2_window_title_homie_does_not_falsely_block(self):
-        """Directive 2: Eliminating fragile 'homie' in title check prevents falsely blocking legitimate Chrome tabs."""
-        sup = homie_supervisor.PolicySupervisor()
-        sup.state = homie_supervisor.STATE_ARMED
-        actuator = homie_supervisor.SupervisorActuator(sup)
+    def test_2_window_title_helm_does_not_falsely_block(self):
+        """Directive 2: Eliminating fragile 'helm' in title check prevents falsely blocking legitimate Chrome tabs."""
+        sup = helm_supervisor.PolicySupervisor()
+        sup.state = helm_supervisor.STATE_ARMED
+        actuator = helm_supervisor.SupervisorActuator(sup)
 
-        # Active foreground window is Chrome with Claude conversation discussing Homie
+        # Active foreground window is Chrome with Claude conversation discussing Helm
         claude_fg_info = {
             "pid": 98765,
             "proc_name": "chrome.exe",
-            "title": "Homie AI workstation assistant upgrades - Claude - Google Chrome",
+            "title": "Helm AI workstation assistant upgrades - Claude - Google Chrome",
             "exe_path": r"C:\Program Files\Google\Chrome\Application\chrome.exe"
         }
 
@@ -111,13 +111,13 @@ class TestBatch43SecurityHardening(unittest.TestCase):
         with patch.object(windows_tools, "get_foreground_window", return_value=claude_fg_info), \
              patch.object(windows_tools, "get_window_under_point", return_value=(11111, claude_fg_info)), \
              patch.object(sup, "verify_and_consume_intent_token", return_value=True), \
-             patch("homie_mcp.execute_mcp_tool", return_value="Action homie_agent_click executed"):
+             patch("helm_mcp.execute_mcp_tool", return_value="Action helm_agent_click executed"):
             try:
                 res = actuator.execute_actuator(
-                    "homie_agent_click", {"x": 500, "y": 500}, caller_id="desktop_user", seq=1
+                    "helm_agent_click", {"x": 500, "y": 500}, caller_id="desktop_user", seq=1
                 )
-                self.assertIn("Action homie_agent_click executed", res)
-            except homie_supervisor.CompleteMediationBreachError as cm:
+                self.assertIn("Action helm_agent_click executed", res)
+            except helm_supervisor.CompleteMediationBreachError as cm:
                 self.fail(f"False positive self-targeting block on title: {cm}")
             finally:
                 sup.clean_shutdown()
@@ -125,7 +125,7 @@ class TestBatch43SecurityHardening(unittest.TestCase):
     def test_3_device_registry_failure_fails_closed(self):
         """Directive 3: Corrupt or failing device registry lookup in confirm() fails closed."""
         gate = rails_confirmation.ConfirmationGate()
-        req = gate.create_request("homie_set_clipboard", {"text": "secret"}, caller_id="assistant")
+        req = gate.create_request("helm_set_clipboard", {"text": "secret"}, caller_id="assistant")
 
         with patch("device_registry.get_enrolled_devices", side_effect=IOError("Corrupt device registry on disk")):
             ok, msg, tok = gate.confirm(req.request_id)
@@ -138,7 +138,7 @@ class TestBatch43SecurityHardening(unittest.TestCase):
         envelope = policy_envelope.PolicyEnvelope(
             envelope_id="env_b43_1",
             allowed_process_images=["chrome.exe"],
-            allowed_action_types=["homie_agent_click"],
+            allowed_action_types=["helm_agent_click"],
             step_budget=10,
             keystroke_cap=500,
             expiry=time.time() + 300,
@@ -149,7 +149,7 @@ class TestBatch43SecurityHardening(unittest.TestCase):
 
         # Targeting chrome.exe, but UIA lookup returns None (cannot inspect address bar)
         ok, msg, ks, tok = envelope.reserve_step(
-            tool_name="homie_agent_click",
+            tool_name="helm_agent_click",
             arguments={"x": 100, "y": 100, "url": "https://trusted-domain.com"},  # worker-attested url must be ignored
             current_process_image="chrome.exe",
             current_taint_epoch=1,
@@ -189,15 +189,15 @@ class TestBatch43SecurityHardening(unittest.TestCase):
         pipe_name = r"\\.\pipe\test_batch43_pipe_" + secrets.token_hex(4)
 
         import psutil
-        sup = homie_supervisor.PolicySupervisor()
-        sup.state = homie_supervisor.STATE_ARMED
+        sup = helm_supervisor.PolicySupervisor()
+        sup.state = helm_supervisor.STATE_ARMED
         sup.authorized_ui_pid = os.getpid()
         sup.authorized_ui_ctime = psutil.Process().create_time()
-        server = homie_supervisor.NamedPipeSupervisorServer(sup, pipe_name=pipe_name)
+        server = helm_supervisor.NamedPipeSupervisorServer(sup, pipe_name=pipe_name)
         server.start()
         time.sleep(0.15)
 
-        client = homie_supervisor.NamedPipeSupervisorClient(pipe_name=pipe_name)
+        client = helm_supervisor.NamedPipeSupervisorClient(pipe_name=pipe_name)
         try:
             connected = client.connect(timeout_sec=2.0)
             self.assertTrue(connected, "Client must connect to supervisor pipe")
@@ -213,16 +213,16 @@ class TestBatch43SecurityHardening(unittest.TestCase):
             args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
             sig_blob = mint_test_action_approval(
                 priv_pem,
-                "homie_set_clipboard",
+                "helm_set_clipboard",
                 args_hash,
                 device_id="batch43_pipe_phone",
                 taint_epoch=taint_status.get("taint_epoch", 0)
             )
 
             confirm_unreg = client.confirm(
-                "homie_set_clipboard", {"text": "pipe_data"}, signed_evidence=sig_blob
+                "helm_set_clipboard", {"text": "pipe_data"}, signed_evidence=sig_blob
             )
-            self.assertEqual(confirm_unreg.get("reason_code"), homie_supervisor.REASON_UNAUTHORIZED_TOKEN)
+            self.assertEqual(confirm_unreg.get("reason_code"), helm_supervisor.REASON_UNAUTHORIZED_TOKEN)
             self.assertTrue(any(w in confirm_unreg.get("error", "").lower() for w in ("untrusted pid", "untrusted or recycled pid")))
 
             # 3. Register current UI process PID with session token
@@ -231,7 +231,7 @@ class TestBatch43SecurityHardening(unittest.TestCase):
 
             # 4. Valid confirmation from registered UI succeeds
             confirm_res = client.confirm(
-                "homie_set_clipboard", {"text": "pipe_data"}, signed_evidence=sig_blob
+                "helm_set_clipboard", {"text": "pipe_data"}, signed_evidence=sig_blob
             )
             self.assertEqual(confirm_res.get("status"), "ALLOW")
             token = confirm_res.get("step_up_token")
@@ -240,7 +240,7 @@ class TestBatch43SecurityHardening(unittest.TestCase):
 
             # 5. Nonce Anti-Replay: Presenting the exact same signed evidence blob again MUST FAIL
             replay_res = client.confirm(
-                "homie_set_clipboard", {"text": "pipe_data"}, signed_evidence=sig_blob
+                "helm_set_clipboard", {"text": "pipe_data"}, signed_evidence=sig_blob
             )
             self.assertEqual(replay_res.get("status"), "DENY")
             self.assertIn("verification failed", replay_res.get("reason", "").lower())
@@ -248,7 +248,7 @@ class TestBatch43SecurityHardening(unittest.TestCase):
             # 6. No-Device Branch: Zero-trust doctrine strictly denies confirmation without enrolled phone
             device_registry.clear_registry_for_testing()
             no_phone_res = client.confirm(
-                "homie_delete_file", {"path": "test.tmp"}
+                "helm_delete_file", {"path": "test.tmp"}
             )
             self.assertEqual(no_phone_res.get("status"), "DENY")
             self.assertIn("No mobile device enrolled", no_phone_res.get("reason", ""))
@@ -262,9 +262,9 @@ class TestBatch43SecurityHardening(unittest.TestCase):
         """Directive 7: Real OS subprocess supervisor executes WRITE_EXEC across pipe, and termination causes all channels to fail closed."""
         pipe_name = r"\\.\pipe\test_batch43_daemon_" + secrets.token_hex(4)
 
-        # Spawn REAL independent OS process running homie_supervisor_daemon.py
+        # Spawn REAL independent OS process running helm_supervisor_daemon.py
         proc = subprocess.Popen(
-            [sys.executable, "homie_supervisor_daemon.py", "--pipe", pipe_name, "--ui-pid", str(os.getpid())],
+            [sys.executable, "helm_supervisor_daemon.py", "--pipe", pipe_name, "--ui-pid", str(os.getpid())],
             cwd=BASE_DIR,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE
@@ -273,7 +273,7 @@ class TestBatch43SecurityHardening(unittest.TestCase):
         time.sleep(1.0)  # allow daemon to start and create named pipe
 
         try:
-            client = homie_supervisor.NamedPipeSupervisorClient(pipe_name=pipe_name)
+            client = helm_supervisor.NamedPipeSupervisorClient(pipe_name=pipe_name)
             connected = client.connect(timeout_sec=3.0)
             self.assertTrue(connected, "Client must connect to daemon pipe")
             client.hello()
@@ -284,7 +284,7 @@ class TestBatch43SecurityHardening(unittest.TestCase):
             self.assertIsNone(broker.supervisor, "Broker address space must NOT contain in-process supervisor")
 
             # 1. READ_ONLY tool execution while daemon is alive succeeds
-            ok_read, msg_read, res_read = broker.execute_action("homie_get_vitals", {}, caller_id="desktop_user")
+            ok_read, msg_read, res_read = broker.execute_action("helm_get_vitals", {}, caller_id="desktop_user")
             self.assertTrue(ok_read, f"Read-only action should succeed while daemon alive: {msg_read}")
 
             # 2. WRITE_EXEC tool execution across the pipe with complete mediation
@@ -295,21 +295,21 @@ class TestBatch43SecurityHardening(unittest.TestCase):
             taint_status = client.get_taint_status()
             sig_blob = mint_test_action_approval(
                 priv_pem,
-                "homie_set_clipboard",
+                "helm_set_clipboard",
                 args_hash,
                 device_id="daemon_test_phone",
                 taint_epoch=taint_status.get("taint_epoch", 0)
             )
 
             confirm_reply = client.confirm(
-                "homie_set_clipboard", {"text": "cross_pipe_success"}, signed_evidence=sig_blob
+                "helm_set_clipboard", {"text": "cross_pipe_success"}, signed_evidence=sig_blob
             )
             self.assertEqual(confirm_reply.get("status"), "ALLOW", f"Confirm reply failed: {confirm_reply}")
             step_up_tok = confirm_reply.get("step_up_token")
             self.assertIsNotNone(step_up_tok)
 
             ok_write, msg_write, _ = broker.execute_action(
-                "homie_set_clipboard", {"text": "cross_pipe_success"}, caller_id="desktop_user", step_up_token=step_up_tok
+                "helm_set_clipboard", {"text": "cross_pipe_success"}, caller_id="desktop_user", step_up_token=step_up_tok
             )
             self.assertTrue(ok_write, f"WRITE_EXEC tool execution across pipe should succeed: {msg_write}")
 
@@ -321,7 +321,7 @@ class TestBatch43SecurityHardening(unittest.TestCase):
             # 4. Verify ALL ingress channels immediately fail closed
             channels = ["desktop_user", "desktop_voice", "telegram_remote", "phone_gateway", "ai_engine"]
             for ch in channels:
-                ch_ok, ch_msg, _ = broker.execute_action("homie_get_vitals", {}, caller_id=ch)
+                ch_ok, ch_msg, _ = broker.execute_action("helm_get_vitals", {}, caller_id=ch)
                 self.assertFalse(
                     ch_ok,
                     f"Channel '{ch}' must fail closed after daemon killed, got: {ch_msg}"
@@ -341,7 +341,7 @@ class TestBatch43SecurityHardening(unittest.TestCase):
         self.assertTrue(os.path.exists(device_registry.DEVICE_REGISTRY_PATH))
         self.assertTrue(os.path.exists(device_registry.DEVICE_ENROLLED_MARKER))
 
-        # Now simulate attacker deleting .homie_device_keys.json to trigger no-device downgrade
+        # Now simulate attacker deleting .helm_device_keys.json to trigger no-device downgrade
         os.remove(device_registry.DEVICE_REGISTRY_PATH)
 
         # 1. get_enrolled_devices() MUST raise RuntimeError with TAMPERING_DETECTED
@@ -351,7 +351,7 @@ class TestBatch43SecurityHardening(unittest.TestCase):
 
         # 2. Confirmation gate confirm() MUST fail closed with REGISTRY_ERROR
         gate = rails_confirmation.get_confirmation_gate()
-        req = gate.create_request("homie_set_clipboard", {"text": "secret"}, caller_id="assistant")
+        req = gate.create_request("helm_set_clipboard", {"text": "secret"}, caller_id="assistant")
         ok, msg, tok = gate.confirm(req.request_id)
         self.assertFalse(ok)
         self.assertIsNone(tok)
@@ -364,20 +364,20 @@ class TestBatch43SecurityHardening(unittest.TestCase):
     def test_9_two_process_confirmation_request_creation_and_gesture_verification(self):
         """Directive 9: MSG_CREATE_CONFIRM_REQUEST = 13 delegates request creation across pipe, eliminating split-brain."""
         pipe_name = r"\\.\pipe\test_batch43_sync_" + secrets.token_hex(4)
-        sup = homie_supervisor.PolicySupervisor()
-        sup.state = homie_supervisor.STATE_ARMED
-        server = homie_supervisor.NamedPipeSupervisorServer(sup, pipe_name=pipe_name)
+        sup = helm_supervisor.PolicySupervisor()
+        sup.state = helm_supervisor.STATE_ARMED
+        server = helm_supervisor.NamedPipeSupervisorServer(sup, pipe_name=pipe_name)
         server.start()
         time.sleep(0.15)
 
-        client = homie_supervisor.NamedPipeSupervisorClient(pipe_name=pipe_name)
+        client = helm_supervisor.NamedPipeSupervisorClient(pipe_name=pipe_name)
         try:
             self.assertTrue(client.connect(timeout_sec=2.0))
             client.hello()
 
             # 0. Calling create_confirmation_request from un-attested PID must be REJECTED
-            unreg_resp = client.create_confirmation_request("homie_delete_file", {"path": "unreg.tmp"}, caller_id="desktop_user")
-            self.assertEqual(unreg_resp.get("reason_code"), homie_supervisor.REASON_UNAUTHORIZED_TOKEN)
+            unreg_resp = client.create_confirmation_request("helm_delete_file", {"path": "unreg.tmp"}, caller_id="desktop_user")
+            self.assertEqual(unreg_resp.get("reason_code"), helm_supervisor.REASON_UNAUTHORIZED_TOKEN)
             self.assertIn("rejected from untrusted pid", unreg_resp.get("error", "").lower())
 
             import psutil
@@ -388,13 +388,13 @@ class TestBatch43SecurityHardening(unittest.TestCase):
             self.assertEqual(reg_res.get("status"), "OK")
 
             # 1. UI process requests creation of authoritative confirmation request across the pipe
-            resp = client.create_confirmation_request("homie_delete_file", {"path": "sync_test.tmp"}, caller_id="desktop_user")
+            resp = client.create_confirmation_request("helm_delete_file", {"path": "sync_test.tmp"}, caller_id="desktop_user")
             self.assertEqual(resp.get("status"), "OK")
             req_id = resp.get("request_id")
             self.assertTrue(req_id.startswith("conf_"))
 
             # 2. When no mobile device is enrolled, confirmation is strictly DENIED
-            no_dev_conf = client.confirm("homie_delete_file", {"path": "sync_test.tmp"}, req_id=req_id)
+            no_dev_conf = client.confirm("helm_delete_file", {"path": "sync_test.tmp"}, req_id=req_id)
             self.assertEqual(no_dev_conf.get("status"), "DENY")
             self.assertIn("No mobile device enrolled", no_dev_conf.get("reason", ""))
 
@@ -404,9 +404,9 @@ class TestBatch43SecurityHardening(unittest.TestCase):
             clean_args = json.dumps({"path": "sync_test.tmp"}, sort_keys=True, separators=(',', ':'))
             a_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
             t_epoch = taint_tracker.get_taint_epoch()
-            sig_blob = mint_test_action_approval(priv_k, "homie_delete_file", a_hash, device_id="sync_test_phone", taint_epoch=t_epoch)
+            sig_blob = mint_test_action_approval(priv_k, "helm_delete_file", a_hash, device_id="sync_test_phone", taint_epoch=t_epoch)
 
-            conf_resp = client.confirm("homie_delete_file", {"path": "sync_test.tmp"}, signed_evidence=sig_blob, req_id=req_id)
+            conf_resp = client.confirm("helm_delete_file", {"path": "sync_test.tmp"}, signed_evidence=sig_blob, req_id=req_id)
             self.assertEqual(conf_resp.get("status"), "ALLOW")
             self.assertTrue(conf_resp.get("step_up_token").startswith("tok_"))
         finally:
@@ -422,7 +422,7 @@ class TestBatch43SecurityHardening(unittest.TestCase):
         # Set Windows Registry enrollment record explicitly
         device_registry._set_windows_registry_marker(True)
 
-        # Attacker deletes BOTH .homie_device_keys.json AND .homie_device_enrolled.marker
+        # Attacker deletes BOTH .helm_device_keys.json AND .helm_device_enrolled.marker
         if os.path.exists(device_registry.DEVICE_REGISTRY_PATH):
             os.remove(device_registry.DEVICE_REGISTRY_PATH)
         if os.path.exists(device_registry.DEVICE_ENROLLED_MARKER):
@@ -442,13 +442,13 @@ class TestBatch43SecurityHardening(unittest.TestCase):
     def test_11_unauthorized_process_cannot_register_as_ui(self):
         """Directive 11: Hostile same-user script (e.g. test_evil.py) cannot register as UI without kernel child or session token."""
         pipe_name = r"\\.\pipe\test_batch43_auth_" + secrets.token_hex(4)
-        sup = homie_supervisor.PolicySupervisor()
-        sup.state = homie_supervisor.STATE_ARMED
-        server = homie_supervisor.NamedPipeSupervisorServer(sup, pipe_name=pipe_name)
+        sup = helm_supervisor.PolicySupervisor()
+        sup.state = helm_supervisor.STATE_ARMED
+        server = helm_supervisor.NamedPipeSupervisorServer(sup, pipe_name=pipe_name)
         server.start()
         time.sleep(0.15)
 
-        client = homie_supervisor.NamedPipeSupervisorClient(pipe_name=pipe_name)
+        client = helm_supervisor.NamedPipeSupervisorClient(pipe_name=pipe_name)
         try:
             self.assertTrue(client.connect(timeout_sec=2.0))
             client.hello()
@@ -469,28 +469,28 @@ class TestBatch43SecurityHardening(unittest.TestCase):
             server.stop()
             sup.clean_shutdown()
 
-    def test_12_homie_http_fetch_pinned_egress_and_taint(self):
-        """Directive 12: homie_http_fetch tool blocks SSRF to cloud metadata, and meeting/timeline tools taint session."""
-        import homie_mcp
+    def test_12_helm_http_fetch_pinned_egress_and_taint(self):
+        """Directive 12: helm_http_fetch tool blocks SSRF to cloud metadata, and meeting/timeline tools taint session."""
+        import helm_mcp
         import taint_tracker
 
         # Reset taint before test
         taint_tracker.clear_all_taints()
 
-        # 1. homie_get_meeting_notes returns nonce-wrapped output and taints caller session
+        # 1. helm_get_meeting_notes returns nonce-wrapped output and taints caller session
         caller = "test_fresh_agent_caller"
         self.assertFalse(taint_tracker.is_session_tainted(caller))
-        notes_res = homie_mcp.execute_mcp_tool("homie_get_meeting_notes", {"limit": 1}, caller_id=caller)
+        notes_res = helm_mcp.execute_mcp_tool("helm_get_meeting_notes", {"limit": 1}, caller_id=caller)
         self.assertTrue(taint_tracker.is_session_tainted(caller))
 
-        # 2. homie_http_fetch is WRITE_EXEC: requires intent/step-up, and blocks SSRF when mediated
-        homie_mcp.set_active_supervisor_intent("intent_test_token")
+        # 2. helm_http_fetch is WRITE_EXEC: requires intent/step-up, and blocks SSRF when mediated
+        helm_mcp.set_active_supervisor_intent("intent_test_token")
         try:
-            res_ssrf = homie_mcp.execute_mcp_tool("homie_http_fetch", {"url": "http://169.254.169.254/latest/meta-data/"})
+            res_ssrf = helm_mcp.execute_mcp_tool("helm_http_fetch", {"url": "http://169.254.169.254/latest/meta-data/"})
             self.assertIn("Fetch failed", res_ssrf)
             self.assertIn("SSRF Blocked", res_ssrf)
         finally:
-            homie_mcp.set_active_supervisor_intent(None)
+            helm_mcp.set_active_supervisor_intent(None)
 
     def test_13_supervisor_spawned_worker_confinement_and_atomic_job_termination(self):
         """Directive 13: Policy Supervisor daemon directly spawns AppContainer confined worker,
@@ -499,7 +499,7 @@ class TestBatch43SecurityHardening(unittest.TestCase):
         pipe_name = r"\\.\pipe\test_batch43_worker_" + secrets.token_hex(4)
 
         proc = subprocess.Popen(
-            [sys.executable, "homie_supervisor_daemon.py", "--pipe", pipe_name, "--ui-pid", str(os.getpid())],
+            [sys.executable, "helm_supervisor_daemon.py", "--pipe", pipe_name, "--ui-pid", str(os.getpid())],
             cwd=BASE_DIR,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE
@@ -507,7 +507,7 @@ class TestBatch43SecurityHardening(unittest.TestCase):
         time.sleep(1.2)
 
         try:
-            client = homie_supervisor.NamedPipeSupervisorClient(pipe_name=pipe_name)
+            client = helm_supervisor.NamedPipeSupervisorClient(pipe_name=pipe_name)
             connected = client.connect(timeout_sec=3.0)
             self.assertTrue(connected, "Client must connect to daemon pipe")
 
@@ -526,9 +526,9 @@ class TestBatch43SecurityHardening(unittest.TestCase):
             worker_ps = psutil.Process(worker_pid)
             self.assertEqual(worker_ps.ppid(), proc.pid, f"Worker parent PID must be supervisor daemon PID {proc.pid}")
 
-            # 3. Verify worker process is running homie_worker.py
+            # 3. Verify worker process is running helm_worker.py
             cmdline = " ".join(worker_ps.cmdline())
-            self.assertIn("homie_worker.py", cmdline)
+            self.assertIn("helm_worker.py", cmdline)
 
             client.close()
 
@@ -546,21 +546,21 @@ class TestBatch43SecurityHardening(unittest.TestCase):
     def test_14_foreground_window_missing_fields_fails_closed_in_actuator(self):
         """Directive: get_foreground_window() returning a dict without proc_name/pid must fail closed."""
         from unittest.mock import patch
-        import homie_supervisor
-        from homie_supervisor import SupervisorActuator, CompleteMediationBreachError
+        import helm_supervisor
+        from helm_supervisor import SupervisorActuator, CompleteMediationBreachError
 
         actuator = SupervisorActuator(supervisor=None)
 
         # 1. Mock get_foreground_window returning dict missing proc_name and pid
         with patch("windows_tools.get_foreground_window", return_value={"hwnd": 1234, "title": "Untitled"}):
             with self.assertRaises(CompleteMediationBreachError) as ctx:
-                actuator.execute_actuator("homie_agent_click", {"x": 100, "y": 100}, caller_id="desktop_user", seq=1)
+                actuator.execute_actuator("helm_agent_click", {"x": 100, "y": 100}, caller_id="desktop_user", seq=1)
             self.assertIn("Unable to reliably determine foreground window", str(ctx.exception))
 
         # 2. Mock get_foreground_window returning None
         with patch("windows_tools.get_foreground_window", return_value=None):
             with self.assertRaises(CompleteMediationBreachError) as ctx:
-                actuator.execute_actuator("homie_agent_type", {"text": "hello"}, caller_id="desktop_user", seq=2)
+                actuator.execute_actuator("helm_agent_type", {"text": "hello"}, caller_id="desktop_user", seq=2)
             self.assertIn("Unable to reliably determine foreground window", str(ctx.exception))
 
 if __name__ == "__main__":

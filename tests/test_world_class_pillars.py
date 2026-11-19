@@ -16,36 +16,36 @@ import time
 import pytest
 from pathlib import Path
 
-import homie_voice_stream
-import homie_vla_agent
-import homie_canvas
-import homie_everything_search
-import homie_ide_bridge
+import helm_voice_stream
+import helm_vla_agent
+import helm_canvas
+import helm_everything_search
+import helm_ide_bridge
 import agent_tools
-import homie_mcp
+import helm_mcp
 
 
 class TestModernVoice:
     def test_voice_listing_and_text_clean(self):
-        synth = homie_voice_stream.WindowsOneCoreSynthesizer()
+        synth = helm_voice_stream.WindowsOneCoreSynthesizer()
         voices = synth.list_voices()
         assert isinstance(voices, list)
 
         # Test text cleaning
         dirty = "# Title\n\n**Hello** [link](https://example.com) `code`"
-        clean = homie_voice_stream.voice.speech_friendly_text(dirty)
+        clean = helm_voice_stream.voice.speech_friendly_text(dirty)
         assert "#" not in clean
         assert "**" not in clean
         assert "`" not in clean
 
     def test_neural_voice_manager_barge_in(self):
-        vm = homie_voice_stream.NeuralVoiceManager()
+        vm = helm_voice_stream.NeuralVoiceManager()
         assert vm.is_speaking() is False
         vm.stop()
         assert vm.is_speaking() is False
 
     def test_duplex_session_vad(self):
-        session = homie_voice_stream.DuplexVoiceSession()
+        session = helm_voice_stream.DuplexVoiceSession()
         session.start()
         assert session.active is True
 
@@ -68,8 +68,8 @@ class TestModernVoice:
 
 class TestVLAAgent:
     def test_som_engine_and_formatting(self):
-        engine = homie_vla_agent.SetOfMarksEngine(max_marks=10)
-        mark = homie_vla_agent.UIElementMark(
+        engine = helm_vla_agent.SetOfMarksEngine(max_marks=10)
+        mark = helm_vla_agent.UIElementMark(
             mark_id=1,
             name="Submit Order",
             control_type="Button",
@@ -86,8 +86,8 @@ class TestVLAAgent:
         assert "[1] Button \"Submit Order\" at (150, 220)" in manifest
 
     def test_vla_password_safety_invariant(self):
-        agent = homie_vla_agent.VLAClosedLoopAgent()
-        password_mark = homie_vla_agent.UIElementMark(
+        agent = helm_vla_agent.VLAClosedLoopAgent()
+        password_mark = helm_vla_agent.UIElementMark(
             mark_id=2,
             name="Master Password",
             control_type="Edit",
@@ -108,7 +108,7 @@ class TestVLAAgent:
 
 class TestInteractiveCanvas:
     def test_canvas_artifact_management(self):
-        res = homie_canvas.display_artifact(
+        res = helm_canvas.display_artifact(
             title="Q4 Financial Model",
             content="Summary data",
             artifact_type="spreadsheet",
@@ -117,7 +117,7 @@ class TestInteractiveCanvas:
         assert res["ok"] is True
         assert res["status"] == "displayed_in_canvas"
 
-        active = homie_canvas.get_active_artifact()
+        active = helm_canvas.get_active_artifact()
         assert active is not None
         assert active["title"] == "Q4 Financial Model"
         assert active["type"] == "spreadsheet"
@@ -126,12 +126,12 @@ class TestInteractiveCanvas:
 
 class TestEverythingSearch:
     def test_search_finds_local_files(self):
-        results = homie_everything_search.search_everything("README.md", max_results=5)
+        results = helm_everything_search.search_everything("README.md", max_results=5)
         assert len(results) >= 1
         assert any("README.md" in r["name"] for r in results)
 
     def test_search_extension_filtering(self):
-        results = homie_everything_search.search_everything("homie", max_results=10, file_extension="py")
+        results = helm_everything_search.search_everything("helm", max_results=10, file_extension="py")
         assert len(results) >= 1
         for r in results:
             assert r["name"].endswith(".py") or r.get("is_dir")
@@ -139,14 +139,14 @@ class TestEverythingSearch:
 
 class TestIDEBridge:
     def test_workspace_context_detection(self):
-        ctx = homie_ide_bridge.get_ide_workspace_context()
+        ctx = helm_ide_bridge.get_ide_workspace_context()
         assert ctx["ok"] is True
         assert "Python" in ctx["detected_technologies"]
         assert ctx["git"]["is_git"] is True
         assert ctx["git"]["branch"] == "master"
 
     def test_git_diff_summary(self):
-        diff = homie_ide_bridge.get_git_diff_summary()
+        diff = helm_ide_bridge.get_git_diff_summary()
         assert diff["ok"] is True
         assert isinstance(diff["stat"], str)
 
@@ -155,13 +155,13 @@ class TestRegistriesIntegration:
     def test_world_class_tools_present_in_registries(self):
         reg = agent_tools.build_full_registry()
         schema_names = {s["function"]["name"] for s in reg.schemas()}
-        mcp_names = {t["name"] for t in homie_mcp.MCP_TOOLS}
+        mcp_names = {t["name"] for t in helm_mcp.MCP_TOOLS}
 
         expected = [
-            "homie_instant_file_search",
-            "homie_get_ide_context",
-            "homie_show_canvas",
-            "homie_vla_step",
+            "helm_instant_file_search",
+            "helm_get_ide_context",
+            "helm_show_canvas",
+            "helm_vla_step",
         ]
 
         for tool in expected:

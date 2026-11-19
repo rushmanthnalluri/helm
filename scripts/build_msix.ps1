@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-    Builds the MSIX package for Homie Desktop AI Assistant.
+    Builds the MSIX package for Helm Desktop AI Assistant.
 
 .DESCRIPTION
     Full packaging pipeline:
     1. Generates AppxManifest.xml and placeholder PNG assets using Pillow (if missing).
-    2. Runs PyInstaller with homie.spec to compile the standalone executable bundle.
+    2. Runs PyInstaller with helm.spec to compile the standalone executable bundle.
     3. Stages manifest and visual assets into the dist folder.
     4. Packs the directory into an MSIX container using makeappx.exe.
     5. Optionally signs the MSIX container using signtool.exe.
@@ -14,7 +14,7 @@
     Package version string (e.g. 1.0.0.0). Defaults to 1.0.0.0.
 
 .PARAMETER Publisher
-    Certificate subject publisher string. Defaults to CN=Homie, O=Homie, L=San Francisco, S=CA, C=US.
+    Certificate subject publisher string. Defaults to CN=Helm, O=Helm, L=San Francisco, S=CA, C=US.
 
 .PARAMETER CertPath
     Path to .pfx certificate for signing.
@@ -23,7 +23,7 @@
     Password for .pfx certificate.
 
 .PARAMETER SkipBuildExe
-    Skip PyInstaller compilation step and reuse existing dist\homie.
+    Skip PyInstaller compilation step and reuse existing dist\helm.
 
 .PARAMETER SkipSign
     Skip signing the MSIX package.
@@ -35,10 +35,10 @@
 [CmdletBinding()]
 param(
     [string]$Version = "1.0.0.0",
-    [string]$Publisher = "CN=Homie, O=Homie, L=San Francisco, S=CA, C=US",
-    [string]$PublisherDisplayName = "Homie",
-    [string]$PackageName = "Homie.DesktopAI",
-    [string]$DisplayName = "Homie Desktop AI",
+    [string]$Publisher = "CN=Helm, O=Helm, L=San Francisco, S=CA, C=US",
+    [string]$PublisherDisplayName = "Helm",
+    [string]$PackageName = "Helm.DesktopAI",
+    [string]$DisplayName = "Helm Desktop AI",
     [string]$CertPath = "",
     [string]$CertPassword = "",
     [switch]$SkipBuildExe,
@@ -73,17 +73,17 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BaseDir = Resolve-Path "$ScriptDir\.."
 $PackagingDir = Join-Path $BaseDir "packaging"
 $AssetsDir = Join-Path $PackagingDir "assets"
-$DistDir = Join-Path $BaseDir "dist\homie"
+$DistDir = Join-Path $BaseDir "dist\helm"
 if (-not (Test-Path $DistDir)) {
-    $AltDist = Join-Path $BaseDir "dist\Homie"
+    $AltDist = Join-Path $BaseDir "dist\Helm"
     if (Test-Path $AltDist) {
         $DistDir = $AltDist
     }
 }
-$OutputMsix = Join-Path $BaseDir "dist\Homie.msix"
+$OutputMsix = Join-Path $BaseDir "dist\Helm.msix"
 
 Write-Host "============================================================" -ForegroundColor Magenta
-Write-Host " Homie MSIX Packaging Toolchain (Version: $Version)" -ForegroundColor Magenta
+Write-Host " Helm MSIX Packaging Toolchain (Version: $Version)" -ForegroundColor Magenta
 Write-Host "============================================================" -ForegroundColor Magenta
 Write-Info "Base Directory:      $BaseDir"
 Write-Info "Packaging Directory: $PackagingDir"
@@ -108,8 +108,8 @@ icons = [
     ('Square150x150Logo.png', (150, 150), 'H'),
     ('Square310x310Logo.png', (310, 310), 'H'),
     ('StoreLogo.png', (50, 50), 'H'),
-    ('Wide310x150Logo.png', (310, 150), 'Homie'),
-    ('SplashScreen.png', (620, 300), 'Homie Desktop AI'),
+    ('Wide310x150Logo.png', (310, 150), 'Helm'),
+    ('SplashScreen.png', (620, 300), 'Helm Desktop AI'),
 ]
 
 for filename, size, text in icons:
@@ -160,7 +160,7 @@ $ManifestXml = @"
     <DisplayName>$DisplayName</DisplayName>
     <PublisherDisplayName>$PublisherDisplayName</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
-    <Description>Homie - Autonomous AI Desktop Companion for Windows</Description>
+    <Description>Helm - Autonomous AI Desktop Companion for Windows</Description>
   </Properties>
 
   <Resources>
@@ -176,10 +176,10 @@ $ManifestXml = @"
   </Capabilities>
 
   <Applications>
-    <Application Id="Homie" Executable="Homie.exe" EntryPoint="Windows.FullTrustApplication">
+    <Application Id="Helm" Executable="Helm.exe" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
         DisplayName="$DisplayName"
-        Description="Homie - Autonomous AI Desktop Companion"
+        Description="Helm - Autonomous AI Desktop Companion"
         BackgroundColor="#1E1E2E"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png">
@@ -196,11 +196,11 @@ $ManifestXml = @"
       </uap:VisualElements>
       <Extensions>
         <uap:Extension Category="windows.fileTypeAssociation">
-          <uap:FileTypeAssociation Name="homiefile">
-            <uap:DisplayName>Homie Workflow File</uap:DisplayName>
+          <uap:FileTypeAssociation Name="helmfile">
+            <uap:DisplayName>Helm Workflow File</uap:DisplayName>
             <uap:Logo>Assets\Square44x44Logo.png</uap:Logo>
             <uap:SupportedFileTypes>
-              <uap:FileType>.homie</uap:FileType>
+              <uap:FileType>.helm</uap:FileType>
               <uap:FileType>.hnote</uap:FileType>
             </uap:SupportedFileTypes>
           </uap:FileTypeAssociation>
@@ -221,10 +221,10 @@ if ($DryRun) {
 } elseif ($SkipBuildExe) {
     Write-Info "SkipBuildExe specified: skipping PyInstaller compilation."
 } else {
-    Write-Info "Executing: pyinstaller homie.spec --clean --noconfirm"
+    Write-Info "Executing: pyinstaller helm.spec --clean --noconfirm"
     Push-Location $BaseDir
     try {
-        & pyinstaller homie.spec --clean --noconfirm
+        & pyinstaller helm.spec --clean --noconfirm
         if ($LASTEXITCODE -ne 0) {
             throw "PyInstaller exited with status code $LASTEXITCODE"
         }
@@ -329,7 +329,7 @@ if ($SkipSign) {
             } catch {
                 Write-WarningMsg "Auto-signing did not find a matching installed certificate."
                 Write-Info "To create a self-signed dev cert, run:"
-                Write-Info '  New-SelfSignedCertificate -Type Custom -Subject "' + $Publisher + '" -KeyUsage DigitalSignature -FriendlyName "Homie Dev Cert" -CertStoreLocation "Cert:\CurrentUser\My" -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3")'
+                Write-Info '  New-SelfSignedCertificate -Type Custom -Subject "' + $Publisher + '" -KeyUsage DigitalSignature -FriendlyName "Helm Dev Cert" -CertStoreLocation "Cert:\CurrentUser\My" -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3")'
             }
         }
     } else {

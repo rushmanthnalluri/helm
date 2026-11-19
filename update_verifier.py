@@ -1,4 +1,4 @@
-"""update_verifier.py - Asymmetric Ed25519 Signed Update Verification for Homie.
+"""update_verifier.py - Asymmetric Ed25519 Signed Update Verification for Helm.
 
 Hardened according to Batch 25 & 26 directives:
 - Asymmetric Ed25519 signature: Verified using pinned publisher public key (PINNED_PUBLISHER_KEY_PEM).
@@ -7,7 +7,7 @@ Hardened according to Batch 25 & 26 directives:
   Fails closed if version epoch is absent or invalid.
 - Strict Manifest Payload Equality: Requires set(payload_files.keys()) == set(manifest["files"].keys()).
 - Canonical Encoding & Strict Hex SHA-256: Canonical JSON with length prefix, 64-char hex digests.
-- Hardened Staging: Staging directory (.homie_staging) is hardened with owner-only DACL before writing.
+- Hardened Staging: Staging directory (.helm_staging) is hardened with owner-only DACL before writing.
 - Journaled Atomic Replacement & Rollback: Files swapped via os.replace with backup rollback on failure.
 - Cryptographically Bound Action Approval: Requires single-use SignedActionApproval from paired phone,
   bound to SHA-256(canonical_manifest_bytes). Rejects booleans and unbound bearer tokens.
@@ -35,11 +35,11 @@ if BASE_DIR not in sys.path:
 
 import agent_audit_ledger
 import phone_approval_portal
-import homie_confinement
+import helm_confinement
 
-logger = logging.getLogger("homie.update_verifier")
+logger = logging.getLogger("helm.update_verifier")
 
-# Pinned Ed25519 publisher public key for official Homie software releases (Rotated Batch 34)
+# Pinned Ed25519 publisher public key for official Helm software releases (Rotated Batch 34)
 PINNED_PUBLISHER_KEY_PEM = """-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAXBYS0+c64gbsT95CnpeMWWQVQkfK7xSjwbld5xs4MGU=
 -----END PUBLIC KEY-----"""
@@ -54,12 +54,12 @@ def get_publisher_key_der_hash() -> str:
 assert get_publisher_key_der_hash() == PINNED_PUBLISHER_KEY_SHA256, "Publisher key integrity violation: SHA256 mismatch!"
 
 PROTECTED_SYSTEM_FILES = {
-    ".homie_vault.key",
-    ".homie_device_keys.json",
-    "homie.db",
-    "homie_audit_ledger.db",
-    "homie_supervisor_dirty.flag",
-    "homie_supervisor_crashes.json",
+    ".helm_vault.key",
+    ".helm_device_keys.json",
+    "helm.db",
+    "helm_audit_ledger.db",
+    "helm_supervisor_dirty.flag",
+    "helm_supervisor_crashes.json",
 }
 
 WINDOWS_RESERVED_NAMES = {
@@ -68,8 +68,8 @@ WINDOWS_RESERVED_NAMES = {
     "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"
 }
 
-VERSION_TRACKER_PATH = os.path.join(BASE_DIR, "homie_installed_version.json")
-STAGING_DIR = os.path.join(BASE_DIR, ".homie_staging")
+VERSION_TRACKER_PATH = os.path.join(BASE_DIR, "helm_installed_version.json")
+STAGING_DIR = os.path.join(BASE_DIR, ".helm_staging")
 
 
 def get_installed_version_epoch() -> int:
@@ -111,7 +111,7 @@ def compute_manifest_canonical_bytes(manifest: Dict[str, Any]) -> bytes:
         "files": {str(k): str(v).lower() for k, v in sorted(manifest.get("files", {}).items())}
     }
     canonical_json = json.dumps(clean_manifest, sort_keys=True, separators=(',', ':')).encode('utf-8')
-    prefix = f"HOMIE_UPDATE_V3:{len(canonical_json)}:".encode('ascii')
+    prefix = f"HELM_UPDATE_V3:{len(canonical_json)}:".encode('ascii')
     return prefix + canonical_json
 
 
@@ -187,7 +187,7 @@ def apply_verified_update(
     manifest_hash = hashlib.sha256(manifest_bytes).hexdigest()
 
     app_ok, app_msg = phone_approval_portal.verify_action_approval(
-        approval, "homie_apply_update", manifest_hash
+        approval, "helm_apply_update", manifest_hash
     )
     if not app_ok:
         return False, f"DENY: Human action approval verification failed: {app_msg}", []
@@ -202,8 +202,8 @@ def apply_verified_update(
         return False, f"Security Gate: Update rejected: {msg}", []
 
     root = os.path.realpath(target_dir or BASE_DIR)
-    staging = os.path.join(root, ".homie_staging")
-    backup_dir = os.path.join(root, ".homie_backup")
+    staging = os.path.join(root, ".helm_staging")
+    backup_dir = os.path.join(root, ".helm_backup")
     updated = []
     journal = []
 
@@ -212,7 +212,7 @@ def apply_verified_update(
         if os.path.exists(staging):
             shutil.rmtree(staging)
         os.makedirs(staging, exist_ok=True)
-        homie_confinement.harden_path(staging)
+        helm_confinement.harden_path(staging)
 
         # 5. Stage all payload files and verify SHA-256 directly in staging (closing TOCTOU)
         for rel_path, content in payload_files.items():
@@ -266,7 +266,7 @@ def apply_verified_update(
         # 8. Record to HMAC-SHA256 audit ledger
         try:
             agent_audit_ledger.record_agent_action(
-                f"approval_{approval.get('device_id', 'phone')}", "homie_apply_update", "WRITE_EXEC",
+                f"approval_{approval.get('device_id', 'phone')}", "helm_apply_update", "WRITE_EXEC",
                 {"version": manifest["version"], "epoch": manifest["version_epoch"], "files_count": len(updated)},
                 decision="ALLOW_VERIFIED_UPDATE"
             )

@@ -1,9 +1,9 @@
-"""Homie Workflow Compiler & Macro Orchestrator.
+"""Helm Workflow Compiler & Macro Orchestrator.
 Compiles successful multi-step agent runs into named, deterministic, parameterized workflows:
 - Compiles recorded UIA actions into reusable macros
 - Replays execute deterministically at <50ms bypassing LLM latency
 - Supports parameterized variable substitution (e.g. {query}, {app}, {text})
-- Saves to ~/.config/homie/macros.json for instant recall via voice, HUD, and Telegram
+- Saves to ~/.config/helm/macros.json for instant recall via voice, HUD, and Telegram
 """
 
 import os
@@ -16,9 +16,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-import homie
+import helm
 
-logger = logging.getLogger("homie.workflow_compiler")
+logger = logging.getLogger("helm.workflow_compiler")
 
 def compile_agent_steps_to_macro(macro_name, steps, description="Compiled autonomous workflow"):
     """Compiles a list of desktop agent action steps into a reproducible fast macro."""
@@ -43,10 +43,10 @@ def compile_agent_steps_to_macro(macro_name, steps, description="Compiled autono
                 "text": s.get("text", "")
             })
 
-    # Save to homie macros.json
-    macros = homie.get_macros()
+    # Save to helm macros.json
+    macros = helm.get_macros()
     macros[clean_name] = actions
-    path = getattr(homie, 'MACROS_FILE', os.path.join(os.path.expanduser('~'), '.config', 'homie', 'macros.json'))
+    path = getattr(helm, 'MACROS_FILE', os.path.join(os.path.expanduser('~'), '.config', 'helm', 'macros.json'))
     try:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(macros, f, indent=2)
@@ -58,7 +58,7 @@ def compile_agent_steps_to_macro(macro_name, steps, description="Compiled autono
 
 def replay_compiled_macro(macro_name, params=None, dry_run=False):
     """Replays a compiled workflow deterministically with parameter substitution."""
-    macros = homie.get_macros()
+    macros = helm.get_macros()
     clean_name = macro_name.lower().strip().replace(" ", "_")
     actions = macros.get(clean_name)
     if not actions:
@@ -83,6 +83,6 @@ def replay_compiled_macro(macro_name, params=None, dry_run=False):
     if dry_run:
         return True, f"[DRY-RUN] Replay plan for '{clean_name}':\n" + "\n".join(executed)
 
-    # Invoke homie.execute_macro
-    ok, msg = homie.execute_macro(clean_name)
+    # Invoke helm.execute_macro
+    ok, msg = helm.execute_macro(clean_name)
     return ok, msg

@@ -18,7 +18,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-import homie_mcp
+import helm_mcp
 import taint_tracker
 import kill_switch
 import canary_monitor
@@ -50,7 +50,7 @@ class TestBatch16PrivilegeSeparation(unittest.TestCase):
         orig_fn = windows_tools.is_prohibited_target_process
         try:
             windows_tools.is_prohibited_target_process = lambda hwnd=None: (True, "Prohibited process image: 'powershell.exe'")
-            res_hostile = homie_mcp.execute_mcp_tool("homie_agent_click", {"x": 50, "y": 50, "element_name": "HostileShellClick"})
+            res_hostile = helm_mcp.execute_mcp_tool("helm_agent_click", {"x": 50, "y": 50, "element_name": "HostileShellClick"})
             self.assertIn("Security Gate:", res_hostile)
             self.assertIn("Input denied", res_hostile)
         finally:
@@ -58,13 +58,13 @@ class TestBatch16PrivilegeSeparation(unittest.TestCase):
 
         # 2. Direct call when session is tainted
         taint_tracker.mark_session_tainted("compromised_agent_session")
-        res_tainted = homie_mcp.execute_mcp_tool("homie_snap_window", {"app_name": "notepad", "position": "left"}, caller_id="compromised_agent_session")
+        res_tainted = helm_mcp.execute_mcp_tool("helm_snap_window", {"app_name": "notepad", "position": "left"}, caller_id="compromised_agent_session")
         self.assertIn("Security Gate:", res_tainted)
         self.assertIn("STEP_UP_REQUIRED", res_tainted)
 
         # 3. Direct call when kill switch is engaged
         kill_switch.engage_kill_switch("Compromise detected")
-        res_kill = homie_mcp.execute_mcp_tool("homie_snap_window", {"app_name": "notepad", "position": "left"})
+        res_kill = helm_mcp.execute_mcp_tool("helm_snap_window", {"app_name": "notepad", "position": "left"})
         self.assertIn("Security Gate:", res_kill)
         self.assertIn("Emergency kill switch is active", res_kill)
 
@@ -74,7 +74,7 @@ class TestBatch16PrivilegeSeparation(unittest.TestCase):
         b64_canary = base64.b64encode(canary.encode("utf-8")).decode("ascii")
 
         # Exfiltrate base64 token
-        res_b64 = homie_mcp.execute_mcp_tool("homie_set_clipboard", {"text": f"leak={b64_canary}"}, caller_id="exfil_agent")
+        res_b64 = helm_mcp.execute_mcp_tool("helm_set_clipboard", {"text": f"leak={b64_canary}"}, caller_id="exfil_agent")
         self.assertIn("Security Gate:", res_b64)
         self.assertIn("LEAK_DETECTED", res_b64)
         self.assertTrue(kill_switch.is_kill_switch_active())
@@ -85,7 +85,7 @@ class TestBatch16PrivilegeSeparation(unittest.TestCase):
 
         # Exfiltrate hex token
         hex_canary = canary.encode("utf-8").hex()
-        res_hex = homie_mcp.execute_mcp_tool("homie_set_clipboard", {"text": f"payload={hex_canary}"}, caller_id="exfil_agent")
+        res_hex = helm_mcp.execute_mcp_tool("helm_set_clipboard", {"text": f"payload={hex_canary}"}, caller_id="exfil_agent")
         self.assertIn("Security Gate:", res_hex)
         self.assertTrue(kill_switch.is_kill_switch_active())
 
@@ -104,7 +104,7 @@ class TestBatch16PrivilegeSeparation(unittest.TestCase):
         shadow_mode.set_shadow_mode(True)
         self.assertTrue(shadow_mode.is_shadow_mode_active())
 
-        res = homie_mcp.execute_mcp_tool("homie_set_clipboard", {"text": "shadow_test_value"}, caller_id="shadow_agent")
+        res = helm_mcp.execute_mcp_tool("helm_set_clipboard", {"text": "shadow_test_value"}, caller_id="shadow_agent")
         self.assertIn("[SHADOW MODE]", res)
         self.assertIn("Simulated execution", res)
 
@@ -123,12 +123,12 @@ class TestBatch16PrivilegeSeparation(unittest.TestCase):
 
     def test_dispatcher_bypass_path_enumeration(self):
         """Enumerates every declared MCP tool to verify each routes through execute_mcp_tool."""
-        declared_tools = [t["name"] for t in homie_mcp.MCP_TOOLS]
+        declared_tools = [t["name"] for t in helm_mcp.MCP_TOOLS]
         self.assertGreaterEqual(len(declared_tools), 9)
 
         for tname in declared_tools:
             # Invoking with invalid args should return clean error or output, never unhandled exception
-            out = homie_mcp.execute_mcp_tool(tname, {}, caller_id="enum_tester")
+            out = helm_mcp.execute_mcp_tool(tname, {}, caller_id="enum_tester")
             self.assertIsInstance(out, str)
             self.assertNotIn("Traceback", out)
 

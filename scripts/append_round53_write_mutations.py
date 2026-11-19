@@ -19,15 +19,15 @@ addition = '''        "test_cmd": [sys.executable, "-m", "unittest", "tests.test
     {
         "id": "MUTATION_111_MAIL_SEND_WEBAUTHN_BYPASS",
         "name": "Bypass WebAuthn Assertion Check in MailConnector.send",
-        "file": os.path.join(BASE_DIR, "homie_mail_calendar.py"),
+        "file": os.path.join(BASE_DIR, "helm_mail_calendar.py"),
         "target": '        webauthn_verifier.verify_assertion(rp, cred, assertion_response, challenge_bytes, challenge_store)',
         "replacement": '        pass # MUTATION_111_BYPASS_MAIL_SEND_WEBAUTHN',
         "test_cmd": [sys.executable, "-m", "unittest", "tests.test_mail_calendar.TestMailCalendarWorkflows.test_10_send_denied_with_wrong_challenge_or_forged_assertion"]
     },
     {
         "id": "MUTATION_112_BROWSER_TOCTOU_WEBAUTHN_BYPASS",
-        "name": "Bypass Gated Submit TOCTOU Check in homie_browser_broker.py",
-        "file": os.path.join(BASE_DIR, "homie_browser_broker.py"),
+        "name": "Bypass Gated Submit TOCTOU Check in helm_browser_broker.py",
+        "file": os.path.join(BASE_DIR, "helm_browser_broker.py"),
         "target": '        if current_snap.snapshot_hash != prior_snapshot.snapshot_hash:',
         "replacement": '        if False: # MUTATION_112_BYPASS_TOCTOU',
         "test_cmd": [sys.executable, "-m", "unittest", "tests.test_browser_broker.TestBrowserBroker.test_7_browser_gated_submit_with_webauthn_and_toctou"]

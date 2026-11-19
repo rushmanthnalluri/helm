@@ -12,7 +12,7 @@ test6 = '''
             PolicyEnvelope(
                 envelope_id="env_ui",
                 allowed_process_images=["notepad.exe"],
-                allowed_action_types=["homie_agent_type"],
+                allowed_action_types=["helm_agent_type"],
                 step_budget=5,
                 keystroke_cap=100,
                 expiry=time.time() + 300,
@@ -26,7 +26,7 @@ test6 = '''
             PolicyEnvelope(
                 envelope_id="env_worker",
                 allowed_process_images=["notepad.exe"],
-                allowed_action_types=["homie_agent_type"],
+                allowed_action_types=["helm_agent_type"],
                 step_budget=5,
                 keystroke_cap=100,
                 expiry=time.time() + 300,

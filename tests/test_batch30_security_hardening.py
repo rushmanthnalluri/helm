@@ -27,7 +27,7 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 import phone_approval_portal
-import homie_supervisor
+import helm_supervisor
 import phone_gateway
 import taint_tracker
 import agent_audit_ledger
@@ -63,8 +63,8 @@ class TestBatch30SecurityHardening(unittest.TestCase):
 
     def test_1_supervisor_fail_open_prevented_on_non_stepup_deny(self):
         """Vector 1: When action privilege check returns (False, False), proposal must DENY, never fall through."""
-        supervisor = homie_supervisor.PolicySupervisor()
-        supervisor.state = homie_supervisor.STATE_ARMED
+        supervisor = helm_supervisor.PolicySupervisor()
+        supervisor.state = helm_supervisor.STATE_ARMED
         import heartbeat_lease
         supervisor.lease_token, _ = heartbeat_lease.acquire_lease("supervisor_worker", duration=5.0)
 
@@ -74,39 +74,39 @@ class TestBatch30SecurityHardening(unittest.TestCase):
         try:
             payload = {
                 "req_id": "req_deny_01",
-                "tool": "homie_snap_window",
+                "tool": "helm_snap_window",
                 "args": {"app_name": "notepad"},
             }
             reply_bytes = supervisor._handle_propose(payload, seq=1)
-            _, _, _, reply, _ = homie_supervisor.BinaryFrameCodec.decode_frame(reply_bytes)
+            _, _, _, reply, _ = helm_supervisor.BinaryFrameCodec.decode_frame(reply_bytes)
             self.assertEqual(reply["status"], "DENY", "Hard policy deny must return DENY, never fall through to mint!")
-            self.assertEqual(reply["reason_code"], homie_supervisor.REASON_TAINTED_EXECUTION)
+            self.assertEqual(reply["reason_code"], helm_supervisor.REASON_TAINTED_EXECUTION)
         finally:
             taint_tracker.check_action_privilege = orig_check
             supervisor.clean_shutdown()
 
     def test_2_supervisor_rejects_non_dict_arguments(self):
         """Vector 2: Supervisor must validate args is a dictionary up front, rejecting malformed types."""
-        supervisor = homie_supervisor.PolicySupervisor()
-        supervisor.state = homie_supervisor.STATE_ARMED
+        supervisor = helm_supervisor.PolicySupervisor()
+        supervisor.state = helm_supervisor.STATE_ARMED
 
         for bad_args in ["string_payload", [1, 2, 3], None, 12345]:
             payload = {
                 "req_id": "req_bad_args",
-                "tool": "homie_snap_window",
+                "tool": "helm_snap_window",
                 "args": bad_args
             }
             reply_bytes = supervisor._handle_propose(payload, seq=1)
-            _, _, _, reply, _ = homie_supervisor.BinaryFrameCodec.decode_frame(reply_bytes)
+            _, _, _, reply, _ = helm_supervisor.BinaryFrameCodec.decode_frame(reply_bytes)
             self.assertIn("error", reply)
-            self.assertEqual(reply.get("reason_code"), homie_supervisor.REASON_MALFORMED_FRAME)
+            self.assertEqual(reply.get("reason_code"), helm_supervisor.REASON_MALFORMED_FRAME)
 
         supervisor.clean_shutdown()
 
     def test_3_supervisor_envelope_enforcement_in_handle_propose(self):
         """Vector 3: PolicyEnvelope domain scoping & image restrictions must be enforced inside _handle_propose."""
-        supervisor = homie_supervisor.PolicySupervisor()
-        supervisor.state = homie_supervisor.STATE_ARMED
+        supervisor = helm_supervisor.PolicySupervisor()
+        supervisor.state = helm_supervisor.STATE_ARMED
         import heartbeat_lease
         supervisor.lease_token, _ = heartbeat_lease.acquire_lease("supervisor_worker", duration=5.0)
 
@@ -114,7 +114,7 @@ class TestBatch30SecurityHardening(unittest.TestCase):
         envelope = policy_envelope.PolicyEnvelope(
             envelope_id="env_test_01",
             allowed_process_images=["chrome.exe"],
-            allowed_action_types=["homie_launch_app"],
+            allowed_action_types=["helm_launch_app"],
             step_budget=5,
             keystroke_cap=100,
             expiry=time.time() + 60.0,
@@ -127,11 +127,11 @@ class TestBatch30SecurityHardening(unittest.TestCase):
         # Propose navigating to evil.com
         payload = {
             "req_id": "req_env_01",
-            "tool": "homie_launch_app",
+            "tool": "helm_launch_app",
             "args": {"target": "https://evil.com/phish", "domain": "evil.com"}
         }
         reply_bytes = supervisor._handle_propose(payload, seq=1)
-        _, _, _, reply, _ = homie_supervisor.BinaryFrameCodec.decode_frame(reply_bytes)
+        _, _, _, reply, _ = helm_supervisor.BinaryFrameCodec.decode_frame(reply_bytes)
         self.assertEqual(reply["status"], "DENY")
         self.assertIn("envelope", reply.get("reason", "").lower())
 
@@ -139,8 +139,8 @@ class TestBatch30SecurityHardening(unittest.TestCase):
 
     def test_4_supervisor_audit_outcome_written_in_finally(self):
         """Vector 4: Audit ledger OUTCOME entry must be recorded in a finally block even on tool execution exception."""
-        supervisor = homie_supervisor.PolicySupervisor()
-        supervisor.state = homie_supervisor.STATE_ARMED
+        supervisor = helm_supervisor.PolicySupervisor()
+        supervisor.state = helm_supervisor.STATE_ARMED
         import heartbeat_lease
         supervisor.lease_token, _ = heartbeat_lease.acquire_lease("supervisor_worker", duration=5.0)
 
@@ -153,11 +153,11 @@ class TestBatch30SecurityHardening(unittest.TestCase):
         try:
             payload = {
                 "req_id": "req_crash_01",
-                "tool": "homie_get_vitals",
+                "tool": "helm_get_vitals",
                 "args": {}
             }
             reply_bytes = supervisor._handle_propose(payload, seq=1)
-            _, _, _, reply, _ = homie_supervisor.BinaryFrameCodec.decode_frame(reply_bytes)
+            _, _, _, reply, _ = helm_supervisor.BinaryFrameCodec.decode_frame(reply_bytes)
             self.assertEqual(reply["status"], "DENY")
             self.assertIn("crash", reply.get("result", ""))
 
@@ -273,7 +273,7 @@ class TestBatch30SecurityHardening(unittest.TestCase):
         """Vector 9: POST /api/deny-challenge actively purges the challenge from the server."""
         ch = phone_approval_portal.generate_approval_challenge(
             step_up_id="step_deny_001",
-            tool_name="homie_snap_window",
+            tool_name="helm_snap_window",
             arguments={},
             session_id="sess_deny",
             taint_epoch=0,

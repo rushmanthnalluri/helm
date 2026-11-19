@@ -4,7 +4,7 @@ with open("tests/test_rails_safety.py", "r", encoding="utf-8") as f:
 # 1. First ToolSpec in test_consequential_action_stops_and_requires_confirmation
 old_ts1 = '''    registry.register(
         ToolSpec(
-            name="homie_set_clipboard",
+            name="helm_set_clipboard",
             description="Overwrite clipboard",
             parameters={"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
             capability_tier="CONSEQUENTIAL",
@@ -15,7 +15,7 @@ old_ts1 = '''    registry.register(
 
 new_ts1 = '''    registry.register(
         ToolSpec(
-            name="homie_set_clipboard",
+            name="helm_set_clipboard",
             description="Overwrite clipboard",
             parameters={"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
             capability_tier="CONSEQUENTIAL",
@@ -63,7 +63,7 @@ text = text.replace(old_ts2, new_ts2)
 # 3. Third ToolSpec in test_kill_switch_pauses_proactive_work_while_conversation_lives
 old_ts3 = '''    registry.register(
         ToolSpec(
-            name="homie_set_clipboard",
+            name="helm_set_clipboard",
             description="Clipboard write",
             parameters={"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
             capability_tier="CONSEQUENTIAL",
@@ -74,7 +74,7 @@ old_ts3 = '''    registry.register(
 
 new_ts3 = '''    registry.register(
         ToolSpec(
-            name="homie_set_clipboard",
+            name="helm_set_clipboard",
             description="Clipboard write",
             parameters={"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]},
             capability_tier="CONSEQUENTIAL",

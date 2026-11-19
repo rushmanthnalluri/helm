@@ -3,7 +3,7 @@
   "name": "Spotify Media Controller",
   "version": "1.2.0",
   "description": "Control playback, browse playlists, search tracks and podcasts via Spotify Web API.",
-  "author": "Homie Community",
+  "author": "Helm Community",
   "category": "Media",
   "capabilities": ["network:api.spotify.com"],
   "tools": [

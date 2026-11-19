@@ -1,4 +1,4 @@
-"""Homie Worker Process Confinement & Job Object Sandbox (Batch 18A).
+"""Helm Worker Process Confinement & Job Object Sandbox (Batch 18A).
 
 Enforces hardware-grade OS-level confinement on untrusted agent worker processes:
 1. Windows Job Object Confinement:
@@ -33,14 +33,14 @@ if BASE_DIR not in sys.path:
 import canary_monitor
 import kill_switch
 
-logger = logging.getLogger("homie.confinement")
+logger = logging.getLogger("helm.confinement")
 
 
 class WorkerJobSandbox:
     """Windows Job Object sandbox confining untrusted worker processes."""
 
     def __init__(self, job_name: Optional[str] = None):
-        self.job_name = job_name or f"HomieWorkerJob_{os.getpid()}_{int(time.time()*1000)}"
+        self.job_name = job_name or f"HelmWorkerJob_{os.getpid()}_{int(time.time()*1000)}"
         self.hjob = None
         self._init_job_object()
 
@@ -134,7 +134,7 @@ class SupervisorLLMProxy:
 
     def __init__(self, api_key: Optional[str] = None, mock_mode: bool = False):
         self.api_key = api_key or os.environ.get("GEMINI_API_KEY", "")
-        self.mock_mode = mock_mode or (os.environ.get("HOMIE_TEST_ENV") == "1")
+        self.mock_mode = mock_mode or (os.environ.get("HELM_TEST_ENV") == "1")
 
     def proxy_completion(self, prompt: str, caller_id: str = "worker") -> Tuple[bool, str]:
         """Validates and executes an LLM completion on behalf of a network-restricted worker."""

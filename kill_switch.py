@@ -1,4 +1,4 @@
-"""Homie Global Emergency Kill Switch & Hardware Interrupter.
+"""Helm Global Emergency Kill Switch & Hardware Interrupter.
 Provides instantaneous, zero-latency execution termination:
 - Emergency hotkey binding (Ctrl+Alt+Shift+Esc or programmatic signal)
 - Halts all active desktop agent actions immediately
@@ -19,7 +19,7 @@ if BASE_DIR not in sys.path:
 import desktop_agent
 import taint_tracker
 
-logger = logging.getLogger("homie.kill_switch")
+logger = logging.getLogger("helm.kill_switch")
 
 _KILL_SWITCH_ACTIVE = False
 _ENGAGED_AT = None

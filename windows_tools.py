@@ -1,4 +1,4 @@
-"""Windows Native Automation Tools for Homie.
+"""Windows Native Automation Tools for Helm.
 Provides window management, multi-monitor geometry, screen captures,
 media keys, app launching, and simulated input.
 """
@@ -17,7 +17,7 @@ import win32process
 from PIL import ImageGrab, Image, ImageDraw, ImageFont
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-logger = logging.getLogger("homie.windows_tools")
+logger = logging.getLogger("helm.windows_tools")
 
 VK_MAP: Dict[str, int] = {
     # Enter / Return
@@ -624,7 +624,7 @@ def click_at(x: int, y: int, button: str = "left") -> bool:
     """Convenience alias for dpi_click."""
     return dpi_click(x, y, button=button)
 
-# Note: Any legacy pyautogui.click(x, y) calls across Homie tools should use dpi_click(x, y) for mixed-DPI accuracy.
+# Note: Any legacy pyautogui.click(x, y) calls across Helm tools should use dpi_click(x, y) for mixed-DPI accuracy.
 
 def force_foreground_window(hwnd):
     """Guarantees bringing a window to the true foreground on Windows 10/11,
@@ -789,10 +789,10 @@ def is_prohibited_target_process(hwnd=None):
     pid = info.get("pid")
     title = (info.get("title") or "").lower()
     if pid and pid == os.getpid():
-        return True, f"Prohibited self-targeting: synthetic input into Homie assistant process (PID: {pid}) is barred"
+        return True, f"Prohibited self-targeting: synthetic input into Helm assistant process (PID: {pid}) is barred"
     try:
-        if win32gui.GetProp(target_hwnd, "HOMIE_PROTECTED_UI"):
-            return True, "Prohibited self-targeting: synthetic input into Homie protected window is barred"
+        if win32gui.GetProp(target_hwnd, "HELM_PROTECTED_UI"):
+            return True, "Prohibited self-targeting: synthetic input into Helm protected window is barred"
     except Exception:
         pass
     exe_path = info.get("exe_path") or ""
@@ -801,7 +801,7 @@ def is_prohibited_target_process(hwnd=None):
             cand = os.path.normcase(os.path.abspath(exe_path))
             base = os.path.normcase(os.path.abspath(BASE_DIR))
             if os.path.commonpath([cand, base]) == base:
-                return True, f"Prohibited self-targeting: synthetic input into Homie application image '{exe_path}' is barred"
+                return True, f"Prohibited self-targeting: synthetic input into Helm application image '{exe_path}' is barred"
         except Exception:
             pass
 
@@ -944,7 +944,7 @@ def capture_screens():
     ensure_desktop_attached()
     monitors = get_monitors()
     captured_files = []
-    tmp_dir = os.path.join(tempfile.gettempdir(), 'homie-screens')
+    tmp_dir = os.path.join(tempfile.gettempdir(), 'helm-screens')
     os.makedirs(tmp_dir, exist_ok=True)
 
     # 1. Try mss capture
@@ -1430,8 +1430,8 @@ def send_chat_message(app_name, recipient="", message=""):
     # Telegram commands, so enforce the preference here rather than relying on
     # any individual caller to remember the policy.
     try:
-        import homie
-        if homie.get_prefs().get('safe', True):
+        import helm
+        if helm.get_prefs().get('safe', True):
             app_disp = "WhatsApp" if app_name.lower() == "whatsapp" else app_name.capitalize()
             return False, f"Blocked by Safe Mode. Turn Safe Mode off to send a {app_disp} message."
     except Exception as e:

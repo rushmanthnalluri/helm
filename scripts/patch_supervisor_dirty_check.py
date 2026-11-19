@@ -1,6 +1,6 @@
 import re
 
-with open("homie_supervisor.py", "rb") as f:
+with open("helm_supervisor.py", "rb") as f:
     content = f.read().decode("utf-8")
 
 old_init = """    def __init__(self, authorized_worker_pid: Optional[int] = None, state_db_path: Optional[str] = None):
@@ -40,7 +40,7 @@ if crlf:
 else:
     final_content = content_norm
 
-with open("homie_supervisor.py", "wb") as f:
+with open("helm_supervisor.py", "wb") as f:
     f.write(final_content.encode("utf-8"))
 
-print("Successfully patched homie_supervisor.py")
+print("Successfully patched helm_supervisor.py")

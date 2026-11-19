@@ -1,4 +1,4 @@
-"""Quick Note Taker and Scratchpad for Homie.
+"""Quick Note Taker and Scratchpad for Helm.
 Stores quick notes, ideas, code snippets, and scratchpad items with instant pinning,
 accessible across the desktop system tray HUD and Telegram remote control.
 """

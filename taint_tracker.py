@@ -1,4 +1,4 @@
-"""Homie Session Taint Tracker & Out-of-Band Step-Up Approval Gate.
+"""Helm Session Taint Tracker & Out-of-Band Step-Up Approval Gate.
 Protects against indirect prompt injection and autonomous agent privilege escalation:
 - Taint Tracking: Marks a session as TAINTED whenever SENSITIVE_READ or untrusted content is ingested.
 - Taint Enforcement: Any subsequent WRITE_EXEC tool call in a tainted session is intercepted
@@ -22,7 +22,7 @@ if BASE_DIR not in sys.path:
 
 import db_utils
 
-logger = logging.getLogger("homie.taint_tracker")
+logger = logging.getLogger("helm.taint_tracker")
 
 _TAINTED_SESSIONS = {}  # session_id -> {tainted_at, source, details}
 _PENDING_STEP_UPS = {}  # step_up_id -> {session_id, tool_name, args, args_hash, created_at, expires_at}
@@ -33,11 +33,11 @@ _WORKSTATION_TAINTED = False
 # and push-to-talk adapters may use them while tainted; model tools and remote
 # clients still require the ordinary step-up path.
 _LOCAL_REVERSIBLE_TOOLS = {
-    "homie_snap_window",
-    "homie_launch_app",
-    "homie_play_youtube",
-    "homie_place_window",
-    "homie_control_media",
+    "helm_snap_window",
+    "helm_launch_app",
+    "helm_play_youtube",
+    "helm_place_window",
+    "helm_control_media",
 }
 _LOCAL_USER_CALLERS = {"desktop_user", "desktop_voice"}
 _STANDALONE_MODE = False

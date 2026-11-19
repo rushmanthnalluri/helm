@@ -1,4 +1,4 @@
-"""Homie Semantic Screen Memory & Recall.
+"""Helm Semantic Screen Memory & Recall.
 Inspired by Screenpipe and Rewind AI, this provides a local-first, privacy-aware
 timeline memory layer for Windows:
 - Hardware-accelerated OCR extraction via Windows.Media.Ocr / screen_ocr_engine
@@ -32,7 +32,7 @@ try:
 except ImportError:
     screen_ocr_engine = None
 
-logger = logging.getLogger("homie.screen_memory")
+logger = logging.getLogger("helm.screen_memory")
 
 # The monitor is started by the desktop app during normal startup. Keep these
 # lifecycle flags initialized so that the first start does not fail before the

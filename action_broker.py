@@ -1,4 +1,4 @@
-"""action_broker.py - Single Unified Policy and Execution Broker for Homie.
+"""action_broker.py - Single Unified Policy and Execution Broker for Helm.
 
 Coordinates and strictly mediates ALL workstation actions across:
 - Desktop Hotkey / Typed Ask (caller_id: "desktop_user")
@@ -32,8 +32,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-import homie_supervisor
-import homie_mcp
+import helm_supervisor
+import helm_mcp
 import agent_audit_ledger
 import kill_switch
 import taint_tracker
@@ -42,7 +42,7 @@ import canary_monitor
 import policy_envelope
 from policy_envelope import PolicyEnvelope, PROHIBITED_ENVELOPE_IMAGES
 
-logger = logging.getLogger("homie.action_broker")
+logger = logging.getLogger("helm.action_broker")
 
 
 def classify_action_risk(tool_name: str, arguments: Optional[Dict[str, Any]] = None) -> str:
@@ -53,7 +53,7 @@ def classify_action_risk(tool_name: str, arguments: Optional[Dict[str, Any]] = N
       file deletion, or financial operations (Tier 3).
     """
     clean_name = (tool_name or "").strip()
-    candidate = clean_name if clean_name.startswith("homie_") else f"homie_{clean_name}"
+    candidate = clean_name if clean_name.startswith("helm_") else f"helm_{clean_name}"
 
     try:
         import trust_tiers
@@ -69,8 +69,8 @@ def classify_action_risk(tool_name: str, arguments: Optional[Dict[str, Any]] = N
         pass
 
     try:
-        import homie_supervisor
-        allowed = homie_supervisor.get_allowed_tools_map()
+        import helm_supervisor
+        allowed = helm_supervisor.get_allowed_tools_map()
         t = allowed.get(candidate) or allowed.get(clean_name, "WRITE_EXEC")
         if t in ("READ_ONLY", "REVERSIBLE"):
             return "LOW"
@@ -83,13 +83,13 @@ def classify_action_risk(tool_name: str, arguments: Optional[Dict[str, Any]] = N
 
 
 class ActionBroker:
-    """The central unified execution broker mediating all Homie capabilities."""
+    """The central unified execution broker mediating all Helm capabilities."""
 
     def __init__(
         self,
-        supervisor_instance: Optional[homie_supervisor.PolicySupervisor] = None,
+        supervisor_instance: Optional[helm_supervisor.PolicySupervisor] = None,
         pipe_client: Optional[Any] = None,
-        pipe_name: str = r"\\.\pipe\homie_supervisor",
+        pipe_name: str = r"\\.\pipe\helm_supervisor",
         standalone_mode: bool = False,
     ):
         self.pipe_name = pipe_name
@@ -97,10 +97,10 @@ class ActionBroker:
         self.envelope: Optional[PolicyEnvelope] = None
 
         if standalone_mode:
-            self.supervisor = homie_supervisor.PolicySupervisor()
-            if self.supervisor.state != homie_supervisor.STATE_LOCKED:
-                self.supervisor.state = homie_supervisor.STATE_ARMED
-            self.client = homie_supervisor.SupervisorClient(self.supervisor)
+            self.supervisor = helm_supervisor.PolicySupervisor()
+            if self.supervisor.state != helm_supervisor.STATE_LOCKED:
+                self.supervisor.state = helm_supervisor.STATE_ARMED
+            self.client = helm_supervisor.SupervisorClient(self.supervisor)
             self.client.connect()
         elif pipe_client:
             self.supervisor = None
@@ -108,20 +108,20 @@ class ActionBroker:
         elif supervisor_instance is not None:
             # Explicit test harness supervisor injection
             self.supervisor = supervisor_instance
-            if self.supervisor.state != homie_supervisor.STATE_LOCKED:
-                self.supervisor.state = homie_supervisor.STATE_ARMED
-            self.client = homie_supervisor.SupervisorClient(self.supervisor)
+            if self.supervisor.state != helm_supervisor.STATE_LOCKED:
+                self.supervisor.state = helm_supervisor.STATE_ARMED
+            self.client = helm_supervisor.SupervisorClient(self.supervisor)
             self.client.connect()
         else:
             # Check if running in strict pipe mode / target architecture
-            require_pipe = os.environ.get("HOMIE_REQUIRE_PIPE") == "1"
-            is_test_env = os.environ.get("HOMIE_TEST_ENV") == "1"
+            require_pipe = os.environ.get("HELM_REQUIRE_PIPE") == "1"
+            is_test_env = os.environ.get("HELM_TEST_ENV") == "1"
 
             if require_pipe or not is_test_env:
                 # Production / target architecture: STRICT PIPE CLIENT.
                 # Process holds NO in-process supervisor, NO intent key, NO actuators!
                 self.supervisor = None
-                self.pipe_client = homie_supervisor.NamedPipeSupervisorClient(pipe_name=self.pipe_name)
+                self.pipe_client = helm_supervisor.NamedPipeSupervisorClient(pipe_name=self.pipe_name)
                 self.client = self.pipe_client
                 try:
                     if self.client.connect(timeout_sec=0.2):
@@ -130,45 +130,45 @@ class ActionBroker:
                     pass
             else:
                 # In-memory test suite backward compatibility
-                self.supervisor = homie_supervisor.PolicySupervisor()
-                if self.supervisor.state != homie_supervisor.STATE_LOCKED:
-                    self.supervisor.state = homie_supervisor.STATE_ARMED
-                self.client = homie_supervisor.SupervisorClient(self.supervisor)
+                self.supervisor = helm_supervisor.PolicySupervisor()
+                if self.supervisor.state != helm_supervisor.STATE_LOCKED:
+                    self.supervisor.state = helm_supervisor.STATE_ARMED
+                self.client = helm_supervisor.SupervisorClient(self.supervisor)
                 self.client.connect()
 
     LEGACY_TOOL_MAP = {
-        "media_control": "homie_control_media",
-        "control_media": "homie_control_media",
-        "place_window": "homie_place_window",
-        "play_youtube": "homie_play_youtube",
-        "open_app_or_url": "homie_launch_app",
-        "launch_app": "homie_launch_app",
-        "lock_pc": "homie_lock_workstation",
-        "get_clipboard": "homie_get_clipboard",
-        "set_clipboard": "homie_set_clipboard",
-        "list_downloads": "homie_list_downloads",
-        "get_system_vitals": "homie_get_vitals",
-        "get_vitals": "homie_get_vitals",
-        "send_chat_message": "homie_send_chat",
-        "send_chat": "homie_send_chat",
-        "close_app": "homie_close_app",
-        "kill_process": "homie_kill_process",
-        "kill_process_by_pid": "homie_kill_process",
-        "capture_screen": "homie_capture_screen",
-        "capture_screens": "homie_capture_screen",
-        "safe_command": "homie_safe_command",
-        "execute_safe_command": "homie_safe_command",
-        "get_top_processes": "homie_get_top_processes",
+        "media_control": "helm_control_media",
+        "control_media": "helm_control_media",
+        "place_window": "helm_place_window",
+        "play_youtube": "helm_play_youtube",
+        "open_app_or_url": "helm_launch_app",
+        "launch_app": "helm_launch_app",
+        "lock_pc": "helm_lock_workstation",
+        "get_clipboard": "helm_get_clipboard",
+        "set_clipboard": "helm_set_clipboard",
+        "list_downloads": "helm_list_downloads",
+        "get_system_vitals": "helm_get_vitals",
+        "get_vitals": "helm_get_vitals",
+        "send_chat_message": "helm_send_chat",
+        "send_chat": "helm_send_chat",
+        "close_app": "helm_close_app",
+        "kill_process": "helm_kill_process",
+        "kill_process_by_pid": "helm_kill_process",
+        "capture_screen": "helm_capture_screen",
+        "capture_screens": "helm_capture_screen",
+        "safe_command": "helm_safe_command",
+        "execute_safe_command": "helm_safe_command",
+        "get_top_processes": "helm_get_top_processes",
     }
 
     def normalize_tool_name(self, name: str) -> str:
-        """Normalizes shorthand tool names (e.g. 'play_youtube') to canonical 'homie_play_youtube'."""
+        """Normalizes shorthand tool names (e.g. 'play_youtube') to canonical 'helm_play_youtube'."""
         clean = name.strip()
         if clean in self.LEGACY_TOOL_MAP:
             return self.LEGACY_TOOL_MAP[clean]
-        if not clean.startswith("homie_"):
-            candidate = f"homie_{clean}"
-            allowed = homie_supervisor.get_allowed_tools_map()
+        if not clean.startswith("helm_"):
+            candidate = f"helm_{clean}"
+            allowed = helm_supervisor.get_allowed_tools_map()
             if candidate in allowed:
                 return candidate
         return clean
@@ -216,7 +216,7 @@ class ActionBroker:
         req_id = f"req_{int(time.time()*1000)}"
 
         # 0. Out-of-Process Pipe Client Branch (Fail-Closed)
-        if self.supervisor is None and isinstance(getattr(self, "client", None), homie_supervisor.NamedPipeSupervisorClient):
+        if self.supervisor is None and isinstance(getattr(self, "client", None), helm_supervisor.NamedPipeSupervisorClient):
             if not self.client.handle:
                 try:
                     if not self.client.connect(timeout_sec=0.1):
@@ -246,14 +246,14 @@ class ActionBroker:
                 return False, f"Security Gate: Supervisor communication failure (fail-closed): {pe}", None
 
         # 1. State Gate: Supervisor LOCKED fails closed
-        if self.supervisor.state == homie_supervisor.STATE_LOCKED:
+        if self.supervisor.state == helm_supervisor.STATE_LOCKED:
             msg = f"Security Gate: Supervisor is LOCKED: {self.supervisor.lock_reason}"
             logger.warning("Action %s denied: %s", canonical_tool, msg)
             return False, msg, None
 
         # 2. Kill Switch Gate
         if kill_switch.is_kill_switch_active():
-            allowed_tools = homie_supervisor.get_allowed_tools_map()
+            allowed_tools = helm_supervisor.get_allowed_tools_map()
             tier = allowed_tools.get(canonical_tool, "WRITE_EXEC")
             if tier != "READ_ONLY":
                 msg = "Security Gate: Emergency kill switch is actively engaged. Action blocked."
@@ -264,9 +264,9 @@ class ActionBroker:
                 return False, msg, None
 
         # 3. Tool Allowlist & Tier Mapping
-        allowed_tools = homie_supervisor.get_allowed_tools_map()
+        allowed_tools = helm_supervisor.get_allowed_tools_map()
         if canonical_tool not in allowed_tools:
-            # Fallback check without homie_ prefix
+            # Fallback check without helm_ prefix
             if tool_name in allowed_tools:
                 canonical_tool = tool_name
             else:
@@ -300,11 +300,11 @@ class ActionBroker:
             return False, f"Security Gate: {rate_msg}", None
 
         # 5.1 Outbound SSRF Protection (OpenJarvis integration)
-        import homie_ssrf
+        import helm_ssrf
         for url_key in ("url", "link", "target_url", "endpoint"):
             cand_url = args.get(url_key)
             if cand_url and isinstance(cand_url, str) and ("://" in cand_url or "." in cand_url):
-                ssrf_err = homie_ssrf.check_ssrf(cand_url)
+                ssrf_err = helm_ssrf.check_ssrf(cand_url)
                 if ssrf_err:
                     msg = f"Security Gate: SSRF check blocked outbound URL: {ssrf_err}"
                     logger.warning("SSRF blocked for caller %s: %s", caller_id, ssrf_err)
@@ -315,7 +315,7 @@ class ActionBroker:
                     return False, msg, None
 
         # 6. Policy Envelope & Prohibited Environments Check
-        if canonical_tool in ("homie_launch_app", "open_app_or_url"):
+        if canonical_tool in ("helm_launch_app", "open_app_or_url"):
             target = (args.get("app_name") or args.get("target") or "").lower().strip()
             base = os.path.basename(target)
             if base in PROHIBITED_ENVELOPE_IMAGES or f"{base}.exe" in PROHIBITED_ENVELOPE_IMAGES:
@@ -377,7 +377,7 @@ class ActionBroker:
             )
             success = not str(output).startswith(("Error:", "Security Gate:", "Blocked:"))
             return success, str(output), output
-        except homie_supervisor.CompleteMediationBreachError as cme:
+        except helm_supervisor.CompleteMediationBreachError as cme:
             self.supervisor._transition_to_locked(f"Complete mediation violation: {cme}")
             return False, f"Security Gate: {cme}", None
         except Exception as e:

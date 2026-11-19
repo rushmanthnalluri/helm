@@ -1,4 +1,4 @@
-"""Homie Mobile Remote & Presentation Deck.
+"""Helm Mobile Remote & Presentation Deck.
 Transforms any smartphone browser into a low-latency remote control for your Windows PC:
 - Wireless Trackpad (relative touch movement, tap to click, two-finger right click, scroll)
 - Media & Volume Deck (Play, Pause, Mute, Volume Up/Down)
@@ -13,7 +13,7 @@ def render_remote_html():
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>Homie PC Remote</title>
+<title>Helm PC Remote</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; touch-action: manipulation; }
   body { background: #0d1117; color: #e6edf3; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
@@ -52,7 +52,7 @@ def render_remote_html():
 <body>
 
 <div class="top-nav">
-  <h2>🏠 Homie Remote</h2>
+  <h2>🏠 Helm Remote</h2>
   <div class="tabs">
     <button class="tab-btn active" onclick="switchTab('trackpad')">Trackpad</button>
     <button class="tab-btn" onclick="switchTab('deck')">Media & Deck</button>

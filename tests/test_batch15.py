@@ -18,7 +18,7 @@ if BASE_DIR not in sys.path:
 import adversarial_red_team
 import kill_switch
 import taint_tracker
-import homie_mcp
+import helm_mcp
 
 class TestBatch15AdversarialValidation(unittest.TestCase):
 
@@ -38,7 +38,7 @@ class TestBatch15AdversarialValidation(unittest.TestCase):
         self.assertIn("[UNTRUSTED_DATA_NONCE_", out)
 
         # Subsequent write action MUST be intercepted by taint gate
-        res = homie_mcp.execute_mcp_tool("homie_snap_window", {"app_name": "notepad", "position": "left"}, caller_id="attacker_screen_session")
+        res = helm_mcp.execute_mcp_tool("helm_snap_window", {"app_name": "notepad", "position": "left"}, caller_id="attacker_screen_session")
         self.assertIn("Security Gate:", res)
         self.assertIn("STEP_UP_REQUIRED", res)
 
@@ -49,7 +49,7 @@ class TestBatch15AdversarialValidation(unittest.TestCase):
         self.assertTrue(tainted)
 
         # Attempting write execution is blocked
-        res = homie_mcp.execute_mcp_tool("homie_set_clipboard", {"text": "exfiltrated"}, caller_id="attacker_clip_session")
+        res = helm_mcp.execute_mcp_tool("helm_set_clipboard", {"text": "exfiltrated"}, caller_id="attacker_clip_session")
         self.assertIn("Security Gate:", res)
         self.assertIn("STEP_UP_REQUIRED", res)
 
@@ -74,7 +74,7 @@ class TestBatch15AdversarialValidation(unittest.TestCase):
         self.assertTrue(kill_switch.is_kill_switch_active())
 
         # All WRITE_EXEC actions must be immediately denied
-        res = homie_mcp.execute_mcp_tool("homie_snap_window", {"app_name": "notepad", "position": "left"})
+        res = helm_mcp.execute_mcp_tool("helm_snap_window", {"app_name": "notepad", "position": "left"})
         self.assertIn("Security Gate: Emergency kill switch is active", res)
 
         # Unauthorized attempt to disengage without human token fails
@@ -88,7 +88,7 @@ class TestBatch15AdversarialValidation(unittest.TestCase):
         self.assertFalse(kill_switch.is_kill_switch_active())
 
         # Normal execution restored
-        res_after = homie_mcp.execute_mcp_tool("homie_get_vitals", {})
+        res_after = helm_mcp.execute_mcp_tool("helm_get_vitals", {})
         self.assertNotIn("Emergency kill switch is active", res_after)
 
 if __name__ == "__main__":

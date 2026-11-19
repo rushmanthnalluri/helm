@@ -2,7 +2,7 @@
 """startup_bench.py - Benchmark cold-start import latencies for heavy modules.
 
 Measures the isolated import time of each heavy C-extension and Python library
-used by Homie, printing a sorted table ranked by latency.
+used by Helm, printing a sorted table ranked by latency.
 Also measures app startup import time (before vs after lazy loading).
 """
 
@@ -82,7 +82,7 @@ def measure_app_import_time() -> Optional[float]:
 
 def run_benchmark() -> List[Tuple[str, Optional[float], Optional[str]]]:
     print("=" * 65)
-    print(" HOMIE COLD-START IMPORT BENCHMARK (ISOLATED PROCESS TIMING)")
+    print(" HELM COLD-START IMPORT BENCHMARK (ISOLATED PROCESS TIMING)")
     print("=" * 65)
     print(f"Python: {sys.version.split()[0]} ({sys.executable})")
     print(f"Platform: {sys.platform}")

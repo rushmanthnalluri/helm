@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Homie Desktop App: The floating hold-to-talk voice assistant for Windows.
+"""Helm Desktop App: The floating hold-to-talk voice assistant for Windows.
 Hosts the glowing translucent card UI, runs the global hotkey listener,
-records your voice, and bridges to Homie's automation & Claude AI brain.
+records your voice, and bridges to Helm's automation & Claude AI brain.
 """
 import os
 import sys
@@ -11,7 +11,7 @@ import threading
 import webview
 
 # Lazy module loaders for heavy C-extensions and sub-systems
-from homie_lazy import LazyModule, preload_in_background
+from helm_lazy import LazyModule, preload_in_background
 
 # Ensure UTF-8 output on Windows consoles
 if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
@@ -28,7 +28,7 @@ pyperclip = LazyModule("pyperclip")
 pyautogui = LazyModule("pyautogui")
 keyboard = LazyModule("pynput.keyboard")
 Image = LazyModule("PIL.Image")
-homie = LazyModule("homie")
+helm = LazyModule("helm")
 windows_tools = LazyModule("windows_tools")
 task_manager = LazyModule("task_manager")
 assistant_timeline = LazyModule("assistant_timeline")
@@ -37,7 +37,7 @@ chat_cli = LazyModule("chat_cli")
 chat_core = LazyModule("chat_core")
 voice = LazyModule("voice")
 
-class HomieApi:
+class HelmApi:
     """JS Bridge exposed to the webview via pywebview.api."""
     def __init__(self, app):
         self._app = app
@@ -83,7 +83,7 @@ class HomieApi:
         # 5. Safe mode switch
         elif 'safe' in message:
             safe_enabled = bool(message['safe'])
-            homie.save_pref('safe', safe_enabled)
+            helm.save_pref('safe', safe_enabled)
             self._app.prefs['safe'] = safe_enabled
             self._app.eval_js(f"window.ui.mode({json.dumps(safe_enabled)})")
 
@@ -108,15 +108,15 @@ class HomieApi:
                 notices = [n.to_dict() for n in self._app.heartbeat.load_inbox()]
                 self._app.eval_js(f"window.ui.inbox({json.dumps(notices)})")
 
-class HomieApp:
+class HelmApp:
     def __init__(self):
-        self.prefs = homie.get_prefs()
+        self.prefs = helm.get_prefs()
         self.window = None
         self._agent_core = None
         self._voice = None
         self._tasks = None
         self._heartbeat = None
-        self.api = HomieApi(self)
+        self.api = HelmApi(self)
         self._ask_tasks = []
         self._ask_tasks_lock = threading.Lock()
         self._speech_stream_active = threading.Event()
@@ -135,7 +135,7 @@ class HomieApp:
     @property
     def agent_core(self):
         if self._agent_core is None:
-            assistant_name = os.environ.get('HOMIE_NAME') or self.prefs.get('assistantName') or 'Homie'
+            assistant_name = os.environ.get('HELM_NAME') or self.prefs.get('assistantName') or 'Helm'
             import durable_memory
             memory_store = durable_memory.get_default_memory_store()
             self._agent_core = chat_core.AgentCore(
@@ -334,7 +334,7 @@ class HomieApp:
                 return
             self.eval_js(f"window.ui.words({json.dumps(text)})")
             self.eval_js("window.ui.think()")
-            self.prefs = homie.get_prefs()
+            self.prefs = helm.get_prefs()
             self.agent_core.prefs = self.prefs
 
             def on_delta(delta):
@@ -347,7 +347,7 @@ class HomieApp:
                 text,
                 on_delta,
                 caller_id=caller_id,
-                quick_action_handler=homie.try_fast_command,
+                quick_action_handler=helm.try_fast_command,
                 cancel_event=cancel_event,
             )
             if cancel_event and cancel_event.is_set():
@@ -559,7 +559,7 @@ class HomieApp:
             print(f"[Tray] Tray icon error: {e}")
 
     def run(self):
-        """Launches Homie's GUI and services."""
+        """Launches Helm's GUI and services."""
         # 0. Start unified Assistant Timeline monitor & retention pruner
         assistant_timeline.start_timeline_monitor()
 
@@ -588,7 +588,7 @@ class HomieApp:
         win_y = primary.get('y', 0) + 20
 
         self.window = webview.create_window(
-            title='Homie',
+            title='Helm',
             html=html_content,
             js_api=self.api,
             width=window_width,
@@ -612,13 +612,13 @@ class HomieApp:
                     _ = self.agent_core
                 except Exception:
                     pass
-            threading.Thread(target=_warm_internals, daemon=True, name="HomieInternalsWarmer").start()
+            threading.Thread(target=_warm_internals, daemon=True, name="HelmInternalsWarmer").start()
 
         self.window.events.shown += on_shown
 
         def on_loaded():
             preload_in_background()
-            self.eval_js("window.ui.status('Homie Ready', false)")
+            self.eval_js("window.ui.status('Helm Ready', false)")
             self.eval_js(f"window.ui.mode({json.dumps(bool(self.prefs.get('safe', True)))})")
             if hasattr(self, 'heartbeat') and self.heartbeat:
                 pending = self.heartbeat.get_pending_held_notices()
@@ -645,7 +645,7 @@ def __getattr__(name: str):
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 def main():
-    app = HomieApp()
+    app = HelmApp()
     app.run()
 
 if __name__ == '__main__':

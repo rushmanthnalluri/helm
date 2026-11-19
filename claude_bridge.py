@@ -1,5 +1,5 @@
-"""Homie Claude Chrome Bridge & Autonomous Feedback Loop.
-Connects Homie directly to the user's active Claude AI web session in Chrome:
+"""Helm Claude Chrome Bridge & Autonomous Feedback Loop.
+Connects Helm directly to the user's active Claude AI web session in Chrome:
 - Automatically detects and focuses the Claude tab in Google Chrome
 - Sends audit results, progress reports, and architectural queries directly to Claude
 - Captures Claude's feedback, insights, and next-step recommendations
@@ -23,7 +23,7 @@ import pyautogui
 import pyperclip
 import mss
 
-logger = logging.getLogger("homie.claude_bridge")
+logger = logging.getLogger("helm.claude_bridge")
 pyautogui.FAILSAFE = False
 
 LOG_PATH = Path(BASE_DIR) / "claude_loop_log.jsonl"
@@ -138,8 +138,8 @@ def read_claude_feedback_vision():
 
     try:
         import ai_engine
-        import homie
-        prefs = homie.get_prefs()
+        import helm
+        prefs = helm.get_prefs()
         key = prefs.get("geminiKey")
         res = ai_engine.run_gemini_vision(
             "Transcribe or summarize the latest AI response message visible in this Claude AI window. "
@@ -153,7 +153,7 @@ def read_claude_feedback_vision():
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--post":
-        msg = " ".join(sys.argv[2:]) if len(sys.argv) > 2 else "Status check from Homie assistant."
+        msg = " ".join(sys.argv[2:]) if len(sys.argv) > 2 else "Status check from Helm assistant."
         ok, res = send_message_to_claude(msg)
         print("Result:", ok, res)
     else:

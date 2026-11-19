@@ -1,4 +1,4 @@
-"""Windows Toast Notification Mirror for Homie.
+"""Windows Toast Notification Mirror for Helm.
 Intercepts live Windows toast notifications using Windows Runtime (WinRT) APIs
 and mirrors them to Telegram remote control and the persistent event log.
 """

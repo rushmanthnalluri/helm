@@ -81,8 +81,8 @@ if crlf:
 with open("phone_approval_portal.py", "wb") as f:
     f.write(cn.encode("utf-8"))
 
-# 2. Update homie_supervisor.py
-with open("homie_supervisor.py", "rb") as f:
+# 2. Update helm_supervisor.py
+with open("helm_supervisor.py", "rb") as f:
     cs = f.read().decode("utf-8")
 
 crlf_s = "\r\n" in cs
@@ -140,7 +140,7 @@ cns = cns.replace(old_sup_loop, new_sup_loop, 1)
 if crlf_s:
     cns = cns.replace("\n", "\r\n")
 
-with open("homie_supervisor.py", "wb") as f:
+with open("helm_supervisor.py", "wb") as f:
     f.write(cns.encode("utf-8"))
 
 # 3. Update rails_confirmation.py and scripts/run_mutation_tests.py for Mutation 77

@@ -5,8 +5,8 @@ import time
 import hashlib
 import json
 
-import homie_mail_calendar
-from homie_mail_calendar import (
+import helm_mail_calendar
+from helm_mail_calendar import (
     MailConnector,
     Addr,
     OutboundMessage,
@@ -236,7 +236,7 @@ class TestMailCalendarWorkflows(unittest.TestCase):
 
     def test_8_calendar_free_busy_read_and_draft_event(self):
         """Verifies calendar free/busy lookup, description quarantine into handles, and tentative drafts."""
-        from homie_mail_calendar import CalendarConnector, CalendarEvent
+        from helm_mail_calendar import CalendarConnector, CalendarEvent
 
         cal = CalendarConnector()
         now = time.time()
@@ -279,8 +279,8 @@ class TestMailCalendarWorkflows(unittest.TestCase):
         from cryptography.hazmat.primitives.asymmetric import ec
         from cryptography.hazmat.primitives import hashes
         import webauthn_verifier as wv
-        import homie_structured_approval
-        from homie_mail_calendar import MailConnector, OutboundMessage, Addr
+        import helm_structured_approval
+        from helm_mail_calendar import MailConnector, OutboundMessage, Addr
 
         mail = MailConnector()
         # Create draft
@@ -299,7 +299,7 @@ class TestMailCalendarWorkflows(unittest.TestCase):
         draft_id = draft_ref.draft_id
 
         # Setup WebAuthn relying party and physical credential
-        rp = wv.RelyingParty(rp_id="approval.homie.internal", origins=frozenset({"https://approval.homie.internal"}))
+        rp = wv.RelyingParty(rp_id="approval.helm.internal", origins=frozenset({"https://approval.helm.internal"}))
         store = wv.ChallengeStore()
         device_id = "phone_pixel_9_pro"
 
@@ -319,7 +319,7 @@ class TestMailCalendarWorkflows(unittest.TestCase):
         )
 
         # Build approval object and challenge
-        approval_obj = homie_structured_approval.build_send_approval_object(
+        approval_obj = helm_structured_approval.build_send_approval_object(
             account=msg.account,
             to=[a.address for a in msg.to],
             cc=[a.address for a in msg.cc],
@@ -330,7 +330,7 @@ class TestMailCalendarWorkflows(unittest.TestCase):
             thread_id=getattr(msg, "thread_id", "") or "",
             nonce=draft_id
         )
-        hash_hex, _ = homie_structured_approval.compute_canonical_approval_hash(approval_obj)
+        hash_hex, _ = helm_structured_approval.compute_canonical_approval_hash(approval_obj)
         challenge_bytes = bytes.fromhex(hash_hex)
         store.register(challenge_bytes, device_id)
 
@@ -338,10 +338,10 @@ class TestMailCalendarWorkflows(unittest.TestCase):
         cd_bytes = json.dumps({
             "type": "webauthn.get",
             "challenge": wv.b64u_encode(challenge_bytes),
-            "origin": "https://approval.homie.internal"
+            "origin": "https://approval.helm.internal"
         }).encode("utf-8")
         flags = wv.FLAG_UP | wv.FLAG_UV
-        auth_data = hashlib.sha256(b"approval.homie.internal").digest() + bytes([flags]) + struct.pack(">I", 2)
+        auth_data = hashlib.sha256(b"approval.helm.internal").digest() + bytes([flags]) + struct.pack(">I", 2)
         sig = priv.sign(auth_data + hashlib.sha256(cd_bytes).digest(), ec.ECDSA(hashes.SHA256()))
 
         assertion_resp = {
@@ -363,8 +363,8 @@ class TestMailCalendarWorkflows(unittest.TestCase):
         import struct, cbor2
         from cryptography.hazmat.primitives.asymmetric import ec
         import webauthn_verifier as wv
-        import homie_structured_approval
-        from homie_mail_calendar import MailConnector, OutboundMessage, Addr
+        import helm_structured_approval
+        from helm_mail_calendar import MailConnector, OutboundMessage, Addr
 
         mail = MailConnector()
         msg = OutboundMessage(
@@ -380,7 +380,7 @@ class TestMailCalendarWorkflows(unittest.TestCase):
         ok, draft_ref, _, _ = mail.draft(msg)
         draft_id = draft_ref.draft_id
 
-        rp = wv.RelyingParty(rp_id="approval.homie.internal", origins=frozenset({"https://approval.homie.internal"}))
+        rp = wv.RelyingParty(rp_id="approval.helm.internal", origins=frozenset({"https://approval.helm.internal"}))
         store = wv.ChallengeStore()
         device_id = "phone_pixel_9"
 
@@ -417,8 +417,8 @@ class TestMailCalendarWorkflows(unittest.TestCase):
         from cryptography.hazmat.primitives.asymmetric import ec
         from cryptography.hazmat.primitives import hashes
         import webauthn_verifier as wv
-        import homie_structured_approval
-        from homie_mail_calendar import MailConnector, OutboundMessage, Addr, MailDispatchUnknownOutcomeError
+        import helm_structured_approval
+        from helm_mail_calendar import MailConnector, OutboundMessage, Addr, MailDispatchUnknownOutcomeError
 
         mail = MailConnector()
         msg = OutboundMessage(
@@ -434,7 +434,7 @@ class TestMailCalendarWorkflows(unittest.TestCase):
         _, draft_ref, _, _ = mail.draft(msg)
         draft_id = draft_ref.draft_id
 
-        rp = wv.RelyingParty(rp_id="approval.homie.internal", origins=frozenset({"https://approval.homie.internal"}))
+        rp = wv.RelyingParty(rp_id="approval.helm.internal", origins=frozenset({"https://approval.helm.internal"}))
         store = wv.ChallengeStore()
         device_id = "phone_pixel_9"
 
@@ -453,7 +453,7 @@ class TestMailCalendarWorkflows(unittest.TestCase):
             attestation_trust="none"
         )
 
-        approval_obj = homie_structured_approval.build_send_approval_object(
+        approval_obj = helm_structured_approval.build_send_approval_object(
             account=msg.account,
             to=[a.address for a in msg.to],
             cc=[],
@@ -463,13 +463,13 @@ class TestMailCalendarWorkflows(unittest.TestCase):
             attachments=[],
             nonce=draft_id
         )
-        hash_hex, _ = homie_structured_approval.compute_canonical_approval_hash(approval_obj)
+        hash_hex, _ = helm_structured_approval.compute_canonical_approval_hash(approval_obj)
         challenge_bytes = bytes.fromhex(hash_hex)
         store.register(challenge_bytes, device_id)
 
-        cd_bytes = json.dumps({"type": "webauthn.get", "challenge": wv.b64u_encode(challenge_bytes), "origin": "https://approval.homie.internal"}).encode("utf-8")
+        cd_bytes = json.dumps({"type": "webauthn.get", "challenge": wv.b64u_encode(challenge_bytes), "origin": "https://approval.helm.internal"}).encode("utf-8")
         flags = wv.FLAG_UP | wv.FLAG_UV
-        auth_data = hashlib.sha256(b"approval.homie.internal").digest() + bytes([flags]) + struct.pack(">I", 2)
+        auth_data = hashlib.sha256(b"approval.helm.internal").digest() + bytes([flags]) + struct.pack(">I", 2)
         sig = priv.sign(auth_data + hashlib.sha256(cd_bytes).digest(), ec.ECDSA(hashes.SHA256()))
         resp = {"clientDataJSON": wv.b64u_encode(cd_bytes), "authenticatorData": wv.b64u_encode(auth_data), "signature": wv.b64u_encode(sig)}
 
@@ -483,8 +483,8 @@ class TestMailCalendarWorkflows(unittest.TestCase):
         from cryptography.hazmat.primitives.asymmetric import ec
         from cryptography.hazmat.primitives import hashes
         import webauthn_verifier as wv
-        import homie_structured_approval
-        from homie_mail_calendar import CalendarConnector, CalendarEvent
+        import helm_structured_approval
+        from helm_mail_calendar import CalendarConnector, CalendarEvent
 
         cal = CalendarConnector()
         event_id = "cal_sync_42"
@@ -500,7 +500,7 @@ class TestMailCalendarWorkflows(unittest.TestCase):
             is_tentative=True
         ))
 
-        rp = wv.RelyingParty(rp_id="approval.homie.internal", origins=frozenset({"https://approval.homie.internal"}))
+        rp = wv.RelyingParty(rp_id="approval.helm.internal", origins=frozenset({"https://approval.helm.internal"}))
         store = wv.ChallengeStore()
         device_id = "phone_pixel_9"
 
@@ -519,7 +519,7 @@ class TestMailCalendarWorkflows(unittest.TestCase):
             attestation_trust="none"
         )
 
-        approval_obj = homie_structured_approval.build_send_approval_object(
+        approval_obj = helm_structured_approval.build_send_approval_object(
             account="primary_calendar",
             to=["auditor@external-cert.org"],
             cc=[],
@@ -529,13 +529,13 @@ class TestMailCalendarWorkflows(unittest.TestCase):
             attachments=[],
             nonce=event_id
         )
-        hash_hex, _ = homie_structured_approval.compute_canonical_approval_hash(approval_obj)
+        hash_hex, _ = helm_structured_approval.compute_canonical_approval_hash(approval_obj)
         challenge_bytes = bytes.fromhex(hash_hex)
         store.register(challenge_bytes, device_id)
 
-        cd_bytes = json.dumps({"type": "webauthn.get", "challenge": wv.b64u_encode(challenge_bytes), "origin": "https://approval.homie.internal"}).encode("utf-8")
+        cd_bytes = json.dumps({"type": "webauthn.get", "challenge": wv.b64u_encode(challenge_bytes), "origin": "https://approval.helm.internal"}).encode("utf-8")
         flags = wv.FLAG_UP | wv.FLAG_UV
-        auth_data = hashlib.sha256(b"approval.homie.internal").digest() + bytes([flags]) + struct.pack(">I", 2)
+        auth_data = hashlib.sha256(b"approval.helm.internal").digest() + bytes([flags]) + struct.pack(">I", 2)
         sig = priv.sign(auth_data + hashlib.sha256(cd_bytes).digest(), ec.ECDSA(hashes.SHA256()))
         resp = {"clientDataJSON": wv.b64u_encode(cd_bytes), "authenticatorData": wv.b64u_encode(auth_data), "signature": wv.b64u_encode(sig)}
 

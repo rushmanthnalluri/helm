@@ -1,4 +1,4 @@
-"""Homie Pipeline Latency & Observability Telemetry.
+"""Helm Pipeline Latency & Observability Telemetry.
 Tracks granular per-stage latency across every interaction:
 - Speech-to-text transcription (STT)
 - Intent classification & fast-path router
@@ -6,7 +6,7 @@ Tracks granular per-stage latency across every interaction:
 - Text-to-speech synthesis (TTS)
 - End-to-end total latency
 
-Maintains high-precision timing to safeguard Homie's <50ms local fast-command promise.
+Maintains high-precision timing to safeguard Helm's <50ms local fast-command promise.
 """
 
 import os
@@ -23,7 +23,7 @@ if BASE_DIR not in sys.path:
 
 import db_utils
 
-logger = logging.getLogger("homie.telemetry")
+logger = logging.getLogger("helm.telemetry")
 
 # In-memory circular buffer for low-overhead real-time stats
 _RECENT_EVENTS = deque(maxlen=200)
@@ -166,12 +166,12 @@ def format_telemetry_report():
     """Generates a clean markdown telemetry dashboard report."""
     stats = get_telemetry_summary(limit=50)
     if stats["count"] == 0:
-        return "⚡ **Homie Latency Telemetry**: No pipeline execution data recorded yet."
+        return "⚡ **Helm Latency Telemetry**: No pipeline execution data recorded yet."
 
     status_icon = "🟢" if stats["avg_fast_action_ms"] < 50.0 else "🟡"
 
     report = [
-        f"⚡ **Homie Pipeline Telemetry & Observability** ({stats['count']} events)",
+        f"⚡ **Helm Pipeline Telemetry & Observability** ({stats['count']} events)",
         f"• **Fast-Path Rate**: {stats['fast_path_pct']}% of requests bypass LLM entirely",
         f"• **Fast Command Latency**: {status_icon} **{stats['avg_fast_action_ms']} ms** (Promise: <50ms)",
         f"• **End-to-End Latency**: Avg: **{stats['avg_total_ms']} ms** | P50: **{stats['p50_total_ms']} ms** | P95: **{stats['p95_total_ms']} ms**",

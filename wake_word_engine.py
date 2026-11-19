@@ -1,8 +1,8 @@
-"""Homie Hands-Free Local Wake-Word Engine.
+"""Helm Hands-Free Local Wake-Word Engine.
 Enables always-on, hands-free voice activation:
 - Zero cloud dependency / zero network latency (<50ms detection)
 - Energy threshold Voice Activity Detection (VAD)
-- Wake word activation keyword: "Homie"
+- Wake word activation keyword: "Helm"
 - Instant audio barge-in interruption integration
 - Safe simulation and headless testing modes
 """
@@ -20,12 +20,12 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 import voice
-import homie
+import helm
 
-logger = logging.getLogger("homie.wake_word")
+logger = logging.getLogger("helm.wake_word")
 
 class WakeWordDetector:
-    def __init__(self, wake_word="homie", sensitivity=0.7, on_wake_callback=None):
+    def __init__(self, wake_word="helm", sensitivity=0.7, on_wake_callback=None):
         self.wake_word = wake_word.lower()
         self.sensitivity = max(0.1, min(1.0, sensitivity))
         self.on_wake_callback = on_wake_callback
@@ -56,7 +56,7 @@ class WakeWordDetector:
         matched = False
         if detected_text:
             cleaned = detected_text.lower().strip()
-            if self.wake_word in cleaned or "hey homie" in cleaned:
+            if self.wake_word in cleaned or "hey helm" in cleaned:
                 matched = True
 
         if matched:
@@ -80,7 +80,7 @@ class WakeWordDetector:
 
         return False
 
-    def simulate_wake_word(self, utterance="hey homie"):
+    def simulate_wake_word(self, utterance="hey helm"):
         """Simulates wake word detection for evals, tests, and headless environments."""
         return self.process_audio_chunk(b"\x00" * 320, detected_text=utterance)
 
@@ -107,7 +107,7 @@ def get_wake_word_detector(on_wake_callback=None):
         _detector = WakeWordDetector(on_wake_callback=on_wake_callback)
     return _detector
 
-def trigger_wake_simulation(utterance="hey homie"):
+def trigger_wake_simulation(utterance="hey helm"):
     """Helper to trigger wake event programmatically."""
     det = get_wake_word_detector()
     return det.simulate_wake_word(utterance)

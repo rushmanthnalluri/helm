@@ -7,7 +7,7 @@ old = """    def __init__(self, api_key: Optional[str] = None, mock_mode: bool =
 
 new = """    def __init__(self, api_key: Optional[str] = None, mock_mode: bool = False):
         self.api_key = api_key or os.environ.get("GEMINI_API_KEY", "")
-        self.mock_mode = mock_mode or bool(os.environ.get("HOMIE_TEST_ENV") or os.environ.get("HOMIE_TEST_STATE_DIR"))"""
+        self.mock_mode = mock_mode or bool(os.environ.get("HELM_TEST_ENV") or os.environ.get("HELM_TEST_STATE_DIR"))"""
 
 crlf = "\r\n" in c
 cn = c.replace("\r\n", "\n")

@@ -1,4 +1,4 @@
-"""task_manager.py - Durable Task Manager & Concurrency Controller for Homie.
+"""task_manager.py - Durable Task Manager & Concurrency Controller for Helm.
 
 Replaces unmanaged daemon-thread fan-out and raw boolean flags with:
 - Unique durable task IDs (e.g. task_7f8a1c)
@@ -16,7 +16,7 @@ from enum import Enum
 from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Callable, Any, Optional, Dict, List
 
-logger = logging.getLogger("homie.task_manager")
+logger = logging.getLogger("helm.task_manager")
 
 
 class TaskStatus(str, Enum):
@@ -74,10 +74,10 @@ class Task:
 
 
 class TaskManager:
-    """Bounded, durable concurrency controller for Homie."""
+    """Bounded, durable concurrency controller for Helm."""
 
     def __init__(self, max_workers: int = 4):
-        self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="HomieTaskWorker")
+        self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="HelmTaskWorker")
         self._tasks: Dict[str, Task] = {}
         self._lock = threading.Lock()
 

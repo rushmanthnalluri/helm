@@ -45,7 +45,7 @@ def check_action_privilege(session_id, tool_tier, tool_name, arguments, step_up_
     return True, False, "Action permitted"
 ```
 
-=== 3. homie_mcp.py Dispatcher & Desktop Agent Clicks ===
+=== 3. helm_mcp.py Dispatcher & Desktop Agent Clicks ===
 ```python
 # Every desktop agent click and keystroke now routes through execute_mcp_tool:
 def execute_mcp_tool(name, arguments, caller_id="mcp_client", client_token=None):
@@ -57,13 +57,13 @@ def execute_mcp_tool(name, arguments, caller_id="mcp_client", client_token=None)
     allowed, requires_step_up, reason = taint_tracker.check_action_privilege(caller_id, tier, name, arguments)
     if not allowed and requires_step_up:
         return f"Security Gate: {reason}"
-    # Dispatches to homie_agent_click, homie_agent_type, homie_snap_window, etc.
+    # Dispatches to helm_agent_click, helm_agent_type, helm_snap_window, etc.
     # Records every call in HMAC-SHA256 agent_audit_ledger
 ```
 
 Test status: 98/98 unit & eval tests passing (including desktop agent evals, fast-path macro latencies <50ms, and emergency abort latency).
 
-Please review these implementations, critique any edge-cases or bypasses, and give the next directives to continue evolving Homie toward the world's most powerful workstation assistant!'''
+Please review these implementations, critique any edge-cases or bypasses, and give the next directives to continue evolving Helm toward the world's most powerful workstation assistant!'''
 
     print("Posting code review prompt to Claude in Chrome...")
     ok, msg = claude_bridge.send_message_to_claude(prompt, wait_for_reply_sec=16)

@@ -3,24 +3,24 @@ import os
 import unittest
 from unittest.mock import MagicMock, patch
 
-import homie_canvas
+import helm_canvas
 import app
-import homie
+import helm
 
 
 class TestCanvasWiring(unittest.TestCase):
     def test_canvas_imports(self):
         """Verifies Canvas module exports and safe imports in app.py."""
-        self.assertIsNotNone(homie_canvas.HomieCanvas)
-        self.assertIs(homie_canvas.HomieCanvas, homie_canvas.CanvasController)
-        self.assertIsNotNone(app.HomieCanvas)
-        self.assertIs(app.HomieCanvas, homie_canvas.CanvasController)
-        self.assertIsNotNone(homie_canvas.get_canvas())
-        self.assertIsInstance(homie_canvas.get_canvas(), homie_canvas.CanvasController)
+        self.assertIsNotNone(helm_canvas.HelmCanvas)
+        self.assertIs(helm_canvas.HelmCanvas, helm_canvas.CanvasController)
+        self.assertIsNotNone(app.HelmCanvas)
+        self.assertIs(app.HelmCanvas, helm_canvas.CanvasController)
+        self.assertIsNotNone(helm_canvas.get_canvas())
+        self.assertIsInstance(helm_canvas.get_canvas(), helm_canvas.CanvasController)
 
     def test_canvas_initialization_and_visibility(self):
         """Verifies CanvasController state management and visibility toggling."""
-        controller = homie_canvas.CanvasController()
+        controller = helm_canvas.CanvasController()
         self.assertFalse(controller.is_visible)
         self.assertIsNone(controller.window)
 
@@ -45,7 +45,7 @@ class TestCanvasWiring(unittest.TestCase):
 
     def test_canvas_show_artifact_and_payload_formatting(self):
         """Verifies artifact rendering, type normalization, and payload structure."""
-        controller = homie_canvas.CanvasController()
+        controller = helm_canvas.CanvasController()
         mock_window = MagicMock()
         controller.window = mock_window
 
@@ -89,26 +89,26 @@ class TestCanvasWiring(unittest.TestCase):
         self.assertIn("class=\"mermaid\"", controller.active_artifact["html_content"])
 
         # 4. Global active artifact is synchronized
-        global_active = homie_canvas.get_active_artifact()
+        global_active = helm_canvas.get_active_artifact()
         self.assertIsNotNone(global_active)
         self.assertEqual(global_active["title"], "System Architecture")
 
     def test_app_canvas_methods(self):
-        """Verifies HomieApp.toggle_canvas and HomieApp.show_artifact_on_canvas."""
-        self.assertTrue(hasattr(app.HomieApp, "toggle_canvas"))
-        self.assertTrue(hasattr(app.HomieApp, "show_artifact_on_canvas"))
+        """Verifies HelmApp.toggle_canvas and HelmApp.show_artifact_on_canvas."""
+        self.assertTrue(hasattr(app.HelmApp, "toggle_canvas"))
+        self.assertTrue(hasattr(app.HelmApp, "show_artifact_on_canvas"))
 
-        mock_app = MagicMock(spec=app.HomieApp)
+        mock_app = MagicMock(spec=app.HelmApp)
         mock_canvas = MagicMock()
         mock_canvas.window = MagicMock()
         mock_app.canvas = mock_canvas
 
         # Call toggle_canvas
-        app.HomieApp.toggle_canvas(mock_app)
+        app.HelmApp.toggle_canvas(mock_app)
         mock_canvas.toggle.assert_called_once()
 
         # Call show_artifact_on_canvas
-        app.HomieApp.show_artifact_on_canvas(
+        app.HelmApp.show_artifact_on_canvas(
             mock_app,
             title="Widget Test",
             content="<div>Hello Canvas</div>",
@@ -134,7 +134,7 @@ class TestCanvasWiring(unittest.TestCase):
             "Start --> Step1 --> End\n"
             "```"
         )
-        extracted = homie_canvas.extract_artifacts(text_with_code)
+        extracted = helm_canvas.extract_artifacts(text_with_code)
         self.assertEqual(len(extracted), 2)
         self.assertEqual(extracted[0]["type"], "code")
         self.assertIn("fib(n)", extracted[0]["content"])
@@ -149,7 +149,7 @@ class TestCanvasWiring(unittest.TestCase):
             "Projected revenue exceeds expectations.\n"
             "</artifact>"
         )
-        tag_extracted = homie_canvas.extract_artifacts(text_with_tag)
+        tag_extracted = helm_canvas.extract_artifacts(text_with_tag)
         self.assertEqual(len(tag_extracted), 1)
         self.assertEqual(tag_extracted[0]["title"], "Q4 Sales Projections")
         self.assertEqual(tag_extracted[0]["type"], "document")
@@ -157,21 +157,21 @@ class TestCanvasWiring(unittest.TestCase):
 
     def test_canvas_html_template_exists(self):
         """Verifies that ui/canvas.html exists and contains the Artifacts 2.0 interface."""
-        self.assertTrue(os.path.exists(homie_canvas.CANVAS_HTML_PATH))
-        with open(homie_canvas.CANVAS_HTML_PATH, "r", encoding="utf-8") as f:
+        self.assertTrue(os.path.exists(helm_canvas.CANVAS_HTML_PATH))
+        with open(helm_canvas.CANVAS_HTML_PATH, "r", encoding="utf-8") as f:
             content = f.read()
 
-        self.assertIn("Homie Interactive Canvas", content)
+        self.assertIn("Helm Interactive Canvas", content)
         self.assertIn("loadArtifact", content)
         self.assertIn("canvasBadge", content)
         self.assertIn("canvasTitle", content)
         self.assertIn("canvasBody", content)
         self.assertIn("closeCanvas", content)
 
-    def test_homie_api_canvas_message_handling(self):
-        """Verifies pywebview JS bridge HomieApi routes open_canvas and toggle_canvas messages."""
+    def test_helm_api_canvas_message_handling(self):
+        """Verifies pywebview JS bridge HelmApi routes open_canvas and toggle_canvas messages."""
         mock_app = MagicMock()
-        api = app.HomieApi(mock_app)
+        api = app.HelmApi(mock_app)
 
         # 1. toggle_canvas message
         api.post({"toggle_canvas": True})
@@ -193,15 +193,15 @@ class TestCanvasWiring(unittest.TestCase):
 
     def test_fast_command_canvas(self):
         """Verifies fast local commands for canvas ('canvas', 'open canvas', 'close canvas')."""
-        handled, msg = homie.try_fast_command("canvas")
+        handled, msg = helm.try_fast_command("canvas")
         self.assertTrue(handled)
         self.assertIn("Side Canvas", msg)
 
-        handled, msg = homie.try_fast_command("open canvas")
+        handled, msg = helm.try_fast_command("open canvas")
         self.assertTrue(handled)
         self.assertIn("Side Canvas", msg)
 
-        handled, msg = homie.try_fast_command("close canvas")
+        handled, msg = helm.try_fast_command("close canvas")
         self.assertTrue(handled)
         self.assertIn("hidden", msg)
 

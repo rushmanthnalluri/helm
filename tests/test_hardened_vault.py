@@ -35,7 +35,7 @@ class TestHardenedCryptoVault(unittest.TestCase):
         # On Windows, verify that the key file on disk is DPAPI protected
         if sys.platform == "win32":
             import win32crypt
-            key_file = os.path.join(BASE_DIR, ".homie_vault.key")
+            key_file = os.path.join(BASE_DIR, ".helm_vault.key")
             self.assertTrue(os.path.exists(key_file))
             with open(key_file, "rb") as f:
                 disk_data = f.read()

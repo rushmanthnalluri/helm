@@ -1,4 +1,4 @@
-"""Homie Dead-Man's Heartbeat Lease Manager.
+"""Helm Dead-Man's Heartbeat Lease Manager.
 Enforces fail-safe execution boundaries:
 - Active agents must hold a valid, periodically renewed heartbeat lease (default 5s TTL).
 - If an agent hangs, loops, is hijacked, or crashes, the lease lapses.
@@ -16,7 +16,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-logger = logging.getLogger("homie.heartbeat")
+logger = logging.getLogger("helm.heartbeat")
 
 _ACTIVE_LEASES = {}  # session_id -> {lease_token, expires_at, created_at}
 DEFAULT_LEASE_DURATION = 5.0

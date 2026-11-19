@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """scripts/setup_velopack.py - Velopack Toolchain Setup & Packaging Automation.
 
-Automates the packaging and release pipeline for Homie using Velopack:
+Automates the packaging and release pipeline for Helm using Velopack:
 1. Displays installation instructions and verifies local presence of the `vpk` CLI.
 2. Packages compiled PyInstaller binaries into a delta-update capable Velopack release:
-   vpk pack --packId Homie --packVersion 1.0.0 --packDir dist\\homie --mainExe homie.exe
+   vpk pack --packId Helm --packVersion 1.0.0 --packDir dist\\helm --mainExe helm.exe
 3. Generates release assets in `releases/` ready for cloud/CDN distribution.
 """
 
@@ -90,18 +90,18 @@ def show_install_instructions() -> None:
 
 
 def resolve_pack_dir(user_path: Optional[str]) -> Path:
-    """Finds the directory containing compiled Homie binaries."""
+    """Finds the directory containing compiled Helm binaries."""
     if user_path:
         p = Path(user_path).resolve()
         if p.is_dir():
             return p
 
     # Standard locations
-    for candidate in [DIST_DIR / "homie", DIST_DIR / "Homie"]:
+    for candidate in [DIST_DIR / "helm", DIST_DIR / "Helm"]:
         if candidate.is_dir():
             return candidate
 
-    return DIST_DIR / "homie"
+    return DIST_DIR / "helm"
 
 
 def resolve_main_exe(pack_dir: Path, user_exe: Optional[str]) -> str:
@@ -109,11 +109,11 @@ def resolve_main_exe(pack_dir: Path, user_exe: Optional[str]) -> str:
     if user_exe and (pack_dir / user_exe).exists():
         return user_exe
 
-    for name in ["homie.exe", "Homie.exe"]:
+    for name in ["helm.exe", "Helm.exe"]:
         if (pack_dir / name).exists():
             return name
 
-    return "homie.exe"
+    return "helm.exe"
 
 
 def run_velopack_packaging(
@@ -171,13 +171,13 @@ def run_velopack_packaging(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Homie Velopack Auto-Update Packager",
+        description="Helm Velopack Auto-Update Packager",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "--packId",
-        default="Homie",
-        help="Unique package ID for Velopack (default: Homie)",
+        default="Helm",
+        help="Unique package ID for Velopack (default: Helm)",
     )
     parser.add_argument(
         "--packVersion",
@@ -187,12 +187,12 @@ def main() -> int:
     parser.add_argument(
         "--packDir",
         default=None,
-        help="Directory containing PyInstaller output (default: dist/homie or dist/Homie)",
+        help="Directory containing PyInstaller output (default: dist/helm or dist/Helm)",
     )
     parser.add_argument(
         "--mainExe",
         default=None,
-        help="Name of main executable (default: homie.exe or Homie.exe)",
+        help="Name of main executable (default: helm.exe or Helm.exe)",
     )
     parser.add_argument(
         "--outputDir",
@@ -222,7 +222,7 @@ def main() -> int:
         return 0
 
     print("=" * 65)
-    print(" Homie Velopack Auto-Update Packager")
+    print(" Helm Velopack Auto-Update Packager")
     print("=" * 65)
 
     vpk_bin = find_vpk_binary()

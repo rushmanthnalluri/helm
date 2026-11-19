@@ -1,4 +1,4 @@
-# Spotify Media Controller Plugin for Homie
+# Spotify Media Controller Plugin for Helm
 
 Control playback, browse playlists, search tracks and podcasts via Spotify Web API using `spotipy`.
 

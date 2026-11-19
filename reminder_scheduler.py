@@ -1,4 +1,4 @@
-"""Scheduled Reminders and Timer System for Homie.
+"""Scheduled Reminders and Timer System for Helm.
 Stores and tracks timed reminders that survive bot and PC restarts.
 """
 import os
@@ -7,7 +7,7 @@ import json
 import time
 import uuid
 
-CONFIG_DIR = os.environ.get('HOMIE_DIR') or os.path.join(os.path.expanduser('~'), '.config', 'homie')
+CONFIG_DIR = os.environ.get('HELM_DIR') or os.path.join(os.path.expanduser('~'), '.config', 'helm')
 os.makedirs(CONFIG_DIR, exist_ok=True)
 REMINDERS_FILE = os.path.join(CONFIG_DIR, 'reminders.json')
 

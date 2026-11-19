@@ -19,7 +19,7 @@ import threading
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
-logger = logging.getLogger("homie.durable_memory")
+logger = logging.getLogger("helm.durable_memory")
 
 MAX_FACTS_COUNT = 50
 MAX_KEY_LENGTH = 64
@@ -32,10 +32,10 @@ _STORE_LOCK = threading.RLock()
 
 def get_default_facts_path() -> Path:
     """Returns the persistent path to facts.json."""
-    custom_path = os.environ.get("HOMIE_FACTS_PATH")
+    custom_path = os.environ.get("HELM_FACTS_PATH")
     if custom_path:
         return Path(custom_path).resolve()
-    base = Path(os.environ.get("HOMIE_DIR") or (Path.home() / ".config" / "homie"))
+    base = Path(os.environ.get("HELM_DIR") or (Path.home() / ".config" / "helm"))
     return (base / "facts.json").resolve()
 
 
