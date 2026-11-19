@@ -1,0 +1,68 @@
+{
+  "id": "github",
+  "name": "GitHub Repository & PR Query",
+  "version": "1.0.0",
+  "author": "Helm Team",
+  "description": "Repository issue and pull request quick query, CI check status, and issue creation.",
+  "category": "Developer Tools",
+  "capabilities": ["network:api.github.com"],
+  "tools": [
+    {
+      "name": "github_query_issues",
+      "description": "Query issues in a GitHub repository.",
+      "python_callable": "plugin:github_query_issues",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "repo": {"type": "string"},
+          "state": {"type": "string"},
+          "labels": {"type": "string"},
+          "limit": {"type": "integer"}
+        },
+        "required": ["repo"]
+      }
+    },
+    {
+      "name": "github_query_prs",
+      "description": "Query pull requests in a GitHub repository.",
+      "python_callable": "plugin:github_query_prs",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "repo": {"type": "string"},
+          "state": {"type": "string"},
+          "limit": {"type": "integer"}
+        },
+        "required": ["repo"]
+      }
+    },
+    {
+      "name": "github_get_pr_details",
+      "description": "Get detailed information for a specific pull request.",
+      "python_callable": "plugin:github_get_pr_details",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "repo": {"type": "string"},
+          "pr_number": {"type": "integer"}
+        },
+        "required": ["repo", "pr_number"]
+      }
+    },
+    {
+      "name": "github_create_issue",
+      "description": "Create a new issue in a GitHub repository.",
+      "python_callable": "plugin:github_create_issue",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "repo": {"type": "string"},
+          "title": {"type": "string"},
+          "body": {"type": "string"},
+          "labels": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["repo", "title"]
+      }
+    }
+  ]
+}

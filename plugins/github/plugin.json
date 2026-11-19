@@ -1,0 +1,137 @@
+{
+  "id": "github",
+  "name": "GitHub Repository & PR Query",
+  "version": "1.0.0",
+  "author": "Helm Team",
+  "description": "Repository issue and pull request quick query, CI check status, and issue creation.",
+  "category": "Developer Tools",
+  "icon": "github",
+  "permissions": ["network"],
+  "commands": [
+    {
+      "id": "query_issues",
+      "title": "Query Issues",
+      "description": "List open or closed issues in a repository",
+      "shortcut": "Ctrl+Shift+I",
+      "handler": "github_query_issues"
+    },
+    {
+      "id": "query_prs",
+      "title": "Query Pull Requests",
+      "description": "List pull requests in a repository",
+      "shortcut": "Ctrl+Shift+G",
+      "handler": "github_query_prs"
+    },
+    {
+      "id": "create_issue",
+      "title": "Create Issue",
+      "description": "Quickly create an issue in a repository",
+      "handler": "github_create_issue"
+    }
+  ],
+  "tools": [
+    {
+      "name": "github_query_issues",
+      "description": "Query issues in a GitHub repository by state, label, and keyword.",
+      "python_callable": "plugin:github_query_issues",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "repo": {
+            "type": "string",
+            "description": "Repository name in 'owner/repo' format"
+          },
+          "state": {
+            "type": "string",
+            "description": "Issue state ('open', 'closed', 'all')",
+            "default": "open"
+          },
+          "labels": {
+            "type": "string",
+            "description": "Comma-separated list of labels to filter"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max results to return (default: 10)"
+          }
+        },
+        "required": ["repo"]
+      },
+      "required_permissions": ["network"]
+    },
+    {
+      "name": "github_query_prs",
+      "description": "Query pull requests in a GitHub repository.",
+      "python_callable": "plugin:github_query_prs",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "repo": {
+            "type": "string",
+            "description": "Repository in 'owner/repo' format"
+          },
+          "state": {
+            "type": "string",
+            "description": "PR state ('open', 'closed', 'all')",
+            "default": "open"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Max PRs to return (default: 10)"
+          }
+        },
+        "required": ["repo"]
+      },
+      "required_permissions": ["network"]
+    },
+    {
+      "name": "github_get_pr_details",
+      "description": "Get detailed information for a specific pull request including CI checks and diff stats.",
+      "python_callable": "plugin:github_get_pr_details",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "repo": {
+            "type": "string",
+            "description": "Repository in 'owner/repo' format"
+          },
+          "pr_number": {
+            "type": "integer",
+            "description": "Pull request number"
+          }
+        },
+        "required": ["repo", "pr_number"]
+      },
+      "required_permissions": ["network"]
+    },
+    {
+      "name": "github_create_issue",
+      "description": "Create a new issue in a GitHub repository.",
+      "python_callable": "plugin:github_create_issue",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "repo": {
+            "type": "string",
+            "description": "Repository in 'owner/repo' format"
+          },
+          "title": {
+            "type": "string",
+            "description": "Issue title"
+          },
+          "body": {
+            "type": "string",
+            "description": "Issue description/body"
+          },
+          "labels": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Optional list of labels"
+          }
+        },
+        "required": ["repo", "title"]
+      },
+      "required_permissions": ["network"]
+    }
+  ]
+}

@@ -1,0 +1,128 @@
+{
+  "id": "converter",
+  "name": "Multi-Unit & Currency Converter",
+  "version": "1.0.0",
+  "author": "Helm Team",
+  "description": "Currency conversion, safe mathematical expression evaluator, timezone converter, and unit conversion.",
+  "category": "Utilities",
+  "icon": "calculator",
+  "permissions": ["system"],
+  "commands": [
+    {
+      "id": "evaluate_math",
+      "title": "Math Calculator",
+      "description": "Safely evaluate math expressions and formulas",
+      "shortcut": "Ctrl+Shift+M",
+      "handler": "evaluate_math"
+    },
+    {
+      "id": "convert_currency",
+      "title": "Currency Conversion",
+      "description": "Convert amounts between major global currencies",
+      "shortcut": "Ctrl+Shift+C",
+      "handler": "convert_currency"
+    },
+    {
+      "id": "convert_timezone",
+      "title": "Timezone Conversion",
+      "description": "Convert timestamps across global timezones",
+      "handler": "convert_timezone"
+    },
+    {
+      "id": "convert_units",
+      "title": "Unit Conversion",
+      "description": "Convert length, mass, temperature, and digital storage units",
+      "handler": "convert_units"
+    }
+  ],
+  "tools": [
+    {
+      "name": "evaluate_math",
+      "description": "Safely evaluate a mathematical expression (supports trigonometry, powers, logs, and constants without eval).",
+      "python_callable": "plugin:evaluate_math",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "expression": {
+            "type": "string",
+            "description": "Mathematical formula to evaluate (e.g. 'sqrt(144) + 2^3', 'sin(pi/2) * 50')"
+          }
+        },
+        "required": ["expression"]
+      },
+      "required_permissions": ["system"]
+    },
+    {
+      "name": "convert_currency",
+      "description": "Convert money between currencies (USD, EUR, GBP, JPY, CAD, AUD, INR, etc.).",
+      "python_callable": "plugin:convert_currency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "number",
+            "description": "Amount of money to convert"
+          },
+          "from_currency": {
+            "type": "string",
+            "description": "Source 3-letter currency code (e.g. 'USD', 'EUR', 'GBP')"
+          },
+          "to_currency": {
+            "type": "string",
+            "description": "Target 3-letter currency code (e.g. 'JPY', 'INR', 'CAD')"
+          }
+        },
+        "required": ["amount", "from_currency", "to_currency"]
+      },
+      "required_permissions": ["system"]
+    },
+    {
+      "name": "convert_timezone",
+      "description": "Convert a timestamp or hour from one timezone to another.",
+      "python_callable": "plugin:convert_timezone",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "time_str": {
+            "type": "string",
+            "description": "Time string (e.g. '14:30', '2026-03-01 09:00', or 'now')"
+          },
+          "from_tz": {
+            "type": "string",
+            "description": "Source timezone code (e.g. 'UTC', 'EST', 'PST', 'GMT', 'CET', 'IST', 'JST')"
+          },
+          "to_tz": {
+            "type": "string",
+            "description": "Target timezone code"
+          }
+        },
+        "required": ["from_tz", "to_tz"]
+      },
+      "required_permissions": ["system"]
+    },
+    {
+      "name": "convert_units",
+      "description": "Convert physical values across units of length, mass/weight, temperature, or data storage.",
+      "python_callable": "plugin:convert_units",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "number",
+            "description": "Numeric value to convert"
+          },
+          "from_unit": {
+            "type": "string",
+            "description": "Source unit (e.g. 'km', 'mi', 'kg', 'lb', 'C', 'F', 'GB', 'MB')"
+          },
+          "to_unit": {
+            "type": "string",
+            "description": "Target unit"
+          }
+        },
+        "required": ["value", "from_unit", "to_unit"]
+      },
+      "required_permissions": ["system"]
+    }
+  ]
+}

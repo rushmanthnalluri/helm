@@ -1,0 +1,48 @@
+{
+  "id": "weather",
+  "name": "Weather & Forecast Lookup",
+  "version": "1.0.0",
+  "author": "Helm Team",
+  "description": "Instant current weather and multi-day forecast lookup via wttr.in and open-meteo (no API key required).",
+  "category": "Weather",
+  "capabilities": ["network:wttr.in"],
+  "tools": [
+    {
+      "name": "weather_get_current",
+      "description": "Fetch current weather conditions for a city.",
+      "python_callable": "plugin:weather_get_current",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "location": {"type": "string"}
+        },
+        "required": ["location"]
+      }
+    },
+    {
+      "name": "weather_get_forecast",
+      "description": "Fetch multi-day weather forecast.",
+      "python_callable": "plugin:weather_get_forecast",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "location": {"type": "string"},
+          "days": {"type": "integer"}
+        },
+        "required": ["location"]
+      }
+    },
+    {
+      "name": "weather_quick_summary",
+      "description": "Get a compact, one-line human readable weather summary.",
+      "python_callable": "plugin:weather_quick_summary",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "location": {"type": "string"}
+        },
+        "required": ["location"]
+      }
+    }
+  ]
+}

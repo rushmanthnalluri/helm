@@ -1,0 +1,123 @@
+{
+  "id": "spotify",
+  "name": "Spotify Media Controller",
+  "version": "1.2.0",
+  "author": "Helm Community",
+  "description": "Spotify desktop/web player media control, playback state, and track search.",
+  "category": "Media",
+  "icon": "music",
+  "permissions": ["network", "system"],
+  "commands": [
+    {
+      "id": "play",
+      "title": "Play Track",
+      "description": "Play a track on Spotify by search query or resume playback",
+      "shortcut": "Ctrl+Shift+P",
+      "handler": "spotify_play"
+    },
+    {
+      "id": "pause",
+      "title": "Pause Playback",
+      "description": "Pause current Spotify playback",
+      "shortcut": "Ctrl+Shift+Space",
+      "handler": "spotify_pause"
+    },
+    {
+      "id": "now_playing",
+      "title": "Now Playing",
+      "description": "View currently playing track information",
+      "handler": "spotify_now_playing"
+    },
+    {
+      "id": "next",
+      "title": "Next Track",
+      "description": "Skip to the next track",
+      "shortcut": "Ctrl+Shift+Right",
+      "handler": "spotify_next"
+    },
+    {
+      "id": "previous",
+      "title": "Previous Track",
+      "description": "Skip to the previous track",
+      "shortcut": "Ctrl+Shift+Left",
+      "handler": "spotify_previous"
+    }
+  ],
+  "tools": [
+    {
+      "name": "spotify_play",
+      "description": "Search and play a track on Spotify by query, or resume playback if query is empty.",
+      "python_callable": "plugin:spotify_play",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Track, artist, or album name to search and play"
+          }
+        }
+      },
+      "required_permissions": ["network"]
+    },
+    {
+      "name": "spotify_pause",
+      "description": "Pause current Spotify playback.",
+      "python_callable": "plugin:spotify_pause",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      },
+      "required_permissions": ["network"]
+    },
+    {
+      "name": "spotify_now_playing",
+      "description": "Return current track info from Spotify.",
+      "python_callable": "plugin:spotify_now_playing",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      },
+      "required_permissions": ["network"]
+    },
+    {
+      "name": "spotify_search",
+      "description": "Search tracks, artists, or albums on Spotify without immediately playing.",
+      "python_callable": "plugin:spotify_search",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Search query text"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum number of search results (default: 5)"
+          }
+        },
+        "required": ["query"]
+      },
+      "required_permissions": ["network"]
+    },
+    {
+      "name": "spotify_next",
+      "description": "Skip to next track on Spotify.",
+      "python_callable": "plugin:spotify_next",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      },
+      "required_permissions": ["network"]
+    },
+    {
+      "name": "spotify_previous",
+      "description": "Skip to previous track on Spotify.",
+      "python_callable": "plugin:spotify_previous",
+      "parameters": {
+        "type": "object",
+        "properties": {}
+      },
+      "required_permissions": ["network"]
+    }
+  ]
+}

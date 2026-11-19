@@ -1,0 +1,64 @@
+{
+  "id": "notion",
+  "name": "Notion Quick Capture & Search",
+  "version": "1.0.0",
+  "author": "Helm Team",
+  "description": "Quick capture notes and search pages across Notion workspaces.",
+  "category": "Productivity",
+  "capabilities": ["network:api.notion.com"],
+  "tools": [
+    {
+      "name": "notion_quick_capture",
+      "description": "Quickly capture a note, idea, or task to Notion inbox.",
+      "python_callable": "plugin:notion_quick_capture",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "text": {"type": "string"},
+          "title": {"type": "string"},
+          "tags": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["text"]
+      }
+    },
+    {
+      "name": "notion_search_pages",
+      "description": "Search Notion workspace pages and databases by title or query.",
+      "python_callable": "plugin:notion_search_pages",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "query": {"type": "string"},
+          "limit": {"type": "integer"}
+        },
+        "required": ["query"]
+      }
+    },
+    {
+      "name": "notion_create_page",
+      "description": "Create a new structured Notion page with title and content.",
+      "python_callable": "plugin:notion_create_page",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "title": {"type": "string"},
+          "content": {"type": "string"},
+          "parent_id": {"type": "string"}
+        },
+        "required": ["title", "content"]
+      }
+    },
+    {
+      "name": "notion_get_page",
+      "description": "Retrieve page metadata and content by Notion page ID.",
+      "python_callable": "plugin:notion_get_page",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "page_id": {"type": "string"}
+        },
+        "required": ["page_id"]
+      }
+    }
+  ]
+}
