@@ -7,6 +7,7 @@ import io
 import re
 import wave
 import threading
+import time
 import numpy as np
 import sounddevice as sd
 
@@ -116,8 +117,8 @@ class VoiceEngine:
         audio = np.concatenate(self.frames, axis=0).flatten()
         return audio
 
-    def transcribe(self, audio_data):
-        """Transcribes audio numpy array to text."""
+    def transcribe(self, audio_data, allow_cloud_fallback=False):
+        """Transcribe audio locally, with an optional Google Speech API fallback."""
         if audio_data is None or len(audio_data) < self.sample_rate * 0.2:  # < 0.2 sec
             return ""
 
@@ -125,19 +126,12 @@ class VoiceEngine:
         if self._whisper_model is None and not self._loading_model:
             self._load_model()
 
-        if self._whisper_model is not None:
-            try:
-                segments, _ = self._whisper_model.transcribe(
-                    audio_data,
-                    language=self.language if self.language != "auto" else None,
-                    beam_size=5,
-                    vad_filter=True
-                )
-                text = " ".join(s.text.strip() for s in segments).strip()
-                if text:
-                    return text
-            except Exception as e:
-                print(f"[Voice] Whisper transcription error: {e}")
+        text = self._transcribe_with_whisper(audio_data)
+        if text:
+            return text
+
+        if not allow_cloud_fallback:
+            return ""
 
         # 2. Fallback to SpeechRecognition (e.g. Google speech API)
         try:
@@ -161,6 +155,41 @@ class VoiceEngine:
             print(f"[Voice] Fallback recognition error: {e}")
 
         return ""
+
+    def transcribe_local(self, audio_data, wait_timeout_seconds=120):
+        """Transcribe only with the local Whisper model; never call a speech API.
+
+        Dictation uses this method so speech remains on-device. It waits for the
+        background model load, then returns an empty string if Whisper is
+        unavailable instead of sending audio to the network fallback.
+        """
+        if audio_data is None or len(audio_data) < self.sample_rate * 0.2:
+            return ""
+
+        if self._whisper_model is None and not self._loading_model:
+            self._load_model()
+
+        deadline = time.monotonic() + max(0, float(wait_timeout_seconds))
+        while self._whisper_model is None and self._loading_model and time.monotonic() < deadline:
+            time.sleep(0.05)
+
+        return self._transcribe_with_whisper(audio_data)
+
+    def _transcribe_with_whisper(self, audio_data):
+        model = self._whisper_model
+        if model is None:
+            return ""
+        try:
+            segments, _ = model.transcribe(
+                audio_data,
+                language=self.language if self.language != "auto" else None,
+                beam_size=5,
+                vad_filter=True,
+            )
+            return " ".join(segment.text.strip() for segment in segments).strip()
+        except Exception as e:
+            print(f"[Voice] Whisper transcription error: {e}")
+            return ""
 
 _sapi_voice = None
 _sapi_lock = threading.Lock()

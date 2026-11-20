@@ -82,14 +82,8 @@ def preload_in_background(
 ) -> threading.Thread:
     """Spins up a background daemon thread that imports heavy modules using a priority queue.
 
-    Priority ordering:
-      1. faster_whisper (highest priority - gates hold-to-talk voice pipeline)
-      2. torch (ML foundation)
-      3. sentence_transformers (semantic memory embeddings)
-      4. cryptography (security / vault verification)
-      5. winrt (Windows Runtime native integration)
-      6. openpyxl (document processing)
-      7. ctranslate2 (inference acceleration)
+    The default preload list stays limited to core desktop dependencies. Optional
+    ML, document, and integration packages load only when their feature is used.
     """
     global _preload_thread
     with _preload_lock:
@@ -101,12 +95,8 @@ def preload_in_background(
         else:
             priority_order = [
                 (1, "faster_whisper"),
-                (2, "torch"),
-                (3, "sentence_transformers"),
-                (4, "cryptography"),
-                (5, "winrt"),
-                (6, "openpyxl"),
-                (7, "ctranslate2"),
+                (2, "cryptography"),
+                (3, "winrt"),
             ]
 
     pq: queue.PriorityQueue[Tuple[int, str]] = queue.PriorityQueue()

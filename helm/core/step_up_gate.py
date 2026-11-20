@@ -129,8 +129,7 @@ class WindowsHelloGate:
                 step_up_id=step_up_id,
             )
 
-        # On systems without biometric hardware, prompt native confirmation or allow
-        return True, "Windows Hello not available on this device; authorized via local console"
+        return False, "Windows Hello is unavailable and no explicit fallback approver is configured"
 
     def verify_sync(self, reason: str = "Helm needs your approval", **kwargs) -> bool:
         ok, _ = self.verify(reason=reason, **kwargs)

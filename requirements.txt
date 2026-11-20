@@ -1,48 +1,22 @@
+# Core Windows desktop shell, local dictation, automation, and encrypted state.
 pywin32>=308
-pynput>=1.8.0
-sounddevice>=0.5.0
-faster-whisper>=1.0.0
-SpeechRecognition>=3.14.0
 pywebview>=5.0.0
 pystray>=0.19.5
 pillow>=10.0.0
-mss>=9.0.0
+numpy>=1.24.0
+sounddevice>=0.5.0
+faster-whisper>=1.0.0
 pyperclip>=1.8.2
 psutil>=5.9.0
-numpy>=1.24.0
-winrt-runtime>=4.0.0
-winrt-Windows.UI.Notifications.Management>=4.0.0
-winrt-Windows.UI.Notifications>=4.0.0
-winrt-Windows.ApplicationModel>=4.0.0
-winrt-Windows.Security.Credentials.UI>=4.0.0
-pyaudiowpatch>=0.2.12
+mss>=9.0.0
 requests>=2.31.0
 cryptography>=41.0.0
 pycryptodome>=3.19.0
 uiautomation>=2.0.18
 PyYAML>=6.0
-pytest>=7.4.0
-openpyxl>=3.1.0
-lxml>=4.9.0
-spotipy>=2.24.0
-# Voice Engine - Silero VAD + System Dictation
-torch>=2.0.0
-torchaudio>=2.0.0
-silero-vad>=5.1
-keyboard>=0.13.5
-# Omnibar - Fuzzy Search Indexer
+winrt-runtime>=4.0.0
+winrt-Windows.Security.Credentials.UI>=4.0.0
+winrt-Windows.UI.Notifications>=4.0.0
+winrt-Windows.UI.Notifications.Management>=4.0.0
+winrt-Windows.ApplicationModel>=4.0.0
 rapidfuzz>=3.0.0
-# Mail & Calendar - Google Workspace + Microsoft 365
-google-auth-oauthlib>=1.0.0
-google-api-python-client>=2.100.0
-msal>=1.25.0
-# Semantic Memory - Hybrid Vector Search
-sqlite-vec>=0.1.0
-sentence-transformers>=3.0.0
-# Neural TTS - Local Low-Latency Speech Synthesis
-kokoro>=0.9
-piper-tts>=1.2.0
-pyttsx3>=2.90
-# Windows Packaging & Auto-Updater
-velopack>=0.0.1
-websocket-client>=1.6.0

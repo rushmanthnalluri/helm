@@ -28,6 +28,9 @@ wheels/
 .env
 .env.*
 !.env.example
+config/google_token.json
+config/ms_token.json
+config/settings.yaml
 claude_*.png
 *.jsonl
 
@@ -49,3 +52,4 @@ helm_supervisor_crashes.json
 helm_supervisor_dirty.flag
 data/attachments_cache/
 data/*.db
+tests/.test_tmp/

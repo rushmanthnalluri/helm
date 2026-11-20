@@ -1,37 +1,18 @@
-"""
-Helm Voice Caret Text Injection — System-wide inline text injection.
-Pastes transcribed text directly at the current caret/cursor position
-in any active foreground application (Word, Slack, VSCode, Browser, etc.).
-"""
-import sys
-import time
-import logging
+"""Inject Unicode text into the active Windows caret without using the clipboard."""
+
 import ctypes
+import logging
+import sys
 from ctypes import wintypes
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-try:
-    import win32gui
-    import win32clipboard
-    import win32con
-    _WIN32_AVAILABLE = True
-except ImportError:
-    _WIN32_AVAILABLE = False
-    win32gui = None
-    win32clipboard = None
-    win32con = None
-
-# ---------------------------------------------------------------------------
-# Windows SendInput CTypes structures for Ctrl+V keystroke injection
-# ---------------------------------------------------------------------------
 INPUT_KEYBOARD = 1
 KEYEVENTF_KEYUP = 0x0002
-VK_CONTROL = 0x11
-VK_V = 0x56
+KEYEVENTF_UNICODE = 0x0004
 
-PUL = ctypes.POINTER(ctypes.c_ulong)
+ULONG_PTR = ctypes.c_size_t
 
 
 class KeyBdInput(ctypes.Structure):
@@ -40,7 +21,7 @@ class KeyBdInput(ctypes.Structure):
         ("wScan", wintypes.WORD),
         ("dwFlags", wintypes.DWORD),
         ("time", wintypes.DWORD),
-        ("dwExtraInfo", PUL),
+        ("dwExtraInfo", ULONG_PTR),
     ]
 
 
@@ -59,11 +40,11 @@ class MouseInput(ctypes.Structure):
         ("mouseData", wintypes.DWORD),
         ("dwFlags", wintypes.DWORD),
         ("time", wintypes.DWORD),
-        ("dwExtraInfo", PUL),
+        ("dwExtraInfo", ULONG_PTR),
     ]
 
 
-class Input_I(ctypes.Union):
+class InputUnion(ctypes.Union):
     _fields_ = [
         ("ki", KeyBdInput),
         ("mi", MouseInput),
@@ -72,123 +53,75 @@ class Input_I(ctypes.Union):
 
 
 class Input(ctypes.Structure):
+    _anonymous_ = ("ii",)
     _fields_ = [
         ("type", wintypes.DWORD),
-        ("ii", Input_I),
+        ("ii", InputUnion),
     ]
 
 
-def _set_clipboard_win32(text: str, max_retries: int = 5) -> bool:
-    """Set clipboard text using win32clipboard with retry mechanism."""
-    if not _WIN32_AVAILABLE or win32clipboard is None:
-        raise RuntimeError("win32clipboard is not available")
-
-    last_err = None
-    for attempt in range(max_retries):
-        try:
-            win32clipboard.OpenClipboard()
-            try:
-                win32clipboard.EmptyClipboard()
-                win32clipboard.SetClipboardText(text, win32con.CF_UNICODETEXT)
-                return True
-            finally:
-                win32clipboard.CloseClipboard()
-        except Exception as e:
-            last_err = e
-            time.sleep(0.02)
-    raise RuntimeError(f"Could not open/set clipboard: {last_err}")
+_user32 = None
+if sys.platform == "win32":
+    _user32 = ctypes.WinDLL("user32", use_last_error=True)
+    _user32.GetForegroundWindow.argtypes = []
+    _user32.GetForegroundWindow.restype = wintypes.HWND
+    _user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(Input), ctypes.c_int]
+    _user32.SendInput.restype = wintypes.UINT
 
 
-def _send_ctrl_v_sendinput() -> bool:
-    """Simulate Ctrl+V via user32.SendInput to paste clipboard text at caret."""
-    user32 = ctypes.windll.user32
-    extra = ctypes.c_ulong(0)
-    p_extra = ctypes.pointer(extra)
-
-    # Input events: Ctrl DOWN -> V DOWN -> V UP -> Ctrl UP
-    inputs = (Input * 4)(
-        Input(type=INPUT_KEYBOARD, ii=Input_I(ki=KeyBdInput(wVk=VK_CONTROL, wScan=0, dwFlags=0, time=0, dwExtraInfo=p_extra))),
-        Input(type=INPUT_KEYBOARD, ii=Input_I(ki=KeyBdInput(wVk=VK_V, wScan=0, dwFlags=0, time=0, dwExtraInfo=p_extra))),
-        Input(type=INPUT_KEYBOARD, ii=Input_I(ki=KeyBdInput(wVk=VK_V, wScan=0, dwFlags=KEYEVENTF_KEYUP, time=0, dwExtraInfo=p_extra))),
-        Input(type=INPUT_KEYBOARD, ii=Input_I(ki=KeyBdInput(wVk=VK_CONTROL, wScan=0, dwFlags=KEYEVENTF_KEYUP, time=0, dwExtraInfo=p_extra))),
-    )
-
-    sent = user32.SendInput(len(inputs), inputs, ctypes.sizeof(Input))
-    if sent != len(inputs):
-        raise RuntimeError(f"SendInput sent only {sent}/{len(inputs)} events")
-    return True
+def get_foreground_window_handle() -> Optional[int]:
+    """Return the foreground HWND, or ``None`` outside Windows / without a window."""
+    if _user32 is None:
+        return None
+    hwnd = _user32.GetForegroundWindow()
+    return int(hwnd) if hwnd else None
 
 
-def _fallback_paste(text: str) -> bool:
+def _keyboard_events(text: str):
+    """Build down/up events for every UTF-16 code unit in ``text``."""
+    encoded = text.encode("utf-16-le")
+    units = [encoded[index] | (encoded[index + 1] << 8) for index in range(0, len(encoded), 2)]
+    events = (Input * (2 * len(units)))()
+    for index, unit in enumerate(units):
+        events[index * 2] = Input(
+            type=INPUT_KEYBOARD,
+            ki=KeyBdInput(wVk=0, wScan=unit, dwFlags=KEYEVENTF_UNICODE, time=0, dwExtraInfo=0),
+        )
+        events[index * 2 + 1] = Input(
+            type=INPUT_KEYBOARD,
+            ki=KeyBdInput(
+                wVk=0,
+                wScan=unit,
+                dwFlags=KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
+                time=0,
+                dwExtraInfo=0,
+            ),
+        )
+    return events
+
+
+def inject_text_at_caret(text: str, expected_hwnd: Optional[int] = None) -> bool:
+    """Send text to the active caret using ``SendInput(KEYEVENTF_UNICODE)``.
+
+    When ``expected_hwnd`` is supplied, injection is cancelled if focus has moved
+    to another window since recording began. The system clipboard is never read
+    or modified.
     """
-    Fallback paste mechanism using pyperclip and keyboard.send('ctrl+v') or native Win32 keybd_event.
-    """
-    import pyperclip
-    pyperclip.copy(text)
-
-    try:
-        import keyboard
-        keyboard.send("ctrl+v")
-        return True
-    except Exception:
-        logger.debug("[VoiceInject] keyboard module not available, using native keybd_event fallback")
-        try:
-            import ctypes
-            VK_CONTROL = 0x11
-            VK_V = 0x56
-            KEYEVENTF_KEYUP = 0x0002
-            ctypes.windll.user32.keybd_event(VK_CONTROL, 0, 0, 0)
-            ctypes.windll.user32.keybd_event(VK_V, 0, 0, 0)
-            ctypes.windll.user32.keybd_event(VK_V, 0, KEYEVENTF_KEYUP, 0)
-            ctypes.windll.user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
-            return True
-        except Exception as p_err:
-            raise RuntimeError(f"Fallback keyboard injection failed: {p_err}")
-
-
-def inject_text_at_caret(text: str) -> bool:
-    """
-    Inject text at current cursor position in the foreground application window.
-
-    Steps:
-    1. Obtains the active foreground window handle via win32gui.GetForegroundWindow()
-    2. Uses win32clipboard + SendInput with Ctrl+V to paste the text at the caret
-    3. Falls back to pyperclip + keyboard.send('ctrl+v') if direct paste fails.
-
-    Args:
-        text: Transcribed speech text to paste at the caret.
-
-    Returns:
-        bool: True if injection succeeded, False otherwise.
-    """
-    if not text:
+    if not text or _user32 is None:
         return False
 
-    hwnd = 0
-    if _WIN32_AVAILABLE and win32gui is not None:
-        try:
-            hwnd = win32gui.GetForegroundWindow()
-            logger.debug(f"[VoiceInject] Active foreground window handle: {hwnd}")
-        except Exception as e:
-            logger.warning(f"[VoiceInject] GetForegroundWindow query failed: {e}")
+    hwnd = get_foreground_window_handle()
+    if hwnd is None:
+        logger.warning("Cannot inject dictation because there is no foreground window")
+        return False
+    if expected_hwnd is not None and hwnd != int(expected_hwnd):
+        logger.warning("Dictation cancelled because the foreground window changed")
+        return False
 
-    # Primary injection path: win32clipboard + SendInput
-    try:
-        if not _WIN32_AVAILABLE:
-            raise RuntimeError("win32 modules unavailable")
-        _set_clipboard_win32(text)
-        time.sleep(0.01)  # Brief yield for clipboard settle
-        _send_ctrl_v_sendinput()
-        logger.info(f"[VoiceInject] Injected text via win32clipboard + SendInput (hwnd={hwnd})")
-        return True
-    except Exception as direct_err:
-        logger.warning(
-            f"[VoiceInject] win32 direct paste failed ({direct_err}), falling back to pyperclip + keyboard"
-        )
-        try:
-            _fallback_paste(text)
-            logger.info("[VoiceInject] Injected text via fallback mechanism")
-            return True
-        except Exception as fallback_err:
-            logger.error(f"[VoiceInject] All text injection methods failed: {fallback_err}")
-            return False
+    events = _keyboard_events(text)
+    sent = _user32.SendInput(len(events), events, ctypes.sizeof(Input))
+    if sent != len(events):
+        error_code = ctypes.get_last_error()
+        logger.warning("SendInput inserted %s of %s events (Windows error %s)", sent, len(events), error_code)
+        return False
+    return True

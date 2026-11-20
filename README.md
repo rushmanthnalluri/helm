@@ -1,16 +1,16 @@
-﻿# ⚓ Helm — The Privacy-First, Locally-Sovereign AI Assistant for Windows
+﻿# ⚓ Helm — Windows Desktop Assistant with Local Voice Dictation
 
 <p align="center">
   Hold <kbd>Ctrl</kbd> <kbd>Alt</kbd> <kbd>Space</kbd>, say what you need, let go.<br>
-  <b>Helm</b> streams text into your active caret, controls Windows, analyzes your screen, and automates tasks — entirely on your hardware.
+  <b>Helm</b> transcribes caret dictation on-device and can connect to local or cloud AI providers.
 </p>
 
 <p align="center">
   <b>🧠 Durable Memory</b> &nbsp;·&nbsp; 
-  <b>🎙️ Universal Caret Dictation</b> &nbsp;·&nbsp; 
-  <b>⚡ &lt;10ms Native UI &amp; Omnibar</b> &nbsp;·&nbsp; 
-  <b>🛡️ Deterministic UI Automation (Zero PyAutoGUI)</b> &nbsp;·&nbsp; 
-  <b>🆓 Local Offline Fallback (Ollama)</b> &nbsp;·&nbsp; 
+  <b>🎙️ Local Caret Dictation</b> &nbsp;·&nbsp;
+  <b>⌨️ Unicode Keyboard Input</b> &nbsp;·&nbsp;
+  <b>🛡️ Windows UI Automation</b> &nbsp;·&nbsp;
+  <b>🆓 Local Ollama or Offline Mode</b> &nbsp;·&nbsp;
   <b>Free &amp; Open Source</b>
 </p>
 
@@ -18,39 +18,40 @@
 
 ## 🌟 What is Helm?
 
-**Helm** is an open-source, privacy-first desktop platform built natively for **Windows 10 and Windows 11**. It bridges hardware-level caret dictation, deterministic Microsoft UI Automation (UIA), high-resolution screen vision, and modular agent tools into a unified, high-performance desktop experience.
-
-Whether streaming dictated prose directly into your IDE, snapping windows across multi-monitor setups, or compiling complex desktop workflows into instantaneous macros, Helm executes with sub-millisecond dispatch and a background memory footprint under **80 MB RAM**.
+**Helm** is an open-source Windows desktop assistant for Windows 10 and Windows 11. Caret dictation uses local Whisper transcription and Unicode `SendInput`; it does not use the clipboard. Helm can run in local offline mode, connect to Ollama, or send prompts and selected context to a cloud provider when one is configured.
 
 ### Core Capabilities
 
 | Capability | Detail |
 | :--- | :--- |
-| **🎙️ Universal Caret Dictation** | Hold <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Space</kbd> anywhere to stream voice directly into the active foreground caret via hardware-level `SendInput(KEYEVENTF_UNICODE)`. Sub-300ms latency, automatic filler-word stripping (`um`, `uh`, `like`), and zero clipboard pollution. |
-| **⚡ Spotlight-Class Omnibar** | Press <kbd>Alt</kbd>+<kbd>Space</kbd> to launch the fuzzy-search omnibar for instant app launching, file search, web queries, and quick commands (<10ms activation). |
+| **🎙️ Caret Dictation** | The desktop path uses local Whisper and Unicode keyboard input without touching the clipboard. Keep the target app focused; Helm cancels insertion if focus changes. Physical compatibility acceptance across Windows apps is still pending. |
+| **🗣️ Talk to Helm** | Hold <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> to send speech to Helm. Transcription is local by default; optional Google speech fallback is off unless enabled in settings. |
+| **⚡ Omnibar** | Press <kbd>Alt</kbd>+<kbd>Space</kbd> to open the fuzzy-search omnibar for app launching, file search, web queries, and quick commands. |
 | **🎨 Interactive Side Canvas** | Side-by-side Artifacts 2.0 viewer rendering code, live diagrams (Mermaid), and formatted Markdown reports alongside your chat. |
-| **🖱️ Deterministic UI Automation** | 100% PyAutoGUI-free. Deep Microsoft UI Automation (UIA) COM patterns (`InvokePattern`, `ValuePattern`) with strict window confinement boundaries and zero blind sleeps. |
+| **🖱️ Windows UI Automation** | Uses Microsoft UI Automation (UIA) patterns such as `InvokePattern` and `ValuePattern` for supported controls. |
 | **👀 Screen Vision & OCR** | *"What's on my screen right now?"* — captures display frames and analyzes open windows, active editors, or visual errors. |
 | **🪟 Native Window Snapping** | *"Put Chrome on the left and VS Code on the right"* — snaps windows across multi-monitor topologies while respecting taskbar and DPI scaling. |
 | **🧠 Durable Memory & Knowledge Graph** | Persistent entity extraction and SQLite-backed rules injected contextually into agent turns. |
-| **🛡️ Windows Hello Biometric Security** | Sensitive actions (credential retrieval, system modification) are physically gated behind on-device Windows Hello face/fingerprint authentication. |
-| **⚙️ Macro & Skill Compiler** | Compiles natural-language multi-step instructions into deterministic, high-speed macros (<50ms execution). |
+| **🛡️ Consequential-action approvals** | The broker requests Windows Hello for medium- and high-risk actions; that route fails closed if Hello is unavailable and no explicit fallback is configured. The supervisor separately requires a signed approval from an enrolled device for protected consequential actions and denies them when no device is enrolled. Windows Hello alone does not replace that supervisor signature. |
+| **⚙️ Macro & Skill Compiler** | Compiles natural-language multi-step instructions into reusable macros. Review action approvals and platform requirements before enabling automation. |
 
 ---
 
-## 🤖 Multi-Provider AI & Zero-Config Mode
+## 🤖 Multi-Provider AI and Offline Options
 
-Helm supports cloud intelligence and 100% offline local inference:
+Helm can use local models or cloud providers:
 
 | Provider | Free Tier | Supported Models |
 | :--- | :--- | :--- |
-| **Local Ollama** | ✅ **100% Free & Offline** (zero config) | `qwen2.5`, `llama3.2`, `mistral`, and custom models |
+| **Local Ollama** | Runs locally after Ollama and a model are installed | `qwen2.5`, `llama3.2`, `mistral`, and custom models |
 | **Google AI Studio (Gemini)** | ✅ Generous free tier, multimodal vision | `gemini-2.0-flash`, `gemini-1.5-flash` |
 | **Groq Cloud** | ✅ Ultra-fast Llama inference | `llama-3.3-70b-versatile` |
 | **NVIDIA NIM** | ✅ Free cloud developer credits | `meta/llama-3.3-70b-instruct`, `deepseek-ai/deepseek-r1` |
 
-### Zero-Config Offline Fallback
-If no API keys are configured, Helm detects local Ollama automatically. If Ollama is unavailable, Helm gracefully operates in offline local guidance mode — ensuring the app never fails on first launch.
+### Provider and data behavior
+The default provider setting is `auto`: configured cloud API keys are selected before local Ollama. If no cloud key is configured, Helm tries Ollama and then offline local guidance. To keep AI requests on-device, set `provider` to `ollama` or `local_offline` in `~/.config/helm/settings.json`. When a cloud provider is selected, Helm sends the prompt and the context included for that request to that provider. Screen-analysis requests can include captured screen content. Connected integrations send data to their target service when you invoke them.
+
+Caret dictation and talk-to-Helm transcription use the on-device Whisper model. Helm downloads the selected model the first time it is needed; recorded speech remains local. The optional `speechCloudFallback` setting is off by default. If enabled and local Whisper cannot transcribe, Helm sends the recorded speech to Google's Speech Recognition service. That option also requires the optional `SpeechRecognition` package.
 
 ### Configuring Cloud Providers
 
@@ -65,7 +66,7 @@ setx GROQ_API_KEY "gsk_..."
 setx NVIDIA_API_KEY "nvapi-..."
 ```
 
-Or configure directly in `~/.config/helm/settings.yaml`.
+Or configure directly in `~/.config/helm/settings.json`.
 
 ---
 
@@ -73,7 +74,7 @@ Or configure directly in `~/.config/helm/settings.yaml`.
 
 ### Prerequisites
 - **Windows 10 or Windows 11** (x64)
-- **Python 3.10+** (Python 3.11 – 3.14 fully supported)
+- **Python 3.12 x64** for the checked-in Windows build workflow
 
 ### Installation
 
@@ -82,8 +83,11 @@ Or configure directly in `~/.config/helm/settings.yaml`.
 git clone https://github.com/helm-ai/helm.git
 cd helm
 
-# Install production dependencies
-pip install -r requirements.txt
+# Install core desktop dependencies
+python -m pip install -r requirements.txt
+
+# Optional feature integrations and larger ML/TTS stacks
+python -m pip install -r requirements-optional.txt
 ```
 
 ---
@@ -95,11 +99,11 @@ pip install -r requirements.txt
 ```powershell
 python -m helm.gui.app
 ```
-*Opens the Windows 11 chat panel with system tray icon, global push-to-talk hotkey, Omnibar (<kbd>Alt</kbd>+<kbd>Space</kbd>), and Interactive Side Canvas.*
+*Opens the desktop panel with system tray icon, local caret dictation, talk-to-Helm, Omnibar, and Side Canvas.*
 
-### 2. Universal Caret Dictation
+### 2. Local Caret Dictation
 
-Hold <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Space</kbd> in **any application** (VS Code, Word, Chrome, Slack, Windows Terminal), speak, and release. Helm transcribes on-device with Whisper and streams the text directly into the caret.
+Hold <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Space</kbd> in the target app, speak, and release. The desktop implementation transcribes with local Whisper and sends Unicode keyboard input without using the clipboard. The target app must stay focused; Helm cancels insertion if focus changes. On first use, Whisper downloads its model to `~/.config/helm/whisper`. Physical acceptance testing across Windows apps is pending; this code path is not yet a verified compatibility claim.
 
 ### 3. Text Terminal Chat
 
@@ -130,8 +134,9 @@ python -m helm.core.helm --fast "pause music"
 
 | Shortcut | Action | Scope |
 | :--- | :--- | :--- |
-| <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Space</kbd> *(Hold)* | Push-to-Talk Universal Caret Dictation | Global OS |
-| <kbd>Alt</kbd>+<kbd>Space</kbd> | Toggle Spotlight/Raycast Omnibar | Global OS |
+| <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Space</kbd> *(Hold)* | Local caret dictation | Global OS |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Space</kbd> *(Hold)* | Talk to Helm | Global OS |
+| <kbd>Alt</kbd>+<kbd>Space</kbd> | Toggle the Omnibar | Global OS |
 | <kbd>Esc</kbd> | Dismiss active card, barge-in speech, or cancel turn | Active Window |
 
 ---
@@ -156,7 +161,7 @@ d:\homie\
 │   │   ├── event_log.py             # Tamper-evident structured event logger
 │   │   └── update_verifier.py       # Monotonic Ed25519 update verification
 │   │
-│   ├── gui/                         # Native Windows 11 Desktop Interface
+│   ├── gui/                         # Windows desktop interface
 │   │   ├── app.py                   # Main PyWebView shell & hotkey pump
 │   │   ├── helm_omnibar.py          # Spotlight/Raycast-class Omnibar overlay
 │   │   ├── helm_canvas.py           # Interactive Side Canvas & Artifacts 2.0
@@ -164,7 +169,7 @@ d:\homie\
 │   │   └── tray_hud.py              # System tray HUD & status notifications
 │   │
 │   └── engine/                      # Intelligence, Dictation & Automation
-│       ├── voice_inject.py          # Universal Caret Dictation (SendInput UNICODE)
+│       ├── voice_inject.py          # Unicode SendInput; no clipboard use
 │       ├── voice_pipeline.py        # Streaming VAD + faster-whisper STT
 │       ├── windows_tools.py         # Deterministic UIA automation (Zero PyAutoGUI)
 │       ├── ai_engine.py             # Multi-provider LLM router & vision analyzer
@@ -173,9 +178,9 @@ d:\homie\
 │       ├── semantic_screen_memory.py# SQLite vector screen memory indexer
 │       └── desktop_agent.py         # Accessibility-grounded desktop agent
 │
-├── packaging/                       # Production Distribution Pipeline
-│   ├── AppxManifest.xml             # Signed MSIX package manifest
-│   └── winget/Helm.yaml             # Authenticated WinGet package manifest
+├── packaging/                       # MSIX assets and release templates
+│   ├── AppxManifest.xml             # MSIX identity and capabilities
+│   └── winget/Helm.yaml             # WinGet release template
 │
 ├── plugins/                         # Built-in & Custom Extensions
 │   ├── spotify/                     # Spotify playback & queue management
@@ -189,7 +194,7 @@ d:\homie\
 │   ├── canvas.html                  # Side Canvas viewer
 │   └── omnibar.html                 # Omnibar search overlay
 │
-└── tests/                           # Complete Verification Battery (800+ tests)
+└── tests/                           # Unit and integration tests
 ```
 
 ---
@@ -216,15 +221,15 @@ Helm discovers plugins from `plugins/` and user configuration directories automa
 
 ---
 
-## 🧪 Running the Verification Battery
+## 🧪 Tests
 
-Helm is backed by an automated verification suite covering security invariants, caret dictation, deterministic UIA, and sub-10ms UI latency:
+The first command runs a selected ten-file regression set. It does not run every test file or prove dictation works across physical Windows apps. The second command asks pytest to run the full `tests/` tree.
 
 ```powershell
-# Run the 10-suite production regression battery
+# Selected regression files
 python -m pytest tests/test_performance_benchmarks.py tests/test_deterministic_uia.py tests/test_caret_dictation.py tests/test_msix_packaging.py tests/test_zero_config_fallback.py tests/test_telemetry.py tests/test_sync_engine.py tests/test_live_voice.py tests/test_plugin_ecosystem.py tests/test_os_hal.py -q
 
-# Run all 800+ unit, integration, and security tests
+# Run the full test tree
 python -m pytest tests/ -q
 ```
 
@@ -232,12 +237,12 @@ python -m pytest tests/ -q
 
 ## 📦 Packaging & Distribution
 
-- **MSIX:** Automated build via `scripts/build_msix.ps1`.
-- **WinGet:** Installable via the official manifest [`packaging/winget/Helm.yaml`](packaging/winget/Helm.yaml).
-- **Auto-Updates:** Verified monotonic delta updates signed with publisher Ed25519 keys via Velopack.
+- **Standalone build:** `python scripts/build_standalone.py --clean` creates `dist/Helm/Helm.exe` and `dist/Helm.sha256`.
+- **MSIX:** `scripts/build_msix.ps1` creates and signs a package when a publisher certificate and Windows SDK are available. Use `-SkipSign` only for local development.
+- **WinGet:** `packaging/winget/Helm.yaml` is a template. The signed release workflow generates the manifest and artifact hash; this checkout does not contain a published installer.
 
 ---
 
 ## 📄 License
 
-MIT License — free and open source for personal and commercial use.
+See [LICENSE](LICENSE).

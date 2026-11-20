@@ -1,6 +1,6 @@
 """Helm Agent Audit Ledger.
 Provides an immutable, tamper-evident append-only cryptographic ledger (hash-chained)
-tracking every tool execution across MCP clients, Telegram, Phone Gateway, and Voice:
+tracking every tool execution across MCP clients, messaging integrations, and voice:
 - Records timestamp, caller identity, tool name, arguments hash, capability tier, decision
 - Enforces a SHA-256 hash chain linking every entry to the previous block
 - Provides ledger verification to mathematically prove zero tampering

@@ -47,15 +47,15 @@ python -m helm.engine.chat_cli
 ```
 
 > [!NOTE]
-> Configuration lives at `%USERPROFILE%\.config\helm\settings.yaml`. You can also override settings via environment variables (`GEMINI_API_KEY`, `GROQ_API_KEY`, `NVIDIA_API_KEY`).
+> Configuration lives at `%USERPROFILE%\.config\helm\settings.json`. You can also override provider keys with environment variables (`GEMINI_API_KEY`, `GROQ_API_KEY`, `NVIDIA_API_KEY`).
 
 ---
 
 ## 🧪 Running Tests
 
-Helm is verified by **800+ automated tests across 90+ test files**.
+The repository contains unit and integration tests. The selected regression command below is not the complete test tree, and test collection is not the same as test execution.
 
-### Run the Core Production Battery
+### Run the Selected Regression Set
 
 ```powershell
 python -m pytest tests/test_performance_benchmarks.py tests/test_deterministic_uia.py tests/test_caret_dictation.py tests/test_msix_packaging.py tests/test_zero_config_fallback.py tests/test_telemetry.py tests/test_sync_engine.py tests/test_live_voice.py tests/test_plugin_ecosystem.py tests/test_os_hal.py -q
@@ -84,14 +84,14 @@ python -m pytest -v
 
 | Area | Description |
 |---|---|
-| **Performance Benchmarks** | Sub-10ms Mica Alt compositing, HWND pre-warm latency, <80MB RAM daemon footprint |
-| **Deterministic UIA** | 100% PyAutoGUI purge check (AST visitor), Microsoft UIA COM patterns, window confinement |
-| **Caret Dictation** | Native `SendInput(KEYEVENTF_UNICODE)` streaming, filler word removal, sub-300ms latency |
-| **Biometrics & Security** | Windows Hello face/fingerprint authentication, HMAC-SHA256 audit ledger, taint tracking |
+| **Performance Benchmarks** | Timing checks for selected UI and startup paths; results depend on the host machine |
+| **Deterministic UIA** | Static AST check for PyAutoGUI calls in selected source paths; Microsoft UIA patterns and window checks |
+| **Caret Dictation** | Desktop path uses local Whisper and clipboard-free Unicode `SendInput`; physical app acceptance still needs Windows testing |
+| **Action approvals** | Windows Hello is a route-specific gate; protected supervisor actions additionally require a signed approval from an enrolled device |
 | **Zero-Config Fallback** | Automated offline guidance and local Ollama detection |
 | **Voice Pipeline** | Streaming VAD, faster-whisper STT, neural TTS barge-in |
 | **Plugin Ecosystem** | Plugin discovery, manifest validation, SDK lifecycle |
-| **MSIX Packaging** | AppxManifest compliance, asset enumeration, authentic WinGet SHA-256 digest |
+| **MSIX Packaging** | AppxManifest and asset checks; release WinGet hashes are generated from the signed artifact |
 
 ---
 

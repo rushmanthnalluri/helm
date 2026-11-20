@@ -1,0 +1,19 @@
+# Optional integrations and larger ML features. Install only what you use.
+SpeechRecognition>=3.14.0
+pyaudiowpatch>=0.2.12
+torch>=2.0.0
+torchaudio>=2.0.0
+silero-vad>=5.1
+spotipy>=2.24.0
+google-auth-oauthlib>=1.0.0
+google-api-python-client>=2.100.0
+msal>=1.25.0
+sqlite-vec>=0.1.0
+sentence-transformers>=3.0.0
+openpyxl>=3.1.0
+lxml>=4.9.0
+kokoro>=0.9
+piper-tts>=1.2.0
+pyttsx3>=2.90
+velopack>=0.0.1
+websocket-client>=1.6.0

@@ -8,10 +8,13 @@ import sys
 import json
 import time
 import threading
+import logging
 import webview
 
 # Lazy module loaders for heavy C-extensions and sub-systems
-from helm_lazy import LazyModule, preload_in_background
+from helm.engine.helm_lazy import LazyModule, preload_in_background
+
+logger = logging.getLogger(__name__)
 
 # Ensure UTF-8 output on Windows consoles
 if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
@@ -25,7 +28,6 @@ if BASE_DIR not in sys.path:
 
 # Deferred / lazy module wrappers to slash startup latency
 pyperclip = LazyModule("pyperclip")
-keyboard = LazyModule("pynput.keyboard")
 Image = LazyModule("PIL.Image")
 helm = LazyModule("helm")
 windows_tools = LazyModule("windows_tools")
@@ -147,6 +149,8 @@ class HelmApp:
         self._ask_tasks_lock = threading.Lock()
         self._speech_stream_active = threading.Event()
         self.is_recording = False
+        self._recording_mode = None
+        self._dictation_target_hwnd = None
         self.paused = False
         self.held_keys = set()
         self.hotkey_listener = None
@@ -295,11 +299,24 @@ class HelmApp:
         if self.canvas:
             self.canvas.show_artifact(title=title, content=content, content_type=content_type)
 
-    def start_listening(self):
-        """Initiates voice recording on hotkey press."""
+    def start_listening(self, mode="assistant"):
+        """Start assistant speech capture or local-only caret dictation."""
         if self.is_recording or self.paused:
             return
-        if self.is_processing:
+        target_hwnd = None
+        if mode == "dictation":
+            if self.is_processing:
+                self.eval_js("window.ui.notice('Wait for the current Helm response to finish before dictating.')")
+                return
+            try:
+                from helm.engine.voice_inject import get_foreground_window_handle
+                target_hwnd = get_foreground_window_handle()
+            except Exception as e:
+                logger.error("Could not identify the dictation target window: %s", e)
+            if target_hwnd is None:
+                self.eval_js("window.ui.notice('Dictation needs an active Windows app window.')")
+                return
+        elif self.is_processing:
             # Barge-in is accepted only after assistant audio has actually started.
             if not self._speech_stream_active.is_set():
                 return
@@ -307,16 +324,24 @@ class HelmApp:
         self._speech_stream_active.clear()
 
         self.is_recording = True
-        self.show_window()
-        self.eval_js("window.ui.listen()")
+        self._recording_mode = mode
+        self._dictation_target_hwnd = target_hwnd
+        if mode == "assistant":
+            self.show_window()
+            self.eval_js("window.ui.listen()")
 
         def on_level(lvl):
-            if self.is_recording:
+            if self.is_recording and self._recording_mode == "assistant":
                 self.eval_js(f"window.ui.level({lvl:.3f})")
 
         if self.voice.start_recording(level_callback=on_level) is False:
             self.is_recording = False
-            self.eval_js("window.ui.stopped('Microphone unavailable')")
+            self._recording_mode = None
+            self._dictation_target_hwnd = None
+            if mode == "assistant":
+                self.eval_js("window.ui.stopped('Microphone unavailable')")
+            else:
+                self.eval_js("window.ui.notice('Dictation could not start: microphone unavailable.')")
 
     @property
     def is_processing(self) -> bool:
@@ -331,14 +356,22 @@ class HelmApp:
         if not self.is_recording:
             return
 
+        mode = self._recording_mode or "assistant"
+        target_hwnd = self._dictation_target_hwnd
         self.is_recording = False
-        self.eval_js("window.ui.think()")
+        self._recording_mode = None
+        self._dictation_target_hwnd = None
+        if mode == "assistant":
+            self.eval_js("window.ui.think()")
 
         # Stop audio capture
         audio_data = self.voice.stop_recording()
 
         # Process via durable TaskManager with bounded workers and cancellation
-        self.submit_user_turn('voice_audio_transcription', self._process_audio, audio_data)
+        if mode == "dictation":
+            self.submit_user_turn('voice_caret_dictation', self._process_dictation, audio_data, target_hwnd)
+        else:
+            self.submit_user_turn('voice_audio_transcription', self._process_audio, audio_data)
 
     def toggle_listening(self):
         """Toggles recording for press-to-talk mode."""
@@ -367,8 +400,12 @@ class HelmApp:
         try:
             if cancel_event and cancel_event.is_set():
                 return
+            self.prefs = helm.get_prefs()
             # Transcribe speech
-            text = self.voice.transcribe(audio_data)
+            text = self.voice.transcribe(
+                audio_data,
+                allow_cloud_fallback=bool(self.prefs.get('speechCloudFallback', False)),
+            )
             if cancel_event and cancel_event.is_set():
                 return
             if not text:
@@ -379,6 +416,38 @@ class HelmApp:
             self.handle_user_ask(text, caller_id='desktop_voice', cancel_event=cancel_event)
         finally:
             self.is_processing = False
+
+    def _process_dictation(self, audio_data, target_hwnd, cancel_event=None):
+        """Transcribe locally and insert into the same foreground app the user held."""
+        try:
+            if cancel_event and cancel_event.is_set():
+                return
+
+            text = self.voice.transcribe_local(audio_data)
+            if cancel_event and cancel_event.is_set():
+                return
+            if not text:
+                self.eval_js("window.ui.notice('No speech was transcribed locally.')")
+                return
+
+            from helm.engine.voice_pipeline import FillerWordFilter
+            from helm.engine.voice_inject import get_foreground_window_handle, inject_text_at_caret
+
+            text = FillerWordFilter()(text)
+            if not text:
+                self.eval_js("window.ui.notice('Dictation contained only filler words.')")
+                return
+
+            if get_foreground_window_handle() != target_hwnd:
+                self.eval_js("window.ui.notice('Dictation cancelled because the active app changed.')")
+                return
+            if not inject_text_at_caret(text, expected_hwnd=target_hwnd):
+                self.eval_js("window.ui.notice('Could not insert dictation. Keep the target app focused and try again.')")
+                return
+            self.eval_js("window.ui.notice('Dictation inserted.')")
+        except Exception as e:
+            logger.exception("Caret dictation failed")
+            self.eval_js("window.ui.notice('Dictation failed. Check the Helm log for details.')")
 
     def handle_user_ask(self, text, caller_id='desktop_voice', cancel_event=None):
         """Handles an ask either from voice or typing."""
@@ -560,7 +629,7 @@ class HelmApp:
         t_hook.start()
 
         def hotkey_worker():
-            was_holding = False
+            active_hold_mode = None
             while True:
                 time.sleep(0.02)  # 50Hz poll (uses <0.01% CPU)
                 try:
@@ -576,24 +645,40 @@ class HelmApp:
 
                     if esc:
                         if self.is_recording:
+                            mode = self._recording_mode
                             self.is_recording = False
                             self.voice.stop_recording()
-                            self.eval_js("window.ui.stopped('Cancelled')")
-                            time.sleep(0.3)
+                            self._recording_mode = None
+                            self._dictation_target_hwnd = None
+                            if mode == "assistant":
+                                self.eval_js("window.ui.stopped('Cancelled')")
+                            else:
+                                self.eval_js("window.ui.notice('Dictation cancelled.')")
+                        active_hold_mode = "cancelled"
+                        time.sleep(0.3)
                         continue
 
-                    # Trigger hold-to-talk on Ctrl+Alt+Space OR Ctrl+Shift+Space
-                    is_holding = ctrl and space and (alt or shift)
+                    if active_hold_mode == "cancelled":
+                        if not (ctrl or alt or shift or space):
+                            active_hold_mode = None
+                        continue
 
-                    if is_holding and not was_holding:
-                        was_holding = True
-                        self.start_listening()
-                    elif not is_holding and was_holding:
-                        was_holding = False
-                        self.stop_listening()
+                    # Ctrl+Alt+Space dictates into the active app; Ctrl+Shift+Space talks to Helm.
+                    hold_mode = None
+                    if ctrl and alt and space and not shift:
+                        hold_mode = "dictation"
+                    elif ctrl and shift and space and not alt:
+                        hold_mode = "assistant"
+
+                    if hold_mode != active_hold_mode:
+                        if active_hold_mode in ("assistant", "dictation"):
+                            self.stop_listening()
+                        active_hold_mode = hold_mode
+                        if hold_mode:
+                            self.start_listening(mode=hold_mode)
 
                     # Omnibar trigger: Alt + Space (without Ctrl)
-                    if alt and space and not ctrl and not was_holding:
+                    if alt and space and not ctrl and active_hold_mode is None:
                         self._toggle_omnibar()
                         time.sleep(0.3)
 

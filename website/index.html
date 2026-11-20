@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Helm — The Sovereign Desktop AI Companion for Windows</title>
+  <title>Helm — Windows Desktop Assistant</title>
   <link rel="stylesheet" href="style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -19,14 +19,13 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
         </div>
         <span class="brand-name">Helm</span>
-        <span class="badge">v1.0 Windows</span>
+        <span class="badge">Source build</span>
       </div>
       <div class="nav-links">
         <a href="#features">Capabilities</a>
-        <a href="#demo">Live Simulator</a>
-        <a href="#compare">Comparison</a>
-        <a href="#architecture">Security</a>
-        <a href="#download" class="btn btn-nav">Get Helm</a>
+        <a href="#demo">Interactive Preview</a>
+        <a href="#compare">Data flows</a>
+        <a href="#download" class="btn btn-nav">Source build</a>
       </div>
     </div>
   </nav>
@@ -36,36 +35,30 @@
     <div class="container hero-content">
       <div class="pill-announcement">
         <span class="pill-dot"></span>
-        <span>100% Private · Zero Cloud Required · Windows Hello Verified</span>
+        <span>Local dictation · Optional cloud AI · Windows desktop</span>
       </div>
       <h1 class="hero-title">
-        The Sovereign Desktop AI<br>
-        <span class="gradient-text">Built for Power Users on Windows.</span>
+        Local Dictation and Optional AI<br>
+        <span class="gradient-text">for Windows.</span>
       </h1>
       <p class="hero-subtitle">
-        Sub-second voice dictation, neural speech synthesis, Raycast-class Omnibar, 
-        and hybrid vector memory. Works offline out-of-the-box with Ollama or connects 
-        to leading cloud intelligence.
+        The desktop code includes local Whisper dictation, Unicode keyboard input, and optional AI providers.
+        Physical Windows app compatibility is still being evaluated, and no public installer is available yet.
       </p>
 
       <div class="hero-cta-group">
         <a href="#download" class="btn btn-primary btn-large">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
-          Download for Windows 11 / 10
+          Build from source
         </a>
-        <div class="winget-box" id="wingetBox" onclick="copyWinget()">
-          <code>winget install Helm.DesktopAI</code>
-          <button class="copy-btn" title="Copy to clipboard">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-          </button>
-        </div>
+        <p class="release-status">No installer has been published from this checkout yet.</p>
       </div>
 
       <div class="trust-row">
-        <span>✓ 56ms cold-start instantiation</span>
-        <span>✓ Windows Hello Biometric step-up</span>
-        <span>✓ AppContainer isolation</span>
-        <span>✓ Zero-config local fallback</span>
+        <span>Local Whisper path in source</span>
+        <span>Unicode input path in source</span>
+        <span>Optional local or cloud AI</span>
+        <span>No published installer</span>
       </div>
     </div>
   </header>
@@ -74,8 +67,8 @@
   <section class="section" id="demo">
     <div class="container">
       <div class="section-header">
-        <h2>Experience Real Desktop Sovereignty</h2>
-        <p>No toy mockups. Helm interacts directly with the Windows OS, browsers, and your active cursor.</p>
+        <h2>Explore an Interactive Preview</h2>
+        <p>This scripted preview uses sample transcripts and actions. It does not control a Windows desktop or report measured performance.</p>
       </div>
 
       <div class="demo-card">
@@ -83,15 +76,15 @@
           <div class="window-dots">
             <span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span>
           </div>
-          <span class="demo-title">Helm Desktop HUD — Active Session</span>
-          <span class="demo-badge">Neural Engine: Ready</span>
+        <span class="demo-title">Illustrative interaction preview</span>
+          <span class="demo-badge">Sample only · not live</span>
         </div>
         <div class="demo-body">
           <div class="demo-sidebar">
-            <div class="sidebar-item active" onclick="switchDemoTab(0)">🎙️ Voice & Caret Paste</div>
-            <div class="sidebar-item" onclick="switchDemoTab(1)">🔍 Raycast-Class Omnibar</div>
+            <div class="sidebar-item active" onclick="switchDemoTab(0)">🎙️ Local Dictation Flow</div>
+            <div class="sidebar-item" onclick="switchDemoTab(1)">🔍 Desktop Omnibar</div>
             <div class="sidebar-item" onclick="switchDemoTab(2)">🪪 Windows Hello Biometrics</div>
-            <div class="sidebar-item" onclick="switchDemoTab(3)">🧠 Hybrid Vector Memory</div>
+            <div class="sidebar-item" onclick="switchDemoTab(3)">🌐 Provider and Data Flow</div>
           </div>
           <div class="demo-display" id="demoDisplay">
             <!-- Injected by app.js -->
@@ -105,45 +98,45 @@
   <section class="section" id="features">
     <div class="container">
       <div class="section-header">
-        <h2>Engineered Without Compromise</h2>
-        <p>Every layer has been upgraded from prototype scripts to deep native Win32/WinRT systems engineering.</p>
+        <h2>What is in the source</h2>
+        <p>These are implementation areas, not a release acceptance report. Windows compatibility and end-to-end product measurements are still pending.</p>
       </div>
 
       <div class="features-grid">
         <div class="feature-card">
           <div class="feature-icon">🎙️</div>
-          <h3>Silero VAD v5 + Neural TTS</h3>
-          <p>Speech activity detection powered by deep neural networks with zero 1990s RMS jitter. Synthesizes answers using Kokoro-82M (24kHz) or Piper ONNX.</p>
+          <h3>Voice components</h3>
+          <p>The repository contains optional speech and text-to-speech integrations. The default dictation path uses local Whisper; optional stacks are not required for the core build.</p>
         </div>
 
         <div class="feature-card">
           <div class="feature-icon">⚡</div>
-          <h3>System-Wide Inline Dictation</h3>
-          <p>Don't talk to a chat bubble. Dictate anywhere — Word, Slack, WhatsApp, or VS Code — with automatic filler-word removal and instant caret insertion.</p>
+          <h3>Local caret dictation path</h3>
+          <p>The desktop path captures speech, transcribes locally, and sends Unicode keyboard input without using the clipboard. Physical compatibility acceptance remains pending.</p>
         </div>
 
         <div class="feature-card">
           <div class="feature-icon">🔍</div>
-          <h3>Raycast-Class Omnibar</h3>
-          <p>Full Start Menu indexer, active visible window switcher, and RapidFuzz scoring. Appears in under 30 milliseconds on Alt+Space.</p>
+          <h3>Desktop Omnibar</h3>
+          <p>The source includes a Windows shortcut, window and app search, and fuzzy matching. No published latency measurements are available.</p>
         </div>
 
         <div class="feature-card">
           <div class="feature-icon">🪪</div>
-          <h3>Windows Hello Biometric Gates</h3>
-          <p>No phone friction for desktop commands. Approve file modifications, emails, and automations seamlessly with your finger or facial IR sensor.</p>
+          <h3>Consequential-action approvals</h3>
+          <p>Approval behavior depends on the route. The broker may request Windows Hello; supervisor-protected actions separately require an enrolled-device signature.</p>
         </div>
 
         <div class="feature-card">
           <div class="feature-icon">🧠</div>
-          <h3>Hybrid Semantic Memory</h3>
-          <p>Dual-engine SQLite FTS5 (BM25 lexical) + ONNX 384-dim vector embeddings (sqlite-vec). Conceptual search fused via Reciprocal Rank Fusion.</p>
+          <h3>Local memory components</h3>
+          <p>The repository includes SQLite-backed memory and optional vector-search components. Some memory and search features require optional dependencies.</p>
         </div>
 
         <div class="feature-card">
           <div class="feature-icon">🌐</div>
-          <h3>CDP Browser Bridge</h3>
-          <p>Automate dynamic web applications (Notion, Jira, Google Docs) directly over Chrome DevTools Protocol, bypassing Win32 UIA blindness.</p>
+          <h3>Browser integration</h3>
+          <p>Optional browser tools support selected browser workflows. Availability and permissions depend on the local configuration.</p>
         </div>
       </div>
     </div>
@@ -153,63 +146,39 @@
   <section class="section" id="compare">
     <div class="container">
       <div class="section-header">
-        <h2>How Helm Outclasses the Competition</h2>
-        <p>Radically private, local-first, user-owned, and hackable.</p>
+        <h2>Where data goes</h2>
+        <p>Dictation is local by default. Cloud AI and connected integrations send data to their selected services.</p>
       </div>
 
       <div class="table-wrapper">
         <table class="comparison-table">
           <thead>
             <tr>
-              <th>Feature</th>
-              <th class="highlight">Helm</th>
-              <th>Microsoft Copilot</th>
-              <th>Claude Desktop</th>
-              <th>Raycast (Mac only)</th>
+              <th>Data path</th>
+              <th class="highlight">Default behavior</th>
+              <th colspan="3">What leaves the device</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td><strong>Local Offline Fallback</strong></td>
-              <td class="highlight">✅ Zero-Config Ollama</td>
-              <td>❌ Cloud required</td>
-              <td>❌ Cloud required</td>
-              <td>⚠️ Cloud models</td>
+              <td><strong>Caret dictation</strong></td>
+              <td class="highlight">Local Whisper by default</td>
+              <td colspan="3">Audio stays on-device. The model downloads on first use.</td>
             </tr>
             <tr>
-              <td><strong>On-Device Biometrics</strong></td>
-              <td class="highlight">✅ Windows Hello (Native)</td>
-              <td>❌ Password/Cloud</td>
-              <td>❌ None</td>
-              <td>✅ Touch ID</td>
+              <td><strong>Talk to Helm</strong></td>
+              <td class="highlight">Local Whisper; cloud speech fallback off</td>
+              <td colspan="3">If `speechCloudFallback` is enabled and local transcription fails, audio goes to Google Speech Recognition.</td>
             </tr>
             <tr>
-              <td><strong>System-Wide Caret Paste</strong></td>
-              <td class="highlight">✅ SendInput hardware-level</td>
-              <td>❌ App window only</td>
-              <td>❌ App window only</td>
-              <td>✅ Inline dictation</td>
+              <td><strong>AI chat</strong></td>
+              <td class="highlight">Local offline mode or selected provider</td>
+              <td colspan="3">When a cloud provider is selected, prompts and included context go to that provider.</td>
             </tr>
             <tr>
-              <td><strong>Deep Browser Automation</strong></td>
-              <td class="highlight">✅ Chrome DevTools Protocol</td>
-              <td>⚠️ Edge only</td>
-              <td>⚠️ Coordinate clicks</td>
-              <td>❌ Browser sandboxed</td>
-            </tr>
-            <tr>
-              <td><strong>Privacy & Zero-PII Telemetry</strong></td>
-              <td class="highlight">✅ Disabled by default (Opt-in)</td>
-              <td>❌ Telemetry mandatory</td>
-              <td>❌ Cloud logged</td>
-              <td>⚠️ Opt-out analytics</td>
-            </tr>
-            <tr>
-              <td><strong>Cold-Start Instantiation</strong></td>
-              <td class="highlight">⚡ 56 milliseconds</td>
-              <td>3.5 seconds</td>
-              <td>4.2 seconds</td>
-              <td>⚡ 28 milliseconds</td>
+              <td><strong>Connected integrations</strong></td>
+              <td class="highlight">Run when invoked</td>
+              <td colspan="3">Requests and selected data go to the integration's service.</td>
             </tr>
           </tbody>
         </table>
@@ -221,13 +190,13 @@
   <section class="section cta-section" id="download">
     <div class="container">
       <div class="cta-box">
-        <h2>Ready for Sovereign Desktop Intelligence?</h2>
-        <p>Get Helm for Windows today. Free, open source, and built to empower you.</p>
+        <h2>Source build from source</h2>
+        <p>Helm is open source. This repository does not currently publish an installer.</p>
         <div class="cta-buttons">
-          <a href="https://github.com/helm-ai/helm/releases" class="btn btn-primary btn-large">Download MSIX Package</a>
-          <a href="https://github.com/helm-ai/helm" class="btn btn-secondary btn-large">View GitHub Repository</a>
+          <a href="https://github.com/helm-ai/helm#quick-start" class="btn btn-primary btn-large">Source setup</a>
+          <a href="https://github.com/helm-ai/helm/blob/main/PACKAGING.md" class="btn btn-secondary btn-large">Build instructions</a>
         </div>
-        <p class="cta-note">Compatible with Windows 10 & 11 (64-bit). MSIX packaged with Velopack auto-updates.</p>
+        <p class="cta-note">Windows 10/11 x64. Signed release packages will be linked here after publication.</p>
       </div>
     </div>
   </section>
@@ -237,7 +206,7 @@
     <div class="container footer-content">
       <div class="footer-brand">
         <span class="brand-name">Helm</span>
-        <p>Sovereign Desktop AI Assistant. Autonomous, private, native.</p>
+        <p>Windows desktop assistant with local dictation and optional cloud AI.</p>
       </div>
       <div class="footer-links">
         <a href="https://github.com/helm-ai/helm">GitHub</a>

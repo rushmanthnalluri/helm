@@ -176,7 +176,8 @@ class ActionBroker:
     def select_gate(self, tool_name: str, arguments: Optional[Dict[str, Any]] = None) -> Optional[Any]:
         """Selects the authorization gate for an action:
         - LOW risk: None (ambient / safe local, no step-up required).
-        - MEDIUM & HIGH risk: WindowsHelloGate (local biometric / PIN verification).
+        - MEDIUM & HIGH risk: WindowsHelloGate (or an explicitly supplied fallback gate).
+          Supervisor-protected actions may additionally require an enrolled-device signature.
         """
         import step_up_gate
 

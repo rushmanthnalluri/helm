@@ -1,0 +1,4 @@
+# Build input requirements. The Windows Python 3.12 x64 resolution is pinned in
+# requirements-build.lock.txt; regenerate that lock when these inputs change.
+-r requirements.txt
+pyinstaller==6.22.3

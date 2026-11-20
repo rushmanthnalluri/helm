@@ -58,11 +58,12 @@ MACROS_FILE = os.path.join(CONFIG_DIR, 'macros.json')
 DEFAULT_PREFS = {
     "hotkey": "ctrl+alt+space",
     "hotkeyMode": "hold",       # "hold" or "toggle"
-    "provider": "gemini",       # "gemini" (Google AI Studio), "nvidia" (NVIDIA NIM), "groq", "ollama", "claude"
-    "model": "gemini-flash-lite-latest", # high-availability free tier model
+    "provider": "auto",         # Choose a configured provider, local Ollama, or offline mode
+    "model": "",                # Use the selected provider's default model
     "safe": True,               # Safe mode blocks outgoing chat messages
     "whisperModel": "small",    # "small" (244M, high accuracy), "base", "tiny"
     "whisperLanguage": "en",
+    "speechCloudFallback": False,  # Send audio to Google Speech only when explicitly enabled
     "speak": False,
     "instant": True,            # Instant local commands without AI
     "geminiKey": "",            # Google AI Studio free API key
@@ -674,7 +675,7 @@ def try_fast_command(text, caller_id="desktop_user"):
 
     # 21. Phone Gateway commands retired
     if re.search(r'\b(start\s+(?:phone|call)\s+(?:server|gateway)|stop\s+(?:phone|call)\s+(?:server|gateway)|phone\s+status|call\s+status|phone\s+gateway\s+status|enable\s+phone\s+calls|disable\s+phone\s+calls)\b', t):
-        return True, "📞 Phone gateway has been retired in favor of native Windows Hello biometric authentication."
+        return True, "The legacy phone gateway is retired. Windows Hello is used on selected local approval routes; supervisor-protected actions may still require a signed approval from an enrolled device."
 
     # 22. Semantic Screen Memory Recall ("what was on my screen", "find on screen")
     screen_recall_m = re.match(r'^(?:what\s+was\s+on\s+my\s+screen(?:\s+(\d+)\s+minutes?\s+ago)?|screen\s+timeline)$', t)
@@ -942,7 +943,7 @@ def main():
     cmd = args[0]
 
     if cmd in ('--pairing-unlock', 'pairing-unlock', '--recover-device'):
-        print("✓ [HELM SECURITY] Phone pairing is deprecated. Authentication is managed via native Windows Hello.")
+        print("[HELM SECURITY] The legacy phone gateway is retired. Windows Hello is route-specific; protected supervisor actions require an enrolled-device signature.")
         return
 
     if cmd == '--look':

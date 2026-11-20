@@ -1,7 +1,7 @@
 """device_registry.py - Decoupled Device Public Key Registry & Cryptographic Signature Verifier.
 
 Houses device public key storage, consumed anti-replay nonces, and asymmetric signature verification.
-Decouples cryptographic verification and registry state from UI, HUD, and phone gateway code,
+Decouples cryptographic verification and registry state from UI, HUD, and mobile approval clients,
 allowing PolicySupervisor to verify signed approval evidence without importing UI or gateway modules.
 """
 

@@ -16,7 +16,7 @@
     <DisplayName>Helm Desktop AI</DisplayName>
     <PublisherDisplayName>Helm</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
-    <Description>Helm - Autonomous AI Desktop Companion for Windows</Description>
+    <Description>Helm - Windows desktop assistant with local dictation and optional AI providers</Description>
   </Properties>
 
   <Resources>
@@ -35,7 +35,7 @@
     <Application Id="Helm" Executable="Helm.exe" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
         DisplayName="Helm Desktop AI"
-        Description="Helm - Autonomous AI Desktop Companion"
+        Description="Helm - Windows desktop assistant with local dictation and optional AI providers"
         BackgroundColor="#1E1E2E"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png">

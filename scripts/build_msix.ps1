@@ -140,7 +140,10 @@ try {
 
 # 2. Generate AppxManifest.xml
 Write-Step "Step 2: Generating AppxManifest.xml..."
-$ManifestPath = Join-Path $PackagingDir "AppxManifest.xml"
+$ManifestPath = Join-Path $BaseDir "dist\AppxManifest.xml"
+if (-not (Test-Path (Split-Path -Parent $ManifestPath))) {
+    New-Item -ItemType Directory -Path (Split-Path -Parent $ManifestPath) -Force | Out-Null
+}
 $ManifestXml = @"
 <?xml version="1.0" encoding="utf-8"?>
 <Package
@@ -160,7 +163,7 @@ $ManifestXml = @"
     <DisplayName>$DisplayName</DisplayName>
     <PublisherDisplayName>$PublisherDisplayName</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
-    <Description>Helm - Autonomous AI Desktop Companion for Windows</Description>
+    <Description>Helm - Windows desktop assistant with local dictation and optional AI providers</Description>
   </Properties>
 
   <Resources>
@@ -179,7 +182,7 @@ $ManifestXml = @"
     <Application Id="Helm" Executable="Helm.exe" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
         DisplayName="$DisplayName"
-        Description="Helm - Autonomous AI Desktop Companion"
+        Description="Helm - Windows desktop assistant with local dictation and optional AI providers"
         BackgroundColor="#1E1E2E"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png">
@@ -221,10 +224,10 @@ if ($DryRun) {
 } elseif ($SkipBuildExe) {
     Write-Info "SkipBuildExe specified: skipping PyInstaller compilation."
 } else {
-    Write-Info "Executing: pyinstaller helm.spec --clean --noconfirm"
+    Write-Info "Executing the clean standalone build script."
     Push-Location $BaseDir
     try {
-        & pyinstaller helm.spec --clean --noconfirm
+        & python scripts/build_standalone.py --clean
         if ($LASTEXITCODE -ne 0) {
             throw "PyInstaller exited with status code $LASTEXITCODE"
         }
@@ -302,39 +305,49 @@ if ($DryRun) {
     }
     Write-Success "MSIX successfully created at: $OutputMsix"
 } else {
-    Write-WarningMsg "Skipping MSIX pack step because makeappx.exe is not installed."
+    throw "makeappx.exe was not found. Install the Windows SDK before building an MSIX package."
 }
 
 # 6. Sign MSIX with signtool.exe
 Write-Step "Step 6: Signing MSIX with signtool.exe..."
-if ($SkipSign) {
-    Write-Info "SkipSign specified: skipping code signing."
+if ($DryRun) {
+    Write-Info "Dry run mode active: skipping signing and signature verification."
+} elseif ($SkipSign) {
+    Write-WarningMsg "SkipSign specified: this package is unsigned and intended only for local development."
 } else {
     $SignTool = Find-WindowsTool "signtool.exe"
-    if ($SignTool) {
-        Write-Success "Found signtool.exe at: $SignTool"
-        if ($CertPath -and (Test-Path $CertPath)) {
-            $signArgs = @("sign", "/fd", "SHA256", "/f", $CertPath)
-            if ($CertPassword) {
-                $signArgs += @("/p", $CertPassword)
-            }
-            $signArgs += $OutputMsix
-            Write-Info "Signing with certificate file: $CertPath"
-            & "$SignTool" @signArgs
-        } else {
-            Write-Info "Attempting signature with auto-selected certificate (/a)..."
-            try {
-                & "$SignTool" sign /fd SHA256 /a "$OutputMsix"
-                Write-Success "Signed MSIX successfully."
-            } catch {
-                Write-WarningMsg "Auto-signing did not find a matching installed certificate."
-                Write-Info "To create a self-signed dev cert, run:"
-                Write-Info '  New-SelfSignedCertificate -Type Custom -Subject "' + $Publisher + '" -KeyUsage DigitalSignature -FriendlyName "Helm Dev Cert" -CertStoreLocation "Cert:\CurrentUser\My" -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3")'
-            }
-        }
-    } else {
-        Write-WarningMsg "signtool.exe not found. Code signing skipped."
+    if (-not $SignTool) {
+        throw "signtool.exe was not found. Install the Windows SDK or use -SkipSign for a local-only package."
     }
+    if ($CertPath) {
+        if (-not (Test-Path -LiteralPath $CertPath)) {
+            throw "Signing certificate was not found: $CertPath"
+        }
+        $signArgs = @("sign", "/fd", "SHA256", "/f", $CertPath)
+        if ($CertPassword) {
+            $signArgs += @("/p", $CertPassword)
+        }
+        $signArgs += $OutputMsix
+        Write-Info "Signing with the supplied publisher certificate."
+        & "$SignTool" @signArgs
+    } else {
+        Write-Info "Attempting signature with an installed publisher certificate (/a)."
+        & "$SignTool" sign /fd SHA256 /a "$OutputMsix"
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "signtool.exe failed with exit code $LASTEXITCODE"
+    }
+
+    & "$SignTool" verify /pa /v "$OutputMsix"
+    if ($LASTEXITCODE -ne 0) {
+        throw "signtool.exe could not verify the MSIX signature."
+    }
+}
+
+if (-not $DryRun -and (Test-Path -LiteralPath $OutputMsix)) {
+    $PackageHash = (Get-FileHash -LiteralPath $OutputMsix -Algorithm SHA256).Hash.ToLowerInvariant()
+    Set-Content -LiteralPath "$OutputMsix.sha256" -Value "$PackageHash  Helm.msix" -Encoding ascii
+    Write-Success "Wrote SHA-256 checksum to $OutputMsix.sha256"
 }
 
 Write-Host "`n============================================================" -ForegroundColor Green

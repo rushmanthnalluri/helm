@@ -2,6 +2,9 @@
 
 > [!IMPORTANT]
 > For the full threat model, attack surface analysis, and in-scope/out-of-scope guarantees, see [`THREAT_MODEL.md`](./THREAT_MODEL.md).
+> Approval behavior is route-specific. These notes do not claim every protected action uses Windows Hello or that test collection proves execution.
+> Numeric results refer only to the named test harness and its recorded run; they are not product-wide release guarantees.
+> This document summarizes source mechanisms and named harnesses. It is not an independent security audit or a certification of a published release.
 
 ---
 
@@ -58,7 +61,7 @@ Helm uses a **defense-in-depth** architecture with multiple independent, kernel-
 | Mechanism | Detail |
 |-----------|--------|
 | **AppContainer LowBox Token** | Zero-capability token; network isolation is kernel-enforced. All outbound socket attempts from the worker process fail with `WinError 10013 WSAEACCES`. |
-| **Job Object sandbox** | `KILL_ON_JOB_CLOSE` ensures the worker dies when the supervisor closes. `ActiveProcessLimit=1` prevents fork bombs. UI restrictions: no clipboard read/write, no desktop handle access. Kill latency < 3 ms. |
+| **Job Object sandbox** | When the worker is assigned to the configured job, `KILL_ON_JOB_CLOSE` requests termination on job-handle closure, `ActiveProcessLimit=1` limits child processes, and UI restrictions limit selected clipboard and desktop access. No general kill-latency figure is claimed. |
 | **Supervisor daemon** | Out-of-process supervisor runs as a standard (non-elevated) user and holds custody of the worker process. The worker cannot escape or elevate. |
 | **No write-up / no UI handles** | The worker has zero ability to write to higher-integrity contexts or acquire UI-accessible handles. |
 
@@ -76,15 +79,15 @@ These denials are enforced by the kernel even if the supervisor process closes i
 
 ### Layer 3 — Authentication & Elevation Gates
 
-#### Gate 1 — Windows Hello Biometric Hardware Gate (`helm.core.windows_hello`)
+#### Gate 1 — Route-specific Windows Hello check (`helm.core.windows_hello`)
 
 | Property | Value |
 |----------|-------|
-| Biometric Modalities | Facial recognition (IR camera) and Fingerprint sensor |
+| Verification methods | Windows-managed options depend on device and account configuration; this may include a PIN, face, or fingerprint |
 | Windows Platform API | `Windows.Security.Credentials.UI.UserConsentVerifier` |
-| Verification Scope | Privileged system actions, credential access, external tool execution |
-| Fallback | OS PIN elevation / Secure Desktop prompt |
-| Replay Protection | Nonce-bound one-time consent tokens; zero static credential transmission |
+| Verification Scope | Selected local approval routes; not every protected action |
+| Unavailable behavior | The broker denies the action unless an explicit fallback approver is configured |
+| Supervisor relationship | A Windows Hello result does not replace the signed enrolled-device evidence required by the supervisor |
 
 #### Gate 2 — Injection Baseline Harness (`helm.engine.injection_baseline_harness`)
 
@@ -124,7 +127,9 @@ These denials are enforced by the kernel even if the supervisor process closes i
 
 ### Layer 10 — Windows Hello Integration
 
-- **`windows_hello.py`**: Windows Hello biometric/PIN authentication is integrated for local user verification flows.
+- **`action_broker.py`**: The broker selects Windows Hello for medium- and high-risk actions. The gate fails closed when Hello is unavailable unless an explicit fallback approver is configured.
+- **`helm_supervisor.py`**: Protected consequential actions require a cryptographically signed approval from an enrolled device. The supervisor denies these actions when no device is enrolled, even if a separate local confirmation route exists.
+- **`rails_confirmation.py`**: Windows Hello is an optional local step-up only; it does not replace enrolled-device evidence. Local presence gestures do not authorize supervisor-protected actions.
 
 ### Layer 11 — Red Team & Mutation Testing
 
@@ -173,7 +178,7 @@ These denials are enforced by the kernel even if the supervisor process closes i
 - **Physical console access** — an attacker with physical access to an unlocked console session is out of scope.
 - **Virtual HID devices** (e.g., Rubber Ducky, O.MG Cable) — hardware-level HID injection bypasses the `LLKHF_INJECTED` software filter.
 - **RDP sessions** — remote desktop sessions may alter keyboard flag semantics.
-- **Compromised mobile device** — if the WebAuthn authenticator device is compromised, Gate 1 is defeated.
+- **Compromised enrolled device** — a compromised enrolled-device signing key may allow forged approval evidence until that device is revoked.
 - **Upstream LLM provider data retention** — data sent to the LLM API is subject to the provider's own privacy and retention policies.
 
 ---

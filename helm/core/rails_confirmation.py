@@ -13,7 +13,6 @@ from __future__ import annotations
 import os
 import json
 import hashlib
-import hmac
 import logging
 import secrets
 import threading
@@ -154,17 +153,15 @@ class ConfirmationGate:
         human_caller_id: Optional[str] = None,
         use_windows_hello: bool = False,
     ) -> Tuple[bool, str, Optional[str]]:
+        """Confirm a request only after the supervisor's enrolled-device proof succeeds.
+
+        Windows Hello can add a local verification step, but it does not replace
+        the signed evidence required by the supervisor. ``presence_gesture`` is
+        retained for API compatibility; a local gesture cannot authorize a
+        supervisor-protected consequential action without an enrolled device.
+        """
         if human_caller_id and str(human_caller_id).startswith(("worker", "agent", "ai_", "script", "bot")):
             return False, f"DENIED: Confirmation must be issued by a verified human operator, not '{human_caller_id}'.", None
-        """Human explicitly confirms request. Generates a single-use execution token.
-        Security Invariants:
-        1. If one or more mobile devices are enrolled in device_registry:
-           Confirmation STRICTLY REQUIRES a cryptographically verified signed approval blob
-           from the enrolled device. Unsigned or missing signatures are unconditionally denied.
-        2. If no mobile devices are enrolled:
-           Confirmation requires an explicit physical presence gesture (matching ephemeral challenge code).
-        3. Fails closed on device registry corruption or unavailable state.
-        """
         with self._lock:
             req = self.get_request(request_id)
             if not req:
@@ -172,79 +169,60 @@ class ConfirmationGate:
             if req.status != "PENDING":
                 return False, f"Request '{request_id}' is already {req.status}.", None
 
-            # Progressive Trust: Windows Hello on-device confirmation
-            if use_windows_hello and PROGRESSIVE_TRUST_ENABLED:
-                import windows_hello
-                prompt_res = windows_hello.prompt_windows_hello(f"Authorize {req.tool_name}")
-                if prompt_res.get("verified"):
-                    token = f"tok_{secrets.token_hex(16)}"
-                    req.status = "APPROVED"
-                    req.approval_token = token
-                    self._tokens[token] = request_id
-                    try:
-                        import taint_tracker
-                        taint_tracker.register_step_up_token(token, req.tool_name, req.arguments)
-                    except Exception:
-                        pass
-                    logger.info("Request %s confirmed via Windows Hello. Issued token %s", request_id, token)
-                    return True, f"Action confirmed: {req.impact_summary}", token
-                else:
-                    return False, "Windows Hello verification failed", None
-
-            # 1. Check enrolled hardware devices - fail closed on any error
+            # Fail closed before prompting: the supervisor always requires an enrolled device.
             try:
                 import device_registry
                 devices = device_registry.get_enrolled_devices()
             except Exception as reg_err:
                 logger.error("Device registry access failed: %s", reg_err)
                 return False, f"DENIED: Device registry unavailable or corrupted (fail-closed): {reg_err}", None
+            if not devices:
+                return False, "DENIED: No mobile device enrolled. Supervisor policy requires approval from an enrolled device.", None
 
-            if devices:
-                # When devices are enrolled, phone cryptographic proof is strictly required
-                if not signed_evidence:
-                    return False, "DENIED: Action confirmation strictly requires verified out-of-band signature from enrolled mobile device.", None
+            # Optional local step-up. The supervisor still requires enrolled-device evidence.
+            if use_windows_hello and PROGRESSIVE_TRUST_ENABLED:
+                import windows_hello
+                prompt_res = windows_hello.prompt_windows_hello(f"Authorize {req.tool_name}")
+                if not prompt_res.get("verified"):
+                    return False, "Windows Hello verification failed", None
 
-                clean_args = json.dumps(req.arguments, sort_keys=True, separators=(',', ':')) if isinstance(req.arguments, dict) else str(req.arguments)
-                args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
+            if not signed_evidence:
+                return False, "DENIED: Action confirmation strictly requires verified out-of-band signature from enrolled mobile device.", None
 
-                verified = False
-                err_detail = "Signature verification failed"
+            clean_args = json.dumps(req.arguments, sort_keys=True, separators=(',', ':')) if isinstance(req.arguments, dict) else str(req.arguments)
+            args_hash = hashlib.sha256(clean_args.encode('utf-8')).hexdigest()
 
-                # Path A: Verify via device_registry asymmetric signature
-                if isinstance(signed_evidence, dict) and "signature" in signed_evidence:
-                    try:
-                        import device_registry
-                        reg = device_registry._load_device_registry()
-                        dev = reg.get(signed_evidence.get("device_id", ""), {})
-                        if dev and not dev.get("revoked", False):
-                            payload = f"ACTION_APPROVAL_V1|{signed_evidence.get('device_id')}|{req.tool_name}|{args_hash.lower()}|{signed_evidence.get('nonce')}|{signed_evidence.get('expiry')}|{signed_evidence.get('taint_epoch')}"
-                            if device_registry.verify_asymmetric_signature(dev.get("public_key", ""), payload.encode('utf-8'), signed_evidence.get("signature", "")):
-                                verified = True
-                    except Exception as e:
-                        err_detail = str(e)
+            verified = False
+            err_detail = "Signature verification failed"
 
-                # Path B: Verify via helm_supervisor Signed Approval Blob (CHALLENGE_V3)
-                if not verified:
-                    try:
-                        import helm_supervisor
-                        import taint_tracker
-                        t_epoch = taint_tracker.get_taint_epoch()
-                        if helm_supervisor.verify_signed_approval_evidence(
-                            signed_evidence, req.caller_id, req.tool_name, args_hash, t_epoch
-                        ):
+            # Path A: Verify via device_registry asymmetric signature
+            if isinstance(signed_evidence, dict) and "signature" in signed_evidence:
+                try:
+                    import device_registry
+                    reg = device_registry._load_device_registry()
+                    dev = reg.get(signed_evidence.get("device_id", ""), {})
+                    if dev and not dev.get("revoked", False):
+                        payload = f"ACTION_APPROVAL_V1|{signed_evidence.get('device_id')}|{req.tool_name}|{args_hash.lower()}|{signed_evidence.get('nonce')}|{signed_evidence.get('expiry')}|{signed_evidence.get('taint_epoch')}"
+                        if device_registry.verify_asymmetric_signature(dev.get("public_key", ""), payload.encode('utf-8'), signed_evidence.get("signature", "")):
                             verified = True
-                    except Exception as e:
-                        err_detail = f"{err_detail}; {e}"
+                except Exception as e:
+                    err_detail = str(e)
 
-                if not verified:
-                    return False, f"DENIED: Signature verification failed: {err_detail}", None
+            # Path B: Verify via helm_supervisor Signed Approval Blob (CHALLENGE_V3)
+            if not verified:
+                try:
+                    import helm_supervisor
+                    import taint_tracker
+                    t_epoch = taint_tracker.get_taint_epoch()
+                    if helm_supervisor.verify_signed_approval_evidence(
+                        signed_evidence, req.caller_id, req.tool_name, args_hash, t_epoch
+                    ):
+                        verified = True
+                except Exception as e:
+                    err_detail = f"{err_detail}; {e}"
 
-            else:
-                # No enrolled mobile device: requires physical presence gesture matching ephemeral challenge
-                if not presence_gesture:
-                    return False, "DENIED: No mobile device enrolled. Physical presence challenge gesture required for confirmation.", None
-                if not req.presence_challenge or not hmac.compare_digest(str(presence_gesture).strip(), str(req.presence_challenge).strip()):
-                    return False, "DENIED: Invalid physical presence challenge gesture.", None
+            if not verified:
+                return False, f"DENIED: Signature verification failed: {err_detail}", None
 
             token = f"tok_{secrets.token_hex(16)}"
             req.status = "APPROVED"
